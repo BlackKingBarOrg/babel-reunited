@@ -92,6 +92,7 @@ after_initialize do
     scope&.user&.user_preferred_language&.enabled != false &&
     scope&.user&.user_preferred_language&.language.present?
   }) do
+    return nil unless scope&.user
     user_preferred_language = scope.user.user_preferred_language
     return nil unless user_preferred_language&.enabled && user_preferred_language.language.present?
     
@@ -118,6 +119,7 @@ after_initialize do
     scope&.user&.user_preferred_language&.enabled != false &&
     scope&.user&.user_preferred_language&.language.present?
   }) do
+    return nil unless scope&.user
     user_preferred_language = scope.user.user_preferred_language
     return nil unless user_preferred_language&.enabled && user_preferred_language.language.present?
     
@@ -143,6 +145,7 @@ after_initialize do
     scope&.user&.user_preferred_language&.enabled != false &&
     scope&.user&.user_preferred_language&.language.present?
   }) do
+    return nil unless scope&.user
     user_preferred_language = scope.user.user_preferred_language
     return nil unless user_preferred_language&.enabled && user_preferred_language.language.present?
     
