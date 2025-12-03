@@ -33,16 +33,16 @@ export default class LanguageTabsConnector extends Component {
     const baseStyle =
       "padding: 4px 16px; border-radius: 3px; cursor: pointer; font-size: 12px; height: 24px; line-height: 1;";
 
-    // Raw按钮永远保持蓝色样式
+    // Original 按钮永远保持蓝色样式
     if (languageCode === "original") {
       if (this.currentLanguage === "original") {
-        // 当前选中的Raw：蓝色背景，白色文字
+        // 当前选中的 Original：蓝色背景，白色文字
         return htmlSafe(
           baseStyle +
             " background: #007bff; color: white; border: 1px solid #007bff;"
         );
       } else {
-        // 未选中的Raw：白底，蓝字，蓝框
+        // 未选中的 Original：白底，蓝字，蓝框
         return htmlSafe(
           baseStyle +
             " background: white; color: #007bff; border: 1px solid #007bff;"
@@ -259,7 +259,7 @@ export default class LanguageTabsConnector extends Component {
   // 获取当前语言名称
   get currentLanguageName() {
     if (this.currentLanguage === "original") {
-      return "Raw";
+      return "Original";
     }
 
     return (
@@ -292,7 +292,7 @@ export default class LanguageTabsConnector extends Component {
       return;
     }
 
-    // 如果翻译状态不是完成状态，选择Raw
+    // 如果翻译状态不是完成状态，回退到原文 Original
     this.currentLanguage = "original";
   }
 
@@ -318,7 +318,7 @@ export default class LanguageTabsConnector extends Component {
           style={{this.getButtonStyle "original"}}
           {{on "click" (fn this.switchLanguage "original")}}
         >
-          Raw
+          Original
         </button>
 
         {{#each this.languageNames as |langInfo|}}
