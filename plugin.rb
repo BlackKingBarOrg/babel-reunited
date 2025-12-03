@@ -187,15 +187,29 @@ after_initialize do
     next unless SiteSetting.babel_reunited_enabled
     next if post.raw.blank?
 
-    # Re-translate existing translations when post is edited
+    # Get existing translations
     existing_languages = post.available_translations
-    if existing_languages.any?
-      # Pre-update translation records to show "translating" status immediately
-      existing_languages.each do |language|
+    
+    # Get auto-translate languages from settings
+    auto_translate_languages = SiteSetting.babel_reunited_auto_translate_languages
+    target_languages = if auto_translate_languages.present?
+      auto_translate_languages.split(",").map(&:strip)
+    else
+      []
+    end
+    
+    # Combine existing translations and auto-translate languages
+    # This ensures we re-translate existing ones AND create missing ones
+    languages_to_translate = (existing_languages + target_languages).uniq
+    
+    if languages_to_translate.any?
+      # Pre-create/update translation records to show "translating" status immediately
+      languages_to_translate.each do |language|
         post.create_or_update_translation_record(language)
       end
       
-      post.enqueue_translation_jobs(existing_languages, force_update: true)
+      # Use force_update for existing translations, normal for new ones
+      post.enqueue_translation_jobs(languages_to_translate, force_update: true)
     end
   end
 
