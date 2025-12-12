@@ -81,3 +81,9 @@ babel_reunited:
   babel_reunited_translate_title:
     default: true
     client: true
+
+  babel_reunited_request_timeout_seconds:
+    default: 300
+    min: 10
+    max: 1800
+    client: false

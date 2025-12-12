@@ -289,8 +289,17 @@ module BabelReunited
     end
 
     def make_openai_request(prompt, api_config)
+      timeout_seconds = SiteSetting.babel_reunited_request_timeout_seconds
       conn =
-        Faraday.new(url: api_config[:base_url]) do |f|
+        Faraday.new(
+          url: api_config[:base_url],
+          request: {
+            timeout: timeout_seconds,
+            open_timeout: timeout_seconds,
+            read_timeout: timeout_seconds,
+            write_timeout: timeout_seconds,
+          },
+        ) do |f|
           f.request :json
           f.response :json
           f.adapter Faraday.default_adapter
@@ -386,8 +395,17 @@ module BabelReunited
     end
 
     def translate_title_fallback(title, target_language, api_config)
+      timeout_seconds = SiteSetting.babel_reunited_request_timeout_seconds
       conn =
-        Faraday.new(url: api_config[:base_url]) do |f|
+        Faraday.new(
+          url: api_config[:base_url],
+          request: {
+            timeout: timeout_seconds,
+            open_timeout: timeout_seconds,
+            read_timeout: timeout_seconds,
+            write_timeout: timeout_seconds,
+          },
+        ) do |f|
           f.request :json
           f.response :json
           f.adapter Faraday.default_adapter
