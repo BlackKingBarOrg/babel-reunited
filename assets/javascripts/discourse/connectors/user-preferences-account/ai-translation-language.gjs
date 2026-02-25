@@ -1,13 +1,13 @@
 import Component from "@glimmer/component";
 import { tracked } from "@glimmer/tracking";
+import { fn } from "@ember/helper";
+import { on } from "@ember/modifier";
 import { action } from "@ember/object";
 import { service } from "@ember/service";
 import { ajax } from "discourse/lib/ajax";
 import { popupAjaxError } from "discourse/lib/ajax-error";
+import { eq } from "discourse/truth-helpers";
 import { i18n } from "discourse-i18n";
-import { on } from "@ember/modifier";
-import { eq } from "truth-helpers";
-import { fn } from "@ember/helper";
 
 export default class AiTranslationLanguage extends Component {
   static shouldRender(args, context) {
@@ -15,6 +15,7 @@ export default class AiTranslationLanguage extends Component {
   }
 
   @service currentUser;
+
   @tracked saving = false;
   @tracked currentLanguage = null;
   @tracked enabled = true;
@@ -27,7 +28,15 @@ export default class AiTranslationLanguage extends Component {
     this.loadCurrentLanguage();
   }
 
-  async loadCurrentLanguage() {
+  willDestroy() {
+    super.willDestroy?.();
+    if (this.savedNoticeTimerId) {
+      clearTimeout(this.savedNoticeTimerId);
+      this.savedNoticeTimerId = null;
+    }
+  }
+
+async loadCurrentLanguage() {
     try {
       const response = await ajax("/babel-reunited/user-preferred-language", {
         type: "GET"
@@ -70,7 +79,7 @@ export default class AiTranslationLanguage extends Component {
     try {
       await ajax("/babel-reunited/user-preferred-language", {
         type: "POST",
-        data: { language: language, enabled: this.enabled }
+        data: { language, enabled: this.enabled }
       });
       
       this.currentLanguage = language;
@@ -115,13 +124,7 @@ export default class AiTranslationLanguage extends Component {
     }
   }
 
-  willDestroy() {
-    super.willDestroy?.();
-    if (this.savedNoticeTimerId) {
-      clearTimeout(this.savedNoticeTimerId);
-      this.savedNoticeTimerId = null;
-    }
-  }
+  
 
   <template>
     <div class="control-group ai-translation-language">

@@ -1,5 +1,4 @@
-import Service from "@ember/service";
-import { service } from "@ember/service";
+import Service, { service } from "@ember/service";
 import { disableImplicitInjections } from "discourse/lib/implicit-injections";
 
 /**

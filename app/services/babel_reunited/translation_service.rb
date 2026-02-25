@@ -271,6 +271,8 @@ module BabelReunited
             SiteSetting.babel_reunited_custom_max_output_tokens,
         provider: config[:provider],
         max_tokens_for_length: config[:max_tokens],
+        output_token_param: config[:output_token_param] || :max_tokens,
+        supports_temperature: config.fetch(:supports_temperature, true),
       }
     end
 
@@ -305,12 +307,13 @@ module BabelReunited
           f.adapter Faraday.default_adapter
         end
 
+      token_param = api_config[:output_token_param] || :max_tokens
       request_body = {
-        model: api_config[:model],
-        messages: [{ role: "user", content: prompt }],
-        max_tokens: api_config[:max_tokens],
-        temperature: 0.3,
+        :model => api_config[:model],
+        :messages => [{ role: "user", content: prompt }],
+        token_param => api_config[:max_tokens],
       }
+      request_body[:temperature] = 0.3 if api_config[:supports_temperature] != false
 
       response =
         conn.post("/v1/chat/completions") do |req|
@@ -419,12 +422,13 @@ module BabelReunited
         #{title}
       P
 
+      token_param = api_config[:output_token_param] || :max_tokens
       request_body = {
-        model: api_config[:model],
-        messages: [{ role: "user", content: prompt }],
-        max_tokens: [128, api_config[:max_tokens].to_i].min,
-        temperature: 0.2,
+        :model => api_config[:model],
+        :messages => [{ role: "user", content: prompt }],
+        token_param => [128, api_config[:max_tokens].to_i].min,
       }
+      request_body[:temperature] = 0.2 if api_config[:supports_temperature] != false
 
       response =
         conn.post("/v1/chat/completions") do |req|

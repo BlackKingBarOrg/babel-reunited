@@ -1,6 +1,6 @@
+import Service from "@ember/service";
 import { ajax } from "discourse/lib/ajax";
 import { popupAjaxError } from "discourse/lib/ajax-error";
-import Service from "@ember/service";
 import { disableImplicitInjections } from "discourse/lib/implicit-injections";
 
 /**
@@ -139,7 +139,7 @@ export default class TranslationApiService extends Service {
     try {
       const result = await ajax("/ai-translator/detect-language", {
         type: "POST",
-        data: { text: text }
+        data: { text }
       });
       return result;
     } catch (error) {

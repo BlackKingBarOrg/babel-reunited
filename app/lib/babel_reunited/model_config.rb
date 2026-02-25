@@ -10,6 +10,8 @@ module BabelReunited
         base_url: "https://api.openai.com",
         max_tokens: 128_000,
         max_output_tokens: 16_000,
+        output_token_param: :max_completion_tokens,
+        supports_temperature: false,
         api_key_setting: :babel_reunited_openai_api_key,
         description: "OpenAI next-generation flagship model",
         tier: "High",
@@ -20,6 +22,8 @@ module BabelReunited
         base_url: "https://api.openai.com",
         max_tokens: 128_000,
         max_output_tokens: 16_000,
+        output_token_param: :max_completion_tokens,
+        supports_temperature: false,
         api_key_setting: :babel_reunited_openai_api_key,
         description: "OpenAI GPT-5 cost-effective variant",
         tier: "Medium",
@@ -30,6 +34,8 @@ module BabelReunited
         base_url: "https://api.openai.com",
         max_tokens: 16_385,
         max_output_tokens: 4_096,
+        output_token_param: :max_completion_tokens,
+        supports_temperature: false,
         api_key_setting: :babel_reunited_openai_api_key,
         description: "OpenAI GPT-5 lightweight variant for speed and cost",
         tier: "Low",
@@ -40,6 +46,7 @@ module BabelReunited
         base_url: "https://api.openai.com",
         max_tokens: 128_000,
         max_output_tokens: 16_000,
+        output_token_param: :max_completion_tokens,
         api_key_setting: :babel_reunited_openai_api_key,
         description: "OpenAI latest flagship model, strongest performance",
         tier: "High",
@@ -50,6 +57,7 @@ module BabelReunited
         base_url: "https://api.openai.com",
         max_tokens: 128_000,
         max_output_tokens: 16_000,
+        output_token_param: :max_completion_tokens,
         api_key_setting: :babel_reunited_openai_api_key,
         description: "OpenAI cost-effective model, excellent performance",
         tier: "Medium",
@@ -60,11 +68,11 @@ module BabelReunited
         base_url: "https://api.openai.com",
         max_tokens: 16_385,
         max_output_tokens: 4_096,
+        output_token_param: :max_tokens,
         api_key_setting: :babel_reunited_openai_api_key,
         description: "OpenAI economical model, fast speed",
         tier: "Low",
       },
-      
       # xAI Models (including latest Grok-4)
       "grok-4" => {
         provider: "xai",
@@ -106,7 +114,6 @@ module BabelReunited
         description: "xAI economical model, fast response",
         tier: "Low",
       },
-      
       # DeepSeek Models
       "deepseek-r1" => {
         provider: "deepseek",
@@ -134,14 +141,16 @@ module BabelReunited
       preset_model = SiteSetting.babel_reunited_preset_model
 
       if preset_model == "custom"
-        return {
-          provider: "custom",
-          model_name: SiteSetting.babel_reunited_custom_model_name,
-          base_url: SiteSetting.babel_reunited_custom_base_url,
-          max_tokens: SiteSetting.babel_reunited_custom_max_tokens,
-          max_output_tokens: SiteSetting.babel_reunited_custom_max_output_tokens,
-          api_key: SiteSetting.babel_reunited_custom_api_key,
-        }
+        return(
+          {
+            provider: "custom",
+            model_name: SiteSetting.babel_reunited_custom_model_name,
+            base_url: SiteSetting.babel_reunited_custom_base_url,
+            max_tokens: SiteSetting.babel_reunited_custom_max_tokens,
+            max_output_tokens: SiteSetting.babel_reunited_custom_max_output_tokens,
+            api_key: SiteSetting.babel_reunited_custom_api_key,
+          }
+        )
       end
 
       config = PRESET_MODELS[preset_model]

@@ -3,7 +3,7 @@ import LanguagePreferenceModal from "discourse/plugins/babel-reunited/discourse/
 
 export default {
   initialize() {
-    withPluginApi("0.8.7", (api) => {
+    withPluginApi((api) => {
       const currentUser = api.getCurrentUser()
 
       if (!currentUser) {

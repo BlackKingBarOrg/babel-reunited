@@ -4,6 +4,6 @@ export default {
   path: "/plugins",
 
   map() {
-    this.route("ai-translator", { path: "ai-translator" });
+    this.route("ai-translator" );
   },
 };
