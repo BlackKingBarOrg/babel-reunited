@@ -2,8 +2,26 @@
 
 module BabelReunited
   class PostTranslationSerializer < ApplicationSerializer
-    attributes :id, :language, :translated_content, :translated_title, :source_language, 
-               :translation_provider, :created_at, :updated_at, :confidence, :status
+    attributes :id,
+               :language,
+               :translated_content,
+               :translated_title,
+               :source_language,
+               :translation_provider,
+               :created_at,
+               :updated_at,
+               :confidence,
+               :status
+
+    # Defense-in-depth: re-sanitize on read (Loofah scrub is idempotent)
+    def translated_content
+      raw = object.translated_content
+      return raw if raw.blank?
+      Loofah.html5_fragment(raw).scrub!(:prune).to_s
+    end
+
+    # Title is sanitized to plain text by model before_save; no extra escaping needed
+    # (Loofah.text is idempotent, CGI.escapeHTML is not — avoid double-escape)
 
     def confidence
       object.translation_confidence

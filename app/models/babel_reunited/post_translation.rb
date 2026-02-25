@@ -6,11 +6,17 @@ module BabelReunited
 
     belongs_to :post
 
+    before_save :sanitize_translation_fields
+
     validates :language, presence: true, length: { maximum: 10 }
     validates :translated_content, presence: true, unless: :translating?
     validates :translated_title, length: { maximum: 255 }, allow_blank: true
     validates :post_id, uniqueness: { scope: :language }
-    validates :language, format: { with: /\A[a-z]{2}(-[a-z]{2})?\z/, message: "must be a valid language code" }
+    validates :language,
+              format: {
+                with: /\A[a-z]{2}(-[a-z]{2})?\z/,
+                message: "must be a valid language code",
+              }
 
     scope :by_language, ->(lang) { where(language: lang) }
     scope :recent, -> { order(created_at: :desc) }
@@ -60,7 +66,7 @@ module BabelReunited
     def self.find_topic_translation(topic_id, language)
       first_post = Post.where(topic_id: topic_id, post_number: 1).first
       return nil unless first_post
-      
+
       translation = find_translation(first_post.id, language)
       translation&.translated_title
     end
@@ -69,8 +75,22 @@ module BabelReunited
     def self.find_topic_translation_info(topic_id, language)
       first_post = Post.where(topic_id: topic_id, post_number: 1).first
       return nil unless first_post
-      
+
       find_translation(first_post.id, language)
+    end
+
+    private
+
+    # Central sanitization — runs on every save regardless of write path
+    def sanitize_translation_fields
+      if translated_content.present?
+        self.translated_content = Loofah.html5_fragment(translated_content).scrub!(:prune).to_s
+      end
+
+      # Titles must be plain text; Loofah.text strips all tags and is idempotent
+      if translated_title.present?
+        self.translated_title = Loofah.html5_fragment(translated_title).text
+      end
     end
   end
 end
