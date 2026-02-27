@@ -27,12 +27,14 @@ module BabelReunited
         return render json: { error: "Target language required" }, status: :bad_request
       end
 
+      # 验证语言代码格式 - 支持 zh-cn 格式
       unless target_language.match?(/\A[a-z]{2}(-[a-z]{2})?\z/)
         return render json: { error: "Invalid language code format" }, status: :bad_request
       end
 
-      ::RateLimiter.new(current_user, "babel-reunited-translate", 30, 1.minute).performed!
+      RateLimiter.new(current_user, "babel-reunited-translate", 10, 1.minute).performed!
 
+      # Always enqueue translation job - no skipping based on existing translations
       @post.enqueue_translation_jobs([target_language], force_update: force_update)
 
       render json: {
