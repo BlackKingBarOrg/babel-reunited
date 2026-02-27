@@ -39,35 +39,27 @@ module BabelReunited
     end
 
     def create_or_update_translation_record(target_language)
-      existing_translation = BabelReunited::PostTranslation.find_translation(id, target_language)
-      
-      if existing_translation.present?
-        # Update existing translation with "translating" status and empty content
-        existing_translation.update!(
-          status: "translating",
-          translated_content: "",
-          translated_title: "",
-          metadata: existing_translation.metadata.merge(
-            translating_started_at: Time.current,
-            updated_at: Time.current,
-          ),
-        )
-        existing_translation
-      else
-        # Create new translation with "translating" status and empty content
-        BabelReunited::PostTranslation.create!(
-          post: self,
-          language: target_language,
-          status: "translating",
-          translated_content: "",
-          translated_title: "",
-          translation_provider: "openai",
-          metadata: {
-            translating_started_at: Time.current,
-          },
-        )
-      end
-    end
+      record =
+        BabelReunited::PostTranslation.find_or_initialize_by(post_id: id, language: target_language)
 
+      record.assign_attributes(
+        status: "translating",
+        translated_content: "",
+        translated_title: "",
+        translation_provider: record.translation_provider.presence || "openai",
+        metadata: (record.metadata || {}).merge(translating_started_at: Time.current),
+      )
+      record.save!
+      record
+    rescue ActiveRecord::RecordNotUnique
+      record = BabelReunited::PostTranslation.find_translation(id, target_language)
+      record.update!(
+        status: "translating",
+        translated_content: "",
+        translated_title: "",
+        metadata: record.metadata.merge(translating_started_at: Time.current),
+      )
+      record
+    end
   end
 end
