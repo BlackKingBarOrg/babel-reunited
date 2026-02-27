@@ -12,9 +12,9 @@ export default class TranslationStatusService extends Service {
   // 存储每个帖子的翻译状态
   translationStates = new Map();
 
-  // 订阅话题的翻译状态更新
-  subscribeToTopic(topicId) {
-    const channel = `/babel-reunited/topic/${topicId}`;
+  // 订阅帖子的翻译状态更新
+  subscribeToTopic(postId) {
+    const channel = `/post-translations/${postId}`;
 
     this.messageBus.subscribe(channel, (data) => {
       this.handleTranslationUpdate(data.post_id, data);
@@ -103,9 +103,9 @@ export default class TranslationStatusService extends Service {
     return status.status === "started";
   }
 
-  // 取消订阅话题
-  unsubscribeFromTopic(topicId) {
-    const channel = `/babel-reunited/topic/${topicId}`;
+  // 取消订阅帖子
+  unsubscribeFromTopic(postId) {
+    const channel = `/post-translations/${postId}`;
     this.messageBus.unsubscribe(channel);
   }
 }
