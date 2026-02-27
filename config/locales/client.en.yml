@@ -8,6 +8,13 @@ en:
     title: "Babel Reunited"
   js:
     babel_reunited:
+      language_tabs:
+        disabled_by_user: "AI Translation is disabled by user"
+        original: "Original"
+        languages:
+          en: "English"
+          zh-cn: "中文"
+          es: "Español"
       preferences:
         ai_translation_language: "AI Translation Language"
         ai_translation_language_description: "Choose your preferred language for AI-powered post translations. Posts will automatically display in this language when available."
