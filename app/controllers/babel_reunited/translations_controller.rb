@@ -5,7 +5,7 @@ module BabelReunited
     requires_plugin PLUGIN_NAME
 
     before_action :ensure_logged_in
-    before_action :find_post, except: [:set_user_preferred_language, :get_user_preferred_language]
+    before_action :find_post, except: %i[set_user_preferred_language get_user_preferred_language]
 
     def index
       translations = @post.post_translations.recent
@@ -22,24 +22,26 @@ module BabelReunited
     def create
       target_language = params[:target_language]
       force_update = params[:force_update] || false
-      
-      return render json: { error: "Target language required" }, status: :bad_request if target_language.blank?
-      
-      # 验证语言代码格式 - 支持 zh-cn 格式
+
+      if target_language.blank?
+        return render json: { error: "Target language required" }, status: :bad_request
+      end
+
       unless target_language.match?(/\A[a-z]{2}(-[a-z]{2})?\z/)
         return render json: { error: "Invalid language code format" }, status: :bad_request
       end
 
-      # Always enqueue translation job - no skipping based on existing translations
+      RateLimiter.new(current_user, "babel-reunited-translate", 30, 1.minute).performed!
+
       @post.enqueue_translation_jobs([target_language], force_update: force_update)
-      
-      render json: { 
-        message: "Translation job enqueued", 
-        post_id: @post.id,
-        target_language: target_language,
-        force_update: force_update,
-        status: "queued"
-      }
+
+      render json: {
+               message: "Translation job enqueued",
+               post_id: @post.id,
+               target_language: target_language,
+               force_update: force_update,
+               status: "queued",
+             }
     end
 
     def destroy
@@ -52,27 +54,24 @@ module BabelReunited
 
     def get_user_preferred_language
       preferred_language = current_user.user_preferred_language
-      
+
       if preferred_language
-        render json: { 
-          language: preferred_language.language,
-          enabled: preferred_language.enabled
-        }
+        render json: { language: preferred_language.language, enabled: preferred_language.enabled }
       else
-        render json: { 
-          language: nil,
-          enabled: true  # Default to enabled if no preference set
-        }
+        render json: {
+                 language: nil,
+                 enabled: true, # Default to enabled if no preference set
+               }
       end
     end
 
     def set_user_preferred_language
       language = params[:language]
       enabled = params[:enabled]
-      
-      preferred_language = current_user.user_preferred_language || 
-                          current_user.build_user_preferred_language
-      
+
+      preferred_language =
+        current_user.user_preferred_language || current_user.build_user_preferred_language
+
       if language.present?
         # Validate language code format - 支持 zh-cn 格式
         unless language.match?(/\A[a-z]{2}(-[a-z]{2})?\z/)
@@ -80,17 +79,15 @@ module BabelReunited
         end
         preferred_language.language = language
       end
-      
-      if enabled.present?
-        preferred_language.enabled = enabled
-      end
-      
+
+      preferred_language.enabled = enabled if enabled.present?
+
       if preferred_language.save
-        render json: { 
-          success: true, 
-          language: preferred_language.language,
-          enabled: preferred_language.enabled
-        }
+        render json: {
+                 success: true,
+                 language: preferred_language.language,
+                 enabled: preferred_language.enabled,
+               }
       else
         render json: { errors: preferred_language.errors.full_messages }, status: :bad_request
       end
@@ -99,24 +96,27 @@ module BabelReunited
     def translation_status
       # 检查是否有正在进行的翻译任务
       begin
-        require 'sidekiq/api'
-        pending_jobs = Sidekiq::Queue.new("default").select do |job|
-          job.klass == "Jobs::BabelReunited::TranslatePostJob" &&
-          job.args[0]["post_id"] == @post.id
-        end
+        require "sidekiq/api"
+        pending_jobs =
+          Sidekiq::Queue
+            .new("default")
+            .select do |job|
+              job.klass == "Jobs::BabelReunited::TranslatePostJob" &&
+                job.args[0]["post_id"] == @post.id
+            end
 
         pending_languages = pending_jobs.map { |job| job.args[0]["target_language"] }
       rescue => e
         Rails.logger.warn("Failed to check pending jobs: #{e.message}")
         pending_languages = []
       end
-      
+
       render json: {
-        post_id: @post.id,
-        pending_translations: pending_languages,
-        available_translations: @post.available_translations,
-        last_updated: @post.post_translations.maximum(:updated_at)
-      }
+               post_id: @post.id,
+               pending_translations: pending_languages,
+               available_translations: @post.available_translations,
+               last_updated: @post.post_translations.maximum(:updated_at),
+             }
     end
 
     private
