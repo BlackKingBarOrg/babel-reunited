@@ -14,6 +14,46 @@ register_asset "stylesheets/translated-title.scss"
 
 module ::BabelReunited
   PLUGIN_NAME = "babel-reunited"
+
+  def self.preferred_language_for(user)
+    return nil unless user
+
+    user_preferred_language = user.user_preferred_language
+    return nil if user_preferred_language&.enabled == false
+
+    user_preferred_language&.language.presence
+  end
+
+  def self.translated_title_for(post, language)
+    return nil if post.blank? || language.blank?
+
+    translation =
+      preloaded_post_translation(post, language) ||
+        BabelReunited::PostTranslation.find_translation(post.id, language)
+
+    return nil unless translation&.completed? && translation.translated_title.present?
+
+    translation.translated_title
+  end
+
+  def self.preload_post_translations(posts, language)
+    return if posts.blank? || language.blank?
+
+    translations =
+      BabelReunited::PostTranslation.where(post_id: posts.map(&:id), language: language).index_by(
+        &:post_id
+      )
+
+    posts.each do |post|
+      preloaded = post.instance_variable_get(:@babel_reunited_translations) || {}
+      preloaded[language] = translations[post.id]
+      post.instance_variable_set(:@babel_reunited_translations, preloaded)
+    end
+  end
+
+  def self.preloaded_post_translation(post, language)
+    post.instance_variable_get(:@babel_reunited_translations)&.[](language)
+  end
 end
 
 require_relative "lib/babel_reunited/engine"
@@ -34,17 +74,13 @@ after_initialize do
   require_relative "lib/babel_reunited/translation_logger"
 
   # Mount the engine routes
-  Discourse::Application.routes.append do
-    mount ::BabelReunited::Engine, at: "/babel-reunited"
-  end
+  Discourse::Application.routes.append { mount ::BabelReunited::Engine, at: "/babel-reunited" }
 
   # Extend Post model with translation functionality
   reloadable_patch do
     Post.class_eval do # rubocop:disable Discourse/Plugins/NoMonkeyPatching
-      has_many :post_translations,
-               class_name: "BabelReunited::PostTranslation",
-               dependent: :destroy
-      
+      has_many :post_translations, class_name: "BabelReunited::PostTranslation", dependent: :destroy
+
       prepend BabelReunited::PostExtension
     end
   end
@@ -67,9 +103,7 @@ after_initialize do
       .post_translations
       .recent
       .limit(5)
-      .map do |translation|
-        BabelReunited::PostTranslationSerializer.new(translation).as_json
-      end
+      .map { |translation| BabelReunited::PostTranslationSerializer.new(translation).as_json }
   end
 
   add_to_serializer(:post, :show_translation_widget, include_condition: -> { true }) do
@@ -86,83 +120,61 @@ after_initialize do
     object.user_preferred_language&.enabled
   end
 
-  # Add translated title to Topic serializers
-  add_to_serializer(:topic_view, :translated_title, include_condition: -> { 
-    SiteSetting.babel_reunited_enabled && 
-    scope&.user&.user_preferred_language&.enabled != false &&
-    scope&.user&.user_preferred_language&.language.present?
-  }) do
-    return nil unless scope&.user
-    user_preferred_language = scope.user.user_preferred_language
-    return nil unless user_preferred_language&.enabled && user_preferred_language.language.present?
-    
-    # Get the first post's translation for the topic title
-    first_post = object.topic.first_post
-    return nil unless first_post
-    
-    translation = BabelReunited::PostTranslation.find_translation(
-      first_post.id, 
-      user_preferred_language.language
-    )
-    
-    # Only return translated title if it exists and is completed
-    if translation&.completed? && translation.translated_title.present?
-      translation.translated_title
-    else
-      nil
-    end
+  translated_title_condition = -> do
+    SiteSetting.babel_reunited_enabled && BabelReunited.preferred_language_for(scope&.user).present?
   end
 
-  # Also add to listable topics for topic lists
-  add_to_serializer(:listable_topic, :translated_title, include_condition: -> { 
-    SiteSetting.babel_reunited_enabled && 
-    scope&.user&.user_preferred_language&.enabled != false &&
-    scope&.user&.user_preferred_language&.language.present?
-  }) do
-    return nil unless scope&.user
-    user_preferred_language = scope.user.user_preferred_language
-    return nil unless user_preferred_language&.enabled && user_preferred_language.language.present?
-    
-    first_post = object.first_post
-    return nil unless first_post
-    
-    translation = BabelReunited::PostTranslation.find_translation(
-      first_post.id, 
-      user_preferred_language.language
-    )
-    
-    # Only return translated title if it exists and is completed
-    if translation&.completed? && translation.translated_title.present?
-      translation.translated_title
-    else
-      nil
-    end
+  add_to_serializer(
+    :topic_view,
+    :translated_title,
+    include_condition: translated_title_condition,
+  ) do
+    language = BabelReunited.preferred_language_for(scope&.user)
+    return nil unless language
+
+    BabelReunited.translated_title_for(object.topic&.first_post, language)
   end
 
-  # Add to topic list item serializer for topic lists
-  add_to_serializer(:topic_list_item, :translated_title, include_condition: -> { 
-    SiteSetting.babel_reunited_enabled && 
-    scope&.user&.user_preferred_language&.enabled != false &&
-    scope&.user&.user_preferred_language&.language.present?
-  }) do
-    return nil unless scope&.user
-    user_preferred_language = scope.user.user_preferred_language
-    return nil unless user_preferred_language&.enabled && user_preferred_language.language.present?
-    
-    first_post = object.first_post
-    return nil unless first_post
-    
-    translation = BabelReunited::PostTranslation.find_translation(
-      first_post.id, 
-      user_preferred_language.language
-    )
-    
-    # Only return translated title if it exists and is completed
-    if translation&.completed? && translation.translated_title.present?
-      translation.translated_title
-    else
-      nil
-    end
+  add_to_serializer(
+    :listable_topic,
+    :translated_title,
+    include_condition: translated_title_condition,
+  ) do
+    language = BabelReunited.preferred_language_for(scope&.user)
+    return nil unless language
+
+    BabelReunited.translated_title_for(object.first_post, language)
+  end
+
+  add_to_serializer(
+    :topic_list_item,
+    :translated_title,
+    include_condition: translated_title_condition,
+  ) do
+    language = BabelReunited.preferred_language_for(scope&.user)
+    return nil unless language
+
+    BabelReunited.translated_title_for(object.first_post, language)
+  end
+
+  TopicView.on_preload do |topic_view|
+    next unless SiteSetting.babel_reunited_enabled
+
+    language = BabelReunited.preferred_language_for(topic_view.guardian&.user)
+    next if language.blank?
+
+    first_post = topic_view.topic&.first_post
+    BabelReunited.preload_post_translations([first_post].compact, language)
+  end
+
+  TopicList.on_preload do |topics, topic_list|
+    next unless SiteSetting.babel_reunited_enabled
+
+    language = BabelReunited.preferred_language_for(topic_list.current_user)
+    next if language.blank?
+
+    first_posts = topics.map(&:first_post).compact
+    BabelReunited.preload_post_translations(first_posts, language)
   end
 
   # Event handlers for automatic translation
@@ -173,12 +185,10 @@ after_initialize do
     auto_translate_languages = SiteSetting.babel_reunited_auto_translate_languages
     if auto_translate_languages.present?
       languages = auto_translate_languages.split(",").map(&:strip)
-      
+
       # Pre-create translation records to show "translating" status immediately
-      languages.each do |language|
-        post.create_or_update_translation_record(language)
-      end
-      
+      languages.each { |language| post.create_or_update_translation_record(language) }
+
       post.enqueue_translation_jobs(languages)
     end
   end
@@ -189,25 +199,24 @@ after_initialize do
 
     # Get existing translations
     existing_languages = post.available_translations
-    
+
     # Get auto-translate languages from settings
     auto_translate_languages = SiteSetting.babel_reunited_auto_translate_languages
-    target_languages = if auto_translate_languages.present?
-      auto_translate_languages.split(",").map(&:strip)
-    else
-      []
-    end
-    
+    target_languages =
+      if auto_translate_languages.present?
+        auto_translate_languages.split(",").map(&:strip)
+      else
+        []
+      end
+
     # Combine existing translations and auto-translate languages
     # This ensures we re-translate existing ones AND create missing ones
     languages_to_translate = (existing_languages + target_languages).uniq
-    
+
     if languages_to_translate.any?
       # Pre-create/update translation records to show "translating" status immediately
-      languages_to_translate.each do |language|
-        post.create_or_update_translation_record(language)
-      end
-      
+      languages_to_translate.each { |language| post.create_or_update_translation_record(language) }
+
       # Use force_update for existing translations, normal for new ones
       post.enqueue_translation_jobs(languages_to_translate, force_update: true)
     end
