@@ -4,6 +4,6 @@ export default {
   path: "/plugins",
 
   map() {
-    this.route("ai-translator" );
+    this.route("babel-reunited");
   },
 };

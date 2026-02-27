@@ -7,8 +7,8 @@ module BabelReunited
       return true if rate_limit <= 0
 
       current_minute = Time.current.to_i / 60
-      key = "ai_translator_rate_limit:#{current_minute}"
-      
+      key = "babel_reunited_rate_limit:#{current_minute}"
+
       current_count = Discourse.redis.get(key).to_i
       current_count < rate_limit
     end
@@ -18,8 +18,8 @@ module BabelReunited
       return if rate_limit <= 0
 
       current_minute = Time.current.to_i / 60
-      key = "ai_translator_rate_limit:#{current_minute}"
-      
+      key = "babel_reunited_rate_limit:#{current_minute}"
+
       Discourse.redis.multi do |multi|
         multi.incr(key)
         multi.expire(key, 120) # Expire after 2 minutes to handle edge cases
@@ -31,8 +31,8 @@ module BabelReunited
       return Float::INFINITY if rate_limit <= 0
 
       current_minute = Time.current.to_i / 60
-      key = "ai_translator_rate_limit:#{current_minute}"
-      
+      key = "babel_reunited_rate_limit:#{current_minute}"
+
       current_count = Discourse.redis.get(key).to_i
       [rate_limit - current_count, 0].max
     end
