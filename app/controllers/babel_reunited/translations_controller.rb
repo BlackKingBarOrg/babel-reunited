@@ -31,7 +31,7 @@ module BabelReunited
         return render json: { error: "Invalid language code format" }, status: :bad_request
       end
 
-      RateLimiter.new(current_user, "babel-reunited-translate", 30, 1.minute).performed!
+      ::RateLimiter.new(current_user, "babel-reunited-translate", 30, 1.minute).performed!
 
       @post.enqueue_translation_jobs([target_language], force_update: force_update)
 
