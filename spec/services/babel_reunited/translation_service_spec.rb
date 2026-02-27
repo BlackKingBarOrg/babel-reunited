@@ -80,6 +80,31 @@ RSpec.describe BabelReunited::TranslationService do
       expect(result.failure?).to be true
       expect(result[:error]).to include("Invalid preset model")
     end
+
+    it "returns error when base_url is missing" do
+      BabelReunited::ModelConfig.stubs(:get_config).returns(
+        { provider: "openai", model_name: "gpt-4o", base_url: nil, api_key: "sk-test-key" },
+      )
+
+      result = build_service.call
+      expect(result.failure?).to be true
+      expect(result[:error]).to include("Base URL not configured")
+    end
+
+    it "returns error when model_name is missing" do
+      BabelReunited::ModelConfig.stubs(:get_config).returns(
+        {
+          provider: "openai",
+          model_name: nil,
+          base_url: "https://api.openai.com",
+          api_key: "sk-test-key",
+        },
+      )
+
+      result = build_service.call
+      expect(result.failure?).to be true
+      expect(result[:error]).to include("Model name not configured")
+    end
   end
 
   describe "rate limiting" do
@@ -161,6 +186,60 @@ RSpec.describe BabelReunited::TranslationService do
 
       result = build_service.call
       expect(result.failure?).to be false
+    end
+  end
+
+  describe "title fallback" do
+    it "fills missing title when fallback succeeds" do
+      service = build_service
+      service.stubs(:call_openai_api).returns(
+        {
+          translated_text: "<p>Hola mundo</p>",
+          translated_title: nil,
+          source_language: "auto",
+          confidence: 0.95,
+          provider_info: {
+            model: "gpt-4o",
+            provider: "openai",
+          },
+        },
+      )
+      service.stubs(:get_api_config).returns(
+        {
+          api_key: "sk-test-key",
+          base_url: "https://api.openai.com",
+          model: "gpt-4o",
+          max_tokens: 100,
+          provider: "openai",
+        },
+      )
+      service.expects(:translate_title_fallback).returns("Fallback Title")
+
+      result = service.call
+      expect(result.failure?).to be false
+      expect(result[:translation].translated_title).to eq("Fallback Title")
+    end
+
+    it "skips fallback when api config returns error" do
+      service = build_service
+      service.stubs(:call_openai_api).returns(
+        {
+          translated_text: "<p>Hola mundo</p>",
+          translated_title: nil,
+          source_language: "auto",
+          confidence: 0.95,
+          provider_info: {
+            model: "gpt-4o",
+            provider: "openai",
+          },
+        },
+      )
+      service.stubs(:get_api_config).returns({ error: "Invalid preset model" })
+      service.expects(:translate_title_fallback).never
+
+      result = service.call
+      expect(result.failure?).to be false
+      expect(result[:translation].translated_title).to be_nil
     end
   end
 

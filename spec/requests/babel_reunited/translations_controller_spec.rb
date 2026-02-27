@@ -148,16 +148,37 @@ RSpec.describe BabelReunited::TranslationsController do
       ).to be true
     end
 
-    it "rate limits translation requests" do
-      RateLimiter.enable
+    it "passes through force_update" do
+      post "/babel-reunited/posts/#{post_record.id}/translations.json",
+           params: {
+             target_language: "es",
+             force_update: "true",
+           }
 
-      11.times do |i|
-        post "/babel-reunited/posts/#{post_record.id}/translations.json",
-             params: {
-               target_language: "es",
-             }
-        break if response.status == 429
-      end
+      expect(response.status).to eq(200)
+      expect(response.parsed_body["force_update"]).to eq("true")
+      expect(
+        job_enqueued?(
+          job: Jobs::BabelReunited::TranslatePostJob,
+          args: {
+            post_id: post_record.id,
+            target_language: "es",
+            force_update: "true",
+          },
+        ),
+      ).to be true
+    end
+
+    it "rate limits translation requests" do
+      RateLimiter
+        .any_instance
+        .stubs(:performed!)
+        .raises(RateLimiter::LimitExceeded.new(1, "babel-reunited-translate", nil))
+
+      post "/babel-reunited/posts/#{post_record.id}/translations.json",
+           params: {
+             target_language: "es",
+           }
 
       expect(response.status).to eq(429)
     end
@@ -236,6 +257,16 @@ RSpec.describe BabelReunited::TranslationsController do
       post "/babel-reunited/user-preferred-language.json", params: { language: "fr" }
       expect(response.status).to eq(200)
       expect(response.parsed_body["language"]).to eq("fr")
+    end
+
+    it "updates enabled without changing language" do
+      Fabricate(:user_preferred_language, user: user, language: "es", enabled: true)
+
+      post "/babel-reunited/user-preferred-language.json", params: { enabled: "false" }
+
+      expect(response.status).to eq(200)
+      expect(response.parsed_body["language"]).to eq("es")
+      expect(response.parsed_body["enabled"]).to be false
     end
   end
 

@@ -190,6 +190,66 @@ RSpec.describe BabelReunited do
     end
   end
 
+  describe "translated_title serializers" do
+    let(:guardian) { Guardian.new(user) }
+
+    before do
+      Fabricate(:user_preferred_language, user: user, language: "es", enabled: true)
+      Fabricate(
+        :post_translation,
+        post: post_record,
+        language: "es",
+        translated_title: "Titulo traducido",
+        status: "completed",
+      )
+    end
+
+    it "includes translated_title in topic_view" do
+      topic_view = TopicView.new(topic.id, user)
+      json = TopicViewSerializer.new(topic_view, scope: guardian, root: false).as_json
+      expect(json[:translated_title]).to eq("Titulo traducido")
+    end
+
+    it "includes translated_title in listable_topic" do
+      json = ListableTopicSerializer.new(topic, scope: guardian, root: false).as_json
+      expect(json[:translated_title]).to eq("Titulo traducido")
+    end
+
+    it "includes translated_title in topic_list_item" do
+      json = TopicListItemSerializer.new(topic, scope: guardian, root: false).as_json
+      expect(json[:translated_title]).to eq("Titulo traducido")
+    end
+  end
+
+  describe "preload hooks" do
+    before do
+      Fabricate(:user_preferred_language, user: user, language: "es", enabled: true)
+      topic.allowed_user_ids = [user.id]
+      topic.update!(first_post: post_record)
+    end
+
+    it "preloads translations for topic view" do
+      translation = Fabricate(:post_translation, post: post_record, language: "es")
+
+      topic_view = TopicView.new(topic.id, user)
+
+      first_post = topic_view.topic.first_post
+      preloaded = BabelReunited.preloaded_post_translation(first_post, "es")
+      expect(preloaded).to eq(translation)
+    end
+
+    it "preloads translations for topic list" do
+      translation = Fabricate(:post_translation, post: post_record, language: "es")
+      topic_list = TopicList.new("latest", user, [topic])
+
+      topics = topic_list.topics
+
+      first_post = topics.first.first_post
+      preloaded = BabelReunited.preloaded_post_translation(first_post, "es")
+      expect(preloaded).to eq(translation)
+    end
+  end
+
   describe "BabelReunited module methods" do
     describe ".preferred_language_for" do
       it "returns language when user has enabled preference" do
