@@ -9,7 +9,7 @@ module BabelReunited
     before_save :sanitize_translation_fields
 
     validates :language, presence: true, length: { maximum: 10 }
-    validates :translated_content, presence: true, unless: :translating?
+    validates :translated_content, presence: true, if: :completed?
     validates :translated_title, length: { maximum: 255 }, allow_blank: true
     validates :post_id, uniqueness: { scope: :language }
     validates :language,
