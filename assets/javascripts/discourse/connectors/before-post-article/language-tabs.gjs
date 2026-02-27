@@ -95,20 +95,27 @@ export default class LanguageTabsConnector extends Component {
   constructor() {
     super(...arguments);
 
-    // 自动选择用户的偏好语言
     this.initializePreferredLanguage();
 
-    if (this.messageBus) {
-      this.messageBus.subscribe(
-        `/post-translations/${this.post.id}`,
-        (data) => {
-          // 更新 this.post 对象
-          if (data.status === "completed" && data.translation) {
-            this.updatePostTranslation(data.language, data.translation);
-          }
-        }
-      );
-    }
+    this._messageBusChannel = `/post-translations/${this.post.id}`;
+    this._onTranslationUpdate = (data) => {
+      if (data.status === "completed" && data.translation) {
+        this.updatePostTranslation(data.language, data.translation);
+      }
+    };
+
+    this.messageBus?.subscribe(
+      this._messageBusChannel,
+      this._onTranslationUpdate
+    );
+  }
+
+  willDestroy() {
+    super.willDestroy(...arguments);
+    this.messageBus?.unsubscribe(
+      this._messageBusChannel,
+      this._onTranslationUpdate
+    );
   }
 
   // 更新 post 对象的翻译数据
