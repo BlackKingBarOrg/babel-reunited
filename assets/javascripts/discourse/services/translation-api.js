@@ -15,7 +15,7 @@ export default class TranslationApiService extends Service {
    */
   async getTranslations(postId) {
     try {
-      const result = await ajax(`/ai-translator/posts/${postId}/translations`);
+      const result = await ajax(`/babel-reunited/posts/${postId}/translations`);
       return result.translations || [];
     } catch (error) {
       popupAjaxError(error);
@@ -31,7 +31,9 @@ export default class TranslationApiService extends Service {
    */
   async getTranslation(postId, language) {
     try {
-      const result = await ajax(`/ai-translator/posts/${postId}/translations/${language}`);
+      const result = await ajax(
+        `/babel-reunited/posts/${postId}/translations/${language}`
+      );
       return result.translation;
     } catch (error) {
       popupAjaxError(error);
@@ -48,13 +50,16 @@ export default class TranslationApiService extends Service {
    */
   async createTranslation(postId, targetLanguage, forceUpdate = false) {
     try {
-      const result = await ajax(`/ai-translator/posts/${postId}/translations`, {
-        type: "POST",
-        data: { 
-          target_language: targetLanguage,
-          force_update: forceUpdate
+      const result = await ajax(
+        `/babel-reunited/posts/${postId}/translations`,
+        {
+          type: "POST",
+          data: {
+            target_language: targetLanguage,
+            force_update: forceUpdate,
+          },
         }
-      });
+      );
       return result;
     } catch (error) {
       popupAjaxError(error);
@@ -70,9 +75,12 @@ export default class TranslationApiService extends Service {
    */
   async deleteTranslation(postId, language) {
     try {
-      const result = await ajax(`/ai-translator/posts/${postId}/translations/${language}`, {
-        type: "DELETE"
-      });
+      const result = await ajax(
+        `/babel-reunited/posts/${postId}/translations/${language}`,
+        {
+          type: "DELETE",
+        }
+      );
       return result;
     } catch (error) {
       popupAjaxError(error);
@@ -88,12 +96,12 @@ export default class TranslationApiService extends Service {
    */
   async batchTranslate(postIds, targetLanguages) {
     try {
-      const result = await ajax("/ai-translator/batch-translate", {
+      const result = await ajax("/babel-reunited/batch-translate", {
         type: "POST",
-        data: { 
+        data: {
           post_ids: postIds,
-          target_languages: targetLanguages
-        }
+          target_languages: targetLanguages,
+        },
       });
       return result;
     } catch (error) {
@@ -108,7 +116,7 @@ export default class TranslationApiService extends Service {
    */
   async getTranslationStats() {
     try {
-      const result = await ajax("/ai-translator/stats");
+      const result = await ajax("/babel-reunited/stats");
       return result;
     } catch (error) {
       popupAjaxError(error);
@@ -122,7 +130,7 @@ export default class TranslationApiService extends Service {
    */
   async getSupportedLanguages() {
     try {
-      const result = await ajax("/ai-translator/languages");
+      const result = await ajax("/babel-reunited/languages");
       return result.languages || [];
     } catch (error) {
       popupAjaxError(error);
@@ -137,9 +145,9 @@ export default class TranslationApiService extends Service {
    */
   async detectLanguage(text) {
     try {
-      const result = await ajax("/ai-translator/detect-language", {
+      const result = await ajax("/babel-reunited/detect-language", {
         type: "POST",
-        data: { text }
+        data: { text },
       });
       return result;
     } catch (error) {
@@ -155,7 +163,9 @@ export default class TranslationApiService extends Service {
    */
   async getTranslationStatus(postId) {
     try {
-      const result = await ajax(`/ai-translator/posts/${postId}/translations/translation_status`);
+      const result = await ajax(
+        `/babel-reunited/posts/${postId}/translations/translation_status`
+      );
       return result;
     } catch (error) {
       popupAjaxError(error);
@@ -163,4 +173,3 @@ export default class TranslationApiService extends Service {
     }
   }
 }
-
