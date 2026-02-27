@@ -96,28 +96,14 @@ module BabelReunited
     end
 
     def translation_status
-      # 检查是否有正在进行的翻译任务
-      begin
-        require "sidekiq/api"
-        pending_jobs =
-          Sidekiq::Queue
-            .new("default")
-            .select do |job|
-              job.klass == "Jobs::BabelReunited::TranslatePostJob" &&
-                job.args[0]["post_id"] == @post.id
-            end
-
-        pending_languages = pending_jobs.map { |job| job.args[0]["target_language"] }
-      rescue => e
-        Rails.logger.warn("Failed to check pending jobs: #{e.message}")
-        pending_languages = []
-      end
+      translations = @post.post_translations
+      pending_languages = translations.where(status: "translating").pluck(:language)
 
       render json: {
                post_id: @post.id,
                pending_translations: pending_languages,
-               available_translations: @post.available_translations,
-               last_updated: @post.post_translations.maximum(:updated_at),
+               available_translations: translations.pluck(:language),
+               last_updated: translations.maximum(:updated_at),
              }
     end
 
