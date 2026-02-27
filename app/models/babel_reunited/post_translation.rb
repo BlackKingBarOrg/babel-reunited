@@ -1,5 +1,34 @@
 # frozen_string_literal: true
 
+# == Schema Information
+#
+# Table name: post_translations
+#
+#  id                   :bigint           not null, primary key
+#  language             :string(10)       not null
+#  metadata             :json
+#  source_language      :string(10)
+#  status               :string           default("completed"), not null
+#  translated_content   :text             not null
+#  translated_title     :text
+#  translation_provider :string(50)
+#  created_at           :datetime         not null
+#  updated_at           :datetime         not null
+#  post_id              :bigint           not null
+#
+# Indexes
+#
+#  index_post_translations_on_created_at            (created_at)
+#  index_post_translations_on_language              (language)
+#  index_post_translations_on_post_id               (post_id)
+#  index_post_translations_on_post_id_and_language  (post_id,language) UNIQUE
+#  index_post_translations_on_status                (status)
+#  index_post_translations_on_translated_title      (translated_title)
+#
+# Foreign Keys
+#
+#  fk_rails_...  (post_id => posts.id)
+#
 module BabelReunited
   class PostTranslation < ActiveRecord::Base
     self.table_name = "post_translations"
