@@ -114,7 +114,7 @@ class TranslationLogViewer
       icon = "📝"
     end
     
-    puts "#{color}#{icon} [#{timestamp}] #{event.upcase}#{"\033[0m"}"
+    puts "#{color}#{icon} [#{timestamp}] #{event.upcase}\033[0m"
     puts "   Post ID: #{post_id} | Language: #{language}"
     
     case event

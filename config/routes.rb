@@ -2,9 +2,9 @@
 
 BabelReunited::Engine.routes.draw do
   resources :posts, only: [] do
-    resources :translations, only: [:index, :show, :create, :destroy] do
+    resources :translations, only: %i[index show create destroy], param: :language do
       collection do
-        get :translation_status  # GET /posts/:post_id/translations/translation_status
+        get :translation_status # GET /posts/:post_id/translations/translation_status
       end
     end
   end
