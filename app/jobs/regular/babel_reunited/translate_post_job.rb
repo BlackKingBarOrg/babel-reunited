@@ -220,17 +220,15 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
     # Try to find the translation record to update its status
     translation = BabelReunited::PostTranslation.find_translation(post_id, target_language)
 
-    if translation.present?
-      translation.update!(
-        status: "failed",
-        metadata:
-          translation.metadata.merge(
-            error: error.message,
-            error_class: error.class.name,
-            failed_at: Time.current,
-          ),
-      )
-    end
+    translation.presence&.update!(
+      status: "failed",
+      metadata:
+        translation.metadata.merge(
+          error: error.message,
+          error_class: error.class.name,
+          failed_at: Time.current,
+        ),
+    )
 
     # Log the error
     BabelReunited::TranslationLogger.log_translation_error(
