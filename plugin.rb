@@ -27,9 +27,13 @@ module ::BabelReunited
   def self.translated_title_for(post, language)
     return nil if post.blank? || language.blank?
 
+    preloaded = post.instance_variable_get(:@babel_reunited_translations)
     translation =
-      preloaded_post_translation(post, language) ||
+      if preloaded&.key?(language)
+        preloaded[language]
+      else
         BabelReunited::PostTranslation.find_translation(post.id, language)
+      end
 
     return nil unless translation&.completed? && translation.translated_title.present?
 
