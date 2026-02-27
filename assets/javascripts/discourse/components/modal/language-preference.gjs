@@ -10,6 +10,7 @@ import { popupAjaxError } from "discourse/lib/ajax-error";
 import { i18n } from "discourse-i18n";
 
 export default class LanguagePreferenceModal extends Component {
+  @service currentUser;
   @service modal;
 
   @tracked saving = false;
@@ -21,18 +22,13 @@ export default class LanguagePreferenceModal extends Component {
     try {
       await ajax("/babel-reunited/user-preferred-language", {
         type: "POST",
-        data: {
-          language,
-        },
+        data: { language },
       });
 
-      // 标记为已显示
+      this.currentUser.set("preferred_language", language);
+      this.currentUser.set("preferred_language_enabled", true);
       localStorage.setItem("language_preference_modal_shown", "true");
-
       this.modal.close();
-
-      // 刷新页面以更新用户偏好设置
-      window.location.reload();
     } catch (error) {
       popupAjaxError(error);
     } finally {
@@ -47,18 +43,12 @@ export default class LanguagePreferenceModal extends Component {
     try {
       await ajax("/babel-reunited/user-preferred-language", {
         type: "POST",
-        data: {
-          enabled: false,
-        },
+        data: { enabled: false },
       });
 
-      // 标记为已显示
+      this.currentUser.set("preferred_language_enabled", false);
       localStorage.setItem("language_preference_modal_shown", "true");
-
       this.modal.close();
-
-      // 刷新页面以更新用户偏好设置
-      window.location.reload();
     } catch (error) {
       popupAjaxError(error);
     } finally {
@@ -79,7 +69,9 @@ export default class LanguagePreferenceModal extends Component {
       class="language-preference-modal"
     >
       <:body>
-        <p>{{i18n "js.babel_reunited.language_preference_modal.description"}}</p>
+        <p>{{i18n
+            "js.babel_reunited.language_preference_modal.description"
+          }}</p>
 
         <div class="language-buttons">
           <button
@@ -110,7 +102,9 @@ export default class LanguagePreferenceModal extends Component {
 
         <div class="disable-section">
           <div class="disable-text">
-            {{i18n "js.babel_reunited.language_preference_modal.disable_description"}}
+            {{i18n
+              "js.babel_reunited.language_preference_modal.disable_description"
+            }}
           </div>
           <button
             class="disable-btn"
@@ -118,7 +112,9 @@ export default class LanguagePreferenceModal extends Component {
             {{on "click" this.disableTranslation}}
           >
             <span class="disable-icon">🚫</span>
-            <span class="disable-label">{{i18n "js.babel_reunited.language_preference_modal.disable"}}</span>
+            <span class="disable-label">{{i18n
+                "js.babel_reunited.language_preference_modal.disable"
+              }}</span>
           </button>
         </div>
       </:body>
