@@ -7,18 +7,19 @@ import { service } from "@ember/service";
 import { htmlSafe } from "@ember/template";
 import icon from "discourse/helpers/d-icon";
 import { eq } from "discourse/truth-helpers";
+import { i18n } from "discourse-i18n";
 
 /**
  * Simple language tabs connector component
  * Displays a basic language tabs box before each post
  */
 export default class LanguageTabsConnector extends Component {
-  // 统一的语言映射
-  static languageMap = {
-    en: "English",
-    "zh-cn": "中文",
-    es: "Español",
-  };
+  static getLanguageDisplayName(code) {
+    return i18n(`babel_reunited.language_tabs.languages.${code}`, {
+      defaultValue: code,
+    });
+  }
+
   @service currentUser;
   @service messageBus;
 
@@ -212,7 +213,7 @@ export default class LanguageTabsConnector extends Component {
     const supportedLanguages = ["en", "zh-cn", "es"];
 
     const result = supportedLanguages.map((code) => {
-      const name = LanguageTabsConnector.languageMap[code] || code;
+      const name = LanguageTabsConnector.getLanguageDisplayName(code);
       const available = this.isLanguageAvailable(code);
 
       // 获取翻译状态
@@ -263,16 +264,12 @@ export default class LanguageTabsConnector extends Component {
     return this.post?.cooked || "";
   }
 
-  // 获取当前语言名称
   get currentLanguageName() {
     if (this.currentLanguage === "original") {
-      return "Original";
+      return i18n("babel_reunited.language_tabs.original");
     }
 
-    return (
-      LanguageTabsConnector.languageMap[this.currentLanguage] ||
-      this.currentLanguage
-    );
+    return LanguageTabsConnector.getLanguageDisplayName(this.currentLanguage);
   }
 
   // 切换语言的方法
@@ -303,9 +300,8 @@ export default class LanguageTabsConnector extends Component {
     this.currentLanguage = "original";
   }
 
-  // 新增：获取语言名称的辅助方法
   getLanguageName(languageCode) {
-    return LanguageTabsConnector.languageMap[languageCode] || languageCode;
+    return LanguageTabsConnector.getLanguageDisplayName(languageCode);
   }
 
   <template>
@@ -314,7 +310,7 @@ export default class LanguageTabsConnector extends Component {
       <div
         style="font-size: 10px; color: #999; margin-bottom: 5px; margin-left: 12px;"
       >
-        AI Translation is disabled by user
+        {{i18n "babel_reunited.language_tabs.disabled_by_user"}}
       </div>
     {{else}}
       <div
@@ -325,7 +321,7 @@ export default class LanguageTabsConnector extends Component {
           style={{this.getButtonStyle "original"}}
           {{on "click" (fn this.switchLanguage "original")}}
         >
-          Original
+          {{i18n "babel_reunited.language_tabs.original"}}
         </button>
 
         {{#each this.languageNames as |langInfo|}}
