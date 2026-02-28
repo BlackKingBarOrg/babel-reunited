@@ -129,6 +129,24 @@ RSpec.describe BabelReunited::TranslationsController do
       expect(response.parsed_body["error"]).to include("Invalid language code format")
     end
 
+    it "rejects uppercase language codes" do
+      post "/babel-reunited/posts/#{post_record.id}/translations.json",
+           params: {
+             target_language: "EN",
+           }
+      expect(response.status).to eq(400)
+      expect(response.parsed_body["error"]).to include("Invalid language code format")
+    end
+
+    it "rejects three-letter language codes" do
+      post "/babel-reunited/posts/#{post_record.id}/translations.json",
+           params: {
+             target_language: "eng",
+           }
+      expect(response.status).to eq(400)
+      expect(response.parsed_body["error"]).to include("Invalid language code format")
+    end
+
     it "accepts language codes with region" do
       post "/babel-reunited/posts/#{post_record.id}/translations.json",
            params: {
@@ -251,6 +269,11 @@ RSpec.describe BabelReunited::TranslationsController do
       expect(response.status).to eq(400)
     end
 
+    it "returns 400 for validation failure on save" do
+      post "/babel-reunited/user-preferred-language.json", params: { language: "eng" }
+      expect(response.status).to eq(400)
+    end
+
     it "updates existing preference" do
       Fabricate(:user_preferred_language, user: user, language: "es")
 
@@ -290,6 +313,20 @@ RSpec.describe BabelReunited::TranslationsController do
       expect(json["post_id"]).to eq(post_record.id)
       expect(json["pending_translations"]).to contain_exactly("fr")
       expect(json["available_translations"]).to contain_exactly("es", "fr")
+    end
+  end
+
+  describe "GET /babel-reunited/posts/:post_id/translations/translation_status with no translations" do
+    before { sign_in(user) }
+
+    it "returns empty arrays when no translations exist" do
+      get "/babel-reunited/posts/#{post_record.id}/translations/translation_status.json"
+      expect(response.status).to eq(200)
+
+      json = response.parsed_body
+      expect(json["post_id"]).to eq(post_record.id)
+      expect(json["pending_translations"]).to eq([])
+      expect(json["available_translations"]).to eq([])
     end
   end
 

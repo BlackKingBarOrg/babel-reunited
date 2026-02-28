@@ -303,6 +303,292 @@ RSpec.describe BabelReunited::TranslationService do
     end
   end
 
+  describe "prepare_content_for_translation (tripwire)" do
+    it "uses post.cooked as translation input" do
+      post_with_cooked =
+        Fabricate(:post, topic: topic, user: user, raw: "Hello world", post_number: 3)
+      service = build_service(post: post_with_cooked)
+
+      request_body = nil
+      stub_request(:post, "https://api.openai.com/v1/chat/completions")
+        .with do |req|
+          request_body = req.body
+          true
+        end
+        .to_return(
+          status: 200,
+          body: {
+            choices: [{ message: { content: '{"translated_content": "<p>Hola mundo</p>"}' } }],
+            model: "gpt-4o",
+            usage: {
+              total_tokens: 50,
+            },
+          }.to_json,
+          headers: {
+            "Content-Type" => "application/json",
+          },
+        )
+
+      result = service.call
+      expect(result.failure?).to be false
+
+      parsed = JSON.parse(request_body)
+      prompt = parsed["messages"].first["content"]
+      expect(prompt).to include(post_with_cooked.cooked)
+    end
+  end
+
+  describe "prepare_title_for_translation" do
+    it "returns nil when topic title is blank" do
+      topic.update_column(:title, "")
+
+      stub_openai_success(translated_title: nil)
+      result = build_service.call
+      expect(result.failure?).to be false
+    end
+
+    it "returns nil when translate_title setting is disabled" do
+      SiteSetting.babel_reunited_translate_title = false
+      stub_openai_success(translated_title: nil)
+
+      result = build_service.call
+      expect(result.failure?).to be false
+    end
+
+    it "returns title when conditions are met" do
+      SiteSetting.babel_reunited_translate_title = true
+      stub_openai_success(translated_title: "Titulo traducido")
+
+      result = build_service.call
+      expect(result[:translation].translated_title).to eq("Titulo traducido")
+    end
+  end
+
+  describe "get_max_content_length" do
+    it "uses SiteSetting for custom provider" do
+      SiteSetting.babel_reunited_max_content_length = 5000
+      BabelReunited::ModelConfig.stubs(:get_config).returns(
+        {
+          provider: "custom",
+          model_name: "my-model",
+          base_url: "https://example.com",
+          api_key: "sk-test-key",
+          max_tokens: nil,
+        },
+      )
+
+      long_post =
+        Fabricate(:post, topic: topic, user: user, cooked: "<p>#{"a" * 5001}</p>", post_number: 4)
+      stub_openai_success
+
+      result = build_service(post: long_post).call
+      expect(result.failure?).to be true
+      expect(result[:error]).to include("Content too long")
+    end
+
+    it "uses max_tokens * 3 for preset providers" do
+      BabelReunited::ModelConfig.stubs(:get_config).returns(
+        {
+          provider: "openai",
+          model_name: "gpt-4o",
+          base_url: "https://api.openai.com",
+          api_key: "sk-test-key",
+          max_tokens: 1000,
+          max_output_tokens: 500,
+          api_key_setting: :babel_reunited_openai_api_key,
+        },
+      )
+
+      long_post =
+        Fabricate(:post, topic: topic, user: user, cooked: "<p>#{"a" * 3001}</p>", post_number: 5)
+      stub_openai_success
+
+      result = build_service(post: long_post).call
+      expect(result.failure?).to be true
+      expect(result[:error]).to include("Content too long")
+    end
+
+    it "falls back to SiteSetting when max_tokens is nil for preset" do
+      SiteSetting.babel_reunited_max_content_length = 2000
+      BabelReunited::ModelConfig.stubs(:get_config).returns(
+        {
+          provider: "openai",
+          model_name: "gpt-4o",
+          base_url: "https://api.openai.com",
+          api_key: "sk-test-key",
+          max_tokens: nil,
+          max_output_tokens: nil,
+          api_key_setting: :babel_reunited_openai_api_key,
+        },
+      )
+
+      long_post =
+        Fabricate(:post, topic: topic, user: user, cooked: "<p>#{"a" * 2001}</p>", post_number: 6)
+      stub_openai_success
+
+      result = build_service(post: long_post).call
+      expect(result.failure?).to be true
+      expect(result[:error]).to include("Content too long")
+    end
+  end
+
+  describe "handle_openai_error" do
+    it "handles 400 bad request with error message" do
+      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
+        status: 400,
+        body: { error: { message: "Invalid model specified" } }.to_json,
+        headers: {
+          "Content-Type" => "application/json",
+        },
+      )
+
+      result = build_service.call
+      expect(result.failure?).to be true
+      expect(result[:error]).to include("Bad request")
+      expect(result[:error]).to include("Invalid model specified")
+    end
+
+    it "handles unknown status codes" do
+      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
+        status: 403,
+        body: { error: "Forbidden" }.to_json,
+        headers: {
+          "Content-Type" => "application/json",
+        },
+      )
+
+      result = build_service.call
+      expect(result.failure?).to be true
+      expect(result[:error]).to include("API error")
+    end
+
+    it "extracts nested error message" do
+      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
+        status: 400,
+        body: {
+          error: {
+            message: "Content filtering triggered",
+            type: "invalid_request",
+          },
+        }.to_json,
+        headers: {
+          "Content-Type" => "application/json",
+        },
+      )
+
+      result = build_service.call
+      expect(result.failure?).to be true
+      expect(result[:error]).to include("Content filtering triggered")
+    end
+
+    it "handles non-JSON error body" do
+      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
+        status: 502,
+        body: "Bad Gateway",
+        headers: {
+          "Content-Type" => "text/plain",
+        },
+      )
+
+      result = build_service.call
+      expect(result.failure?).to be true
+      expect(result[:error]).to include("temporarily unavailable")
+    end
+  end
+
+  describe "try_parse_json_response" do
+    it "returns nil when response has no JSON content" do
+      response_body = {
+        choices: [{ message: { content: "Just plain text, no JSON here" } }],
+        model: "gpt-4o",
+        usage: {
+          total_tokens: 50,
+        },
+      }
+
+      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
+        status: 200,
+        body: response_body.to_json,
+        headers: {
+          "Content-Type" => "application/json",
+        },
+      )
+
+      result = build_service.call
+      expect(result.failure?).to be true
+      expect(result[:error]).to include("Failed to parse JSON response")
+    end
+
+    it "returns nil when JSON has no translated_content" do
+      response_body = {
+        choices: [{ message: { content: '{"other_key": "value"}' } }],
+        model: "gpt-4o",
+        usage: {
+          total_tokens: 50,
+        },
+      }
+
+      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
+        status: 200,
+        body: response_body.to_json,
+        headers: {
+          "Content-Type" => "application/json",
+        },
+      )
+
+      result = build_service.call
+      expect(result.failure?).to be true
+      expect(result[:error]).to include("Failed to parse JSON response")
+    end
+  end
+
+  describe "extract_from_incomplete_json" do
+    it "handles content with simple escaped content" do
+      json_content = '{"translated_content": "<p>Hola mundo bonito</p>", "translated_ti'
+
+      response_body = {
+        choices: [{ message: { content: json_content } }],
+        model: "gpt-4o",
+        usage: {
+          total_tokens: 50,
+        },
+      }
+
+      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
+        status: 200,
+        body: response_body.to_json,
+        headers: {
+          "Content-Type" => "application/json",
+        },
+      )
+
+      result = build_service.call
+      expect(result.failure?).to be false
+      expect(result[:translation].translated_content).to include("Hola mundo bonito")
+    end
+
+    it "returns error when no match found" do
+      response_body = {
+        choices: [{ message: { content: '{"translated_content": "<p>incomplete' } }],
+        model: "gpt-4o",
+        usage: {
+          total_tokens: 50,
+        },
+      }
+
+      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
+        status: 200,
+        body: response_body.to_json,
+        headers: {
+          "Content-Type" => "application/json",
+        },
+      )
+
+      result = build_service.call
+      expect(result.failure?).to be true
+    end
+  end
+
   describe "API error handling" do
     it "handles 401 unauthorized" do
       stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(

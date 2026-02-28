@@ -64,6 +64,7 @@ export default class LanguagePreferenceModal extends Component {
 
   <template>
     <DModal
+      @inline={{@inline}}
       @closeModal={{@closeModal}}
       @title={{i18n "js.babel_reunited.language_preference_modal.title"}}
       class="language-preference-modal"

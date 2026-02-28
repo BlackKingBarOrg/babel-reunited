@@ -66,6 +66,67 @@ RSpec.describe BabelReunited do
   end
 
   describe "post_edited event" do
+    it "does not trigger when plugin is disabled" do
+      SiteSetting.babel_reunited_enabled = false
+      Fabricate(:post_translation, post: post_record, language: "de")
+
+      revisor = OpenStruct.new(topic_diff: {})
+      DiscourseEvent.trigger(:post_edited, post_record, false, revisor)
+
+      expect(
+        job_enqueued?(
+          job: Jobs::BabelReunited::TranslatePostJob,
+          args: {
+            post_id: post_record.id,
+            target_language: "de",
+          },
+        ),
+      ).to be false
+    end
+
+    it "only re-translates existing languages when no auto_translate_languages" do
+      SiteSetting.babel_reunited_auto_translate_languages = ""
+      Fabricate(:post_translation, post: post_record, language: "de")
+
+      revisor = OpenStruct.new(topic_diff: {})
+      DiscourseEvent.trigger(:post_edited, post_record, false, revisor)
+
+      expect(
+        job_enqueued?(
+          job: Jobs::BabelReunited::TranslatePostJob,
+          args: {
+            post_id: post_record.id,
+            target_language: "de",
+            force_update: true,
+          },
+        ),
+      ).to be true
+
+      expect(
+        job_enqueued?(
+          job: Jobs::BabelReunited::TranslatePostJob,
+          args: {
+            post_id: post_record.id,
+            target_language: "zh-cn",
+          },
+        ),
+      ).to be false
+    end
+
+    it "deduplicates existing translations and auto_translate_languages" do
+      Fabricate(:post_translation, post: post_record, language: "es")
+
+      revisor = OpenStruct.new(topic_diff: {})
+      DiscourseEvent.trigger(:post_edited, post_record, false, revisor)
+
+      jobs =
+        Jobs::BabelReunited::TranslatePostJob.jobs.select do |j|
+          j["args"].first["post_id"] == post_record.id && j["args"].first["target_language"] == "es"
+        end
+
+      expect(jobs.length).to eq(1)
+    end
+
     it "re-translates existing languages with force_update" do
       Fabricate(:post_translation, post: post_record, language: "de")
 
@@ -226,6 +287,29 @@ RSpec.describe BabelReunited do
       Fabricate(:user_preferred_language, user: user, language: "es", enabled: true)
       topic.allowed_user_ids = [user.id]
       topic.update!(first_post: post_record)
+    end
+
+    it "does not preload when plugin is disabled" do
+      SiteSetting.babel_reunited_enabled = false
+      translation = Fabricate(:post_translation, post: post_record, language: "es")
+
+      topic_view = TopicView.new(topic.id, user)
+
+      first_post = topic_view.topic.first_post
+      preloaded = BabelReunited.preloaded_post_translation(first_post, "es")
+      expect(preloaded).to be_nil
+    end
+
+    it "does not preload when user has no preferred language" do
+      BabelReunited::UserPreferredLanguage.where(user: user).destroy_all
+      user.reload
+
+      translation = Fabricate(:post_translation, post: post_record, language: "es")
+      topic_view = TopicView.new(topic.id, user)
+
+      first_post = topic_view.topic.first_post
+      preloaded = BabelReunited.preloaded_post_translation(first_post, "es")
+      expect(preloaded).to be_nil
     end
 
     it "preloads translations for topic view" do

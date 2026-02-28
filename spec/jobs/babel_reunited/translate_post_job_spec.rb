@@ -102,6 +102,117 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
     end
   end
 
+  describe "successful translation details" do
+    let(:translation_result) do
+      OpenStruct.new(
+        translated_content: "<p>Hola mundo</p>",
+        translated_title: "Titulo",
+        source_language: "en",
+      )
+    end
+
+    let(:successful_context) do
+      context = Service::Base::Context.build
+      context[:translation] = translation_result
+      context[:ai_response] = {
+        confidence: 0.95,
+        provider_info: {
+          model: "gpt-4o",
+          provider: "openai",
+        },
+      }
+      context
+    end
+
+    before do
+      BabelReunited::TranslationService.any_instance.stubs(:call).returns(successful_context)
+    end
+
+    it "does not publish MessageBus on failure" do
+      failed_context = Service::Base::Context.build
+      failed_context.fail(error: "API key not configured")
+      BabelReunited::TranslationService.any_instance.stubs(:call).returns(failed_context)
+
+      post_record.create_or_update_translation_record("es")
+
+      messages =
+        MessageBus.track_publish("/post-translations/#{post_record.id}") do
+          described_class.new.execute(post_id: post_record.id, target_language: "es")
+        end
+
+      expect(messages).to be_empty
+    end
+
+    it "publishes MessageBus with correct payload structure" do
+      post_record.create_or_update_translation_record("es")
+
+      messages =
+        MessageBus.track_publish("/post-translations/#{post_record.id}") do
+          described_class.new.execute(post_id: post_record.id, target_language: "es")
+        end
+
+      data = messages.first.data
+      expect(data[:post_id]).to eq(post_record.id)
+      expect(data[:language]).to eq("es")
+      expect(data[:status]).to eq("completed")
+      expect(data[:translation][:language]).to eq("es")
+      expect(data[:translation][:translated_content]).to be_present
+      expect(data[:translation][:translated_title]).to be_present
+      expect(data[:translation][:source_language]).to eq("en")
+      expect(data[:translation][:status]).to eq("completed")
+      expect(data[:translation][:metadata][:confidence]).to eq(0.95)
+      expect(data[:translation][:metadata][:provider_info]).to be_present
+    end
+
+    it "passes force_update to TranslationService" do
+      BabelReunited::TranslationService.any_instance.unstub(:call)
+
+      BabelReunited::TranslationService
+        .expects(:new)
+        .with(post: post_record, target_language: "es", force_update: true)
+        .returns(stub(call: successful_context))
+
+      post_record.create_or_update_translation_record("es")
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es",
+        force_update: true,
+      )
+    end
+
+    it "records processing_time_ms in log" do
+      post_record.create_or_update_translation_record("es")
+
+      BabelReunited::TranslationLogger.expects(:log_translation_success).with(
+        has_entries(processing_time: anything),
+      )
+
+      described_class.new.execute(post_id: post_record.id, target_language: "es")
+    end
+
+    it "updates pre-created translation record to completed" do
+      translation = post_record.create_or_update_translation_record("es")
+      expect(translation.status).to eq("translating")
+
+      described_class.new.execute(post_id: post_record.id, target_language: "es")
+
+      translation.reload
+      expect(translation.status).to eq("completed")
+      expect(translation.translated_content).to include("Hola mundo")
+      expect(translation.source_language).to eq("en")
+    end
+
+    it "creates translation record as fallback and completes it" do
+      expect(BabelReunited::PostTranslation.find_translation(post_record.id, "es")).to be_nil
+
+      described_class.new.execute(post_id: post_record.id, target_language: "es")
+
+      translation = BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      expect(translation).to be_present
+      expect(translation.status).to eq("completed")
+    end
+  end
+
   describe "failed translation" do
     let(:failed_context) do
       context = Service::Base::Context.build
