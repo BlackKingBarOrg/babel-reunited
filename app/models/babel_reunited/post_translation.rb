@@ -8,8 +8,10 @@
 #  language             :string(10)       not null
 #  metadata             :json
 #  source_language      :string(10)
+#  source_sha           :string(64)
 #  status               :string           default("completed"), not null
 #  translated_content   :text             not null
+#  translated_raw       :text
 #  translated_title     :text
 #  translation_provider :string(50)
 #  created_at           :datetime         not null
@@ -78,7 +80,28 @@ module BabelReunited
       (metadata || {})["confidence"] || 0.0
     end
 
-    # 新增方法
+    def self.create_or_update_record(post_id, target_language)
+      record = find_or_initialize_by(post_id: post_id, language: target_language)
+      record.assign_attributes(
+        status: "translating",
+        translated_content: "",
+        translated_title: "",
+        translation_provider: record.translation_provider.presence || "openai",
+        metadata: (record.metadata || {}).merge(translating_started_at: Time.current),
+      )
+      record.save!
+      record
+    rescue ActiveRecord::RecordNotUnique
+      record = find_translation(post_id, target_language)
+      record.update!(
+        status: "translating",
+        translated_content: "",
+        translated_title: "",
+        metadata: (record.metadata || {}).merge(translating_started_at: Time.current),
+      )
+      record
+    end
+
     def has_translated_title?
       translated_title.present?
     end

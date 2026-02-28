@@ -1,177 +1,113 @@
 # frozen_string_literal: true
 
+require "digest/sha2"
+
 class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
+  LOCK_TTL = 300 # 5 minutes
+
   def execute(args)
     post_id = args[:post_id]
     target_language = args[:target_language]
     force_update = args[:force_update] || false
-    start_time = Time.current
 
-    return unless validate_arguments(post_id, target_language)
+    return if post_id.blank? || target_language.blank?
 
-    post = find_and_validate_post(post_id, target_language)
-    return unless post
+    with_translation_lock(post_id, target_language) do
+      post = find_post(post_id, target_language)
+      return unless post
 
-    # Find existing translation record (should already be created by event handler)
-    translation = post.get_translation(target_language)
+      source_sha = Digest::SHA256.hexdigest(post.raw)
+      translation = ensure_translation_record(post, target_language)
 
-    # If translation record doesn't exist, create it (fallback for manual job execution)
-    translation ||= post.create_or_update_translation_record(target_language)
+      # Skip if source unchanged and not force_update
+      if !force_update && translation.source_sha == source_sha && translation.completed?
+        log_skipped(post_id, target_language, "source_unchanged")
+        return
+      end
 
-    log_translation_start(post_id, target_language, post, force_update)
+      start_time = Time.current
+      log_start(post_id, target_language, post, force_update)
 
-    result = execute_translation_service(post, target_language, force_update)
-    processing_time = calculate_processing_time(start_time)
+      result =
+        ::BabelReunited::TranslationService.new(
+          post: post,
+          target_language: target_language,
+          force_update: force_update,
+        ).call
 
-    handle_translation_result(
-      result,
-      post_id,
-      target_language,
-      post.topic_id,
-      processing_time,
-      force_update,
-      translation,
-    )
+      processing_time = ((Time.current - start_time) * 1000).round(2)
+
+      if result.success?
+        handle_success(
+          result,
+          post,
+          target_language,
+          source_sha,
+          translation,
+          processing_time,
+          force_update,
+        )
+      else
+        handle_failure(result, post_id, target_language, translation, processing_time)
+      end
+    end
   rescue => e
-    # Handle any unexpected exceptions during translation
-    processing_time = calculate_processing_time(start_time)
-    handle_unexpected_error(e, post_id, target_language, processing_time)
+    handle_unexpected_error(e, args[:post_id], args[:target_language])
   end
 
   private
 
-  def validate_arguments(post_id, target_language)
-    return false if post_id.blank? || target_language.blank?
-    true
+  def with_translation_lock(post_id, language)
+    lock_key = "babel_reunited:translate:#{post_id}:#{language}"
+    acquired = Discourse.redis.set(lock_key, "1", nx: true, ex: LOCK_TTL)
+    unless acquired
+      log_skipped(post_id, language, "locked")
+      return
+    end
+    begin
+      yield
+    ensure
+      Discourse.redis.del(lock_key)
+    end
   end
 
-  def find_and_validate_post(post_id, target_language)
+  def find_post(post_id, target_language)
     post = Post.find_by(id: post_id)
-
     if post.blank?
-      handle_post_not_found(post_id, target_language)
+      log_skipped(post_id, target_language, "post_not_found")
       return nil
     end
-
     if post.deleted_at.present? || post.hidden?
-      handle_post_deleted_or_hidden(post_id, target_language, post.topic_id)
+      log_skipped(post_id, target_language, "post_deleted_or_hidden")
       return nil
     end
-
     post
   end
 
-  def handle_post_deleted_or_hidden(post_id, target_language, topic_id)
-    BabelReunited::TranslationLogger.log_translation_skipped(
-      post_id: post_id,
-      target_language: target_language,
-      reason: "post_deleted_or_hidden",
-    )
+  def ensure_translation_record(post, target_language)
+    translation = BabelReunited::PostTranslation.find_translation(post.id, target_language)
+    translation || BabelReunited::PostTranslation.create_or_update_record(post.id, target_language)
   end
 
-  def handle_post_not_found(post_id, target_language)
-    BabelReunited::TranslationLogger.log_translation_skipped(
-      post_id: post_id,
-      target_language: target_language,
-      reason: "post_not_found",
-    )
-  end
-
-  def log_translation_start(post_id, target_language, post, force_update)
-    BabelReunited::TranslationLogger.log_translation_start(
-      post_id: post_id,
-      target_language: target_language,
-      content_length: post.raw&.length || 0,
-      force_update: force_update,
-    )
-  end
-
-  def execute_translation_service(post, target_language, force_update)
-    BabelReunited::TranslationService.new(
-      post: post,
-      target_language: target_language,
-      force_update: force_update,
-    ).call
-  end
-
-  def calculate_processing_time(start_time)
-    ((Time.current - start_time) * 1000).round(2)
-  end
-
-  def handle_translation_result(
+  def handle_success(
     result,
-    post_id,
+    post,
     target_language,
-    topic_id,
+    source_sha,
+    translation,
     processing_time,
-    force_update,
-    translation
+    force_update
   )
-    if result.failure?
-      handle_translation_failure(
-        result,
-        post_id,
-        target_language,
-        topic_id,
-        processing_time,
-        translation,
-      )
-    else
-      handle_translation_success(
-        result,
-        post_id,
-        target_language,
-        topic_id,
-        processing_time,
-        force_update,
-        translation,
-      )
-    end
-  end
+    translated_cooked = PrettyText.cook(result.translated_raw, topic_id: post.topic_id)
+    translated_cooked = Loofah.html5_fragment(translated_cooked).scrub!(:prune).to_s
 
-  def handle_translation_failure(
-    result,
-    post_id,
-    target_language,
-    topic_id,
-    processing_time,
-    translation
-  )
-    # Update translation status to failed
-    translation.update!(
-      status: "failed",
-      metadata: (translation.metadata || {}).merge(error: result.error, failed_at: Time.current),
-    )
-
-    BabelReunited::TranslationLogger.log_translation_error(
-      post_id: post_id,
-      target_language: target_language,
-      error: StandardError.new(result.error),
-      processing_time: processing_time,
-      context: {
-        topic_id: topic_id,
-        phase: "service_failure",
-        force_update: translation&.metadata&.dig(:force_update),
-      },
-    )
-    Rails.logger.error("Translation failed for post #{post_id}: #{result.error}")
-  end
-
-  def handle_translation_success(
-    result,
-    post_id,
-    target_language,
-    topic_id,
-    processing_time,
-    force_update,
-    translation
-  )
-    # Model before_save callback handles sanitization of translated_content and translated_title
     translation.update!(
       status: "completed",
-      translated_content: result.translation.translated_content,
-      translated_title: result.translation.translated_title,
-      source_language: result.translation.source_language,
+      translated_raw: result.translated_raw,
+      translated_content: translated_cooked,
+      translated_title: result.translated_title,
+      source_language: result.source_language,
+      source_sha: source_sha,
       metadata:
         (translation.metadata || {}).merge(
           confidence: result.ai_response[:confidence],
@@ -181,70 +117,109 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
         ),
     )
 
-    ai_response = result.ai_response || {}
-    BabelReunited::TranslationLogger.log_translation_success(
-      post_id: post_id,
+    ::BabelReunited::TranslationLogger.log_translation_success(
+      post_id: post.id,
       target_language: target_language,
       translation_id: translation.id,
-      ai_response: ai_response,
+      ai_response: result.ai_response,
       processing_time: processing_time,
       force_update: force_update,
     )
 
-    # MessageBus reads from the already-sanitized DB record
-    post = Post.find_by(id: post_id)
-    audience = post ? BabelReunited::MessageBusAudience.options_for(post) : {}
-    MessageBus.publish(
-      "/post-translations/#{post_id}",
-      {
-        post_id: post_id,
-        language: target_language,
-        status: "completed",
-        completed_at: Time.current,
-        translation: {
-          language: target_language,
-          translated_content: translation.translated_content,
-          translated_title: translation.translated_title,
-          source_language: translation.source_language,
-          status: "completed",
-          metadata: {
-            confidence: result.ai_response[:confidence],
-            provider_info: result.ai_response[:provider_info],
-            translated_at: Time.current,
-            completed_at: Time.current,
-          },
-        },
-      },
-      **audience,
-    )
+    publish_status(post, target_language, "completed", translation: translation, result: result)
   end
 
-  def handle_unexpected_error(error, post_id, target_language, processing_time)
-    # Try to find the translation record to update its status
-    translation = BabelReunited::PostTranslation.find_translation(post_id, target_language)
-
-    translation.presence&.update!(
+  def handle_failure(result, post_id, target_language, translation, processing_time)
+    translation.update!(
       status: "failed",
-      metadata:
-        (translation.metadata || {}).merge(
-          error: error.message,
-          error_class: error.class.name,
-          failed_at: Time.current,
-        ),
+      metadata: (translation.metadata || {}).merge(error: result.error, failed_at: Time.current),
     )
 
-    # Log the error
-    BabelReunited::TranslationLogger.log_translation_error(
+    ::BabelReunited::TranslationLogger.log_translation_error(
+      post_id: post_id,
+      target_language: target_language,
+      error: StandardError.new(result.error),
+      processing_time: processing_time,
+      context: {
+        phase: "service_failure",
+      },
+    )
+    Rails.logger.error("Translation failed for post #{post_id}: #{result.error}")
+
+    post = Post.find_by(id: post_id)
+    publish_status(post, target_language, "failed", error: result.error) if post
+  end
+
+  def handle_unexpected_error(error, post_id, target_language)
+    if post_id && target_language
+      translation = ::BabelReunited::PostTranslation.find_translation(post_id, target_language)
+      if translation
+        translation.update!(
+          status: "failed",
+          metadata:
+            (translation.metadata || {}).merge(
+              error: error.message,
+              error_class: error.class.name,
+              failed_at: Time.current,
+            ),
+        )
+      end
+    end
+
+    ::BabelReunited::TranslationLogger.log_translation_error(
       post_id: post_id,
       target_language: target_language,
       error: error,
-      processing_time: processing_time,
+      processing_time: 0,
       context: {
         phase: "unexpected_exception",
       },
     )
-
     Rails.logger.error("Unexpected error in translation job for post #{post_id}: #{error.message}")
     Rails.logger.error(error.backtrace.join("\n")) if error.backtrace
+  end
+
+  def publish_status(post, language, status, translation: nil, result: nil, error: nil)
+    return unless post
+
+    audience = ::BabelReunited::MessageBusAudience.options_for(post)
+    payload = { post_id: post.id, language: language, status: status }
+
+    if status == "completed" && translation
+      payload[:translation] = {
+        language: language,
+        translated_content: translation.translated_content,
+        translated_title: translation.translated_title,
+        source_language: translation.source_language,
+        status: "completed",
+        metadata: {
+          confidence: result&.ai_response&.dig(:confidence),
+          provider_info: result&.ai_response&.dig(:provider_info),
+          translated_at: Time.current,
+          completed_at: Time.current,
+        },
+      }
+    end
+
+    payload[:error] = error if error
+
+    MessageBus.publish("/post-translations/#{post.id}", payload, **audience)
+  end
+
+  def log_skipped(post_id, target_language, reason)
+    ::BabelReunited::TranslationLogger.log_translation_skipped(
+      post_id: post_id,
+      target_language: target_language,
+      reason: reason,
+    )
+  end
+
+  def log_start(post_id, target_language, post, force_update)
+    ::BabelReunited::TranslationLogger.log_translation_start(
+      post_id: post_id,
+      target_language: target_language,
+      content_length: post.raw&.length || 0,
+      force_update: force_update,
+    )
   end
 end

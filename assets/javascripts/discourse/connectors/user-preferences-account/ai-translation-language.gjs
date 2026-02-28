@@ -4,11 +4,12 @@ import { fn } from "@ember/helper";
 import { on } from "@ember/modifier";
 import { action } from "@ember/object";
 import { service } from "@ember/service";
-import { htmlSafe } from "@ember/template";
+import concatClass from "discourse/helpers/concat-class";
 import { ajax } from "discourse/lib/ajax";
 import { popupAjaxError } from "discourse/lib/ajax-error";
 import { eq } from "discourse/truth-helpers";
 import { i18n } from "discourse-i18n";
+import { getSupportedLanguages } from "../../lib/supported-languages";
 
 export default class AiTranslationLanguage extends Component {
   static shouldRender(args, context) {
@@ -16,6 +17,7 @@ export default class AiTranslationLanguage extends Component {
   }
 
   @service currentUser;
+  @service siteSettings;
 
   @tracked saving = false;
   @tracked currentLanguage = null;
@@ -42,10 +44,10 @@ export default class AiTranslationLanguage extends Component {
       const response = await ajax("/babel-reunited/user-preferred-language", {
         type: "GET",
       });
-      this.currentLanguage = response.language || "en";
-      this.enabled = response.enabled !== false; // Default to true if not set
+      this.currentLanguage = response.language || null;
+      this.enabled = response.enabled !== false;
     } catch {
-      this.currentLanguage = "en";
+      this.currentLanguage = null;
       this.enabled = true;
     }
   }
@@ -62,25 +64,12 @@ export default class AiTranslationLanguage extends Component {
   }
 
   get languageOptions() {
-    return [
-      { value: "en", label: "English", flag: "🇺🇸" },
-      { value: "zh-cn", label: "中文", flag: "🇨🇳" },
-      { value: "es", label: "Español", flag: "🇪🇸" },
-    ];
-  }
-
-  get savedNoticeStyle() {
-    const opacity = this.showSavedNotice ? "1" : "0";
-    return htmlSafe(
-      `margin-left: 8px; opacity: ${opacity}; transition: opacity 0.6s;`
-    );
-  }
-
-  get currentLanguageOption() {
-    return (
-      this.languageOptions.find((opt) => opt.value === this.currentLanguage) ||
-      this.languageOptions[0]
-    );
+    return getSupportedLanguages(this.siteSettings).map((code) => ({
+      value: code,
+      label: i18n(`babel_reunited.language_tabs.languages.${code}`, {
+        defaultValue: code,
+      }),
+    }));
   }
 
   @action
@@ -96,7 +85,6 @@ export default class AiTranslationLanguage extends Component {
       this.currentLanguage = language;
       this.showSaved();
 
-      // 刷新currentUser数据
       if (this.currentUser) {
         this.currentUser.set("preferred_language", language);
         this.currentUser.set("preferred_language_enabled", this.enabled);
@@ -122,7 +110,6 @@ export default class AiTranslationLanguage extends Component {
       this.enabled = newEnabled;
       this.showSaved();
 
-      // 刷新currentUser数据
       if (this.currentUser) {
         this.currentUser.set("preferred_language_enabled", newEnabled);
       }
@@ -138,15 +125,16 @@ export default class AiTranslationLanguage extends Component {
       <label class="control-label">
         {{i18n "babel_reunited.preferences.ai_translation_language"}}
         <span
-          class="text-success"
-          style={{this.savedNoticeStyle}}
+          class={{concatClass
+            "saved-notice"
+            (if this.showSavedNotice "--visible")
+          }}
           aria-live="polite"
         >
           {{i18n "saved"}}
         </span>
       </label>
 
-      {{! Enable/Disable Toggle }}
       <div class="controls">
         <div class="ai-translation-toggle">
           <label class="toggle-label">
@@ -165,34 +153,28 @@ export default class AiTranslationLanguage extends Component {
         </div>
       </div>
 
-      {{! Language Selection (only show when enabled) }}
       {{#if this.enabled}}
         <div class="controls">
           <div class="language-selection">
             {{#each this.languageOptions as |option|}}
               <button
                 type="button"
-                class="language-option btn btn-small
-                  {{if
+                class={{concatClass
+                  "language-option btn btn-small"
+                  (if
                     (eq option.value this.currentLanguage)
-                    'btn-primary selected'
-                  }}"
+                    "btn-primary --selected"
+                  )
+                }}
                 disabled={{this.saving}}
                 {{on "click" (fn this.changeLanguage option.value)}}
-                data-language={{option.value}}
-                data-selected={{if
-                  (eq option.value this.currentLanguage)
-                  "true"
-                  "false"
-                }}
                 aria-pressed={{if
                   (eq option.value this.currentLanguage)
                   "true"
                   "false"
                 }}
               >
-                <span class="flag">{{option.flag}}</span>
-                <span class="label">{{option.label}}</span>
+                {{option.label}}
               </button>
             {{/each}}
           </div>

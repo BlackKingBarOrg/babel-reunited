@@ -3,27 +3,39 @@
 module BabelReunited
   class TranslationLogger
     LOG_FILE_PATH = Rails.root.join("log", "babel_reunited_translation.log")
-    
+
+    def self.logger
+      @logger ||=
+        begin
+          FileUtils.mkdir_p(File.dirname(LOG_FILE_PATH))
+          logger = Logger.new(LOG_FILE_PATH)
+          logger.formatter = proc { |_sev, _time, _prog, msg| "#{msg}\n" }
+          logger
+        end
+    end
+
     def self.log_translation_start(post_id:, target_language:, content_length:, force_update: false)
-      log_entry = {
-        timestamp: Time.current.iso8601,
+      write_log(
         event: "translation_started",
         post_id: post_id,
         target_language: target_language,
         content_length: content_length,
         force_update: force_update,
-        status: "started"
-      }
-      
-      write_log(log_entry)
+        status: "started",
+      )
     end
-    
-    def self.log_translation_success(post_id:, target_language:, translation_id:, ai_response:, processing_time:, force_update: false)
-      # Extract model name from provider_info if available
+
+    def self.log_translation_success(
+      post_id:,
+      target_language:,
+      translation_id:,
+      ai_response:,
+      processing_time:,
+      force_update: false
+    )
       model_name = ai_response.dig(:provider_info, :model) || ai_response[:model] || "unknown"
-      
-      log_entry = {
-        timestamp: Time.current.iso8601,
+
+      write_log(
         event: "translation_completed",
         post_id: post_id,
         target_language: target_language,
@@ -32,68 +44,71 @@ module BabelReunited
         force_update: force_update,
         processing_time_ms: processing_time,
         ai_model: model_name,
-        ai_usage: ai_response.dig(:provider_info, :tokens_used) ? { tokens_used: ai_response.dig(:provider_info, :tokens_used) } : {},
-        translated_length: ai_response[:translated_text]&.length || 0
-      }
-      
-      write_log(log_entry)
+        ai_usage:
+          if ai_response.dig(:provider_info, :tokens_used)
+            { tokens_used: ai_response.dig(:provider_info, :tokens_used) }
+          else
+            {}
+          end,
+        translated_length: ai_response[:translated_text]&.length || 0,
+      )
     end
-    
-    def self.log_translation_error(post_id:, target_language:, error:, processing_time:, context: {})
-      log_entry = {
-        timestamp: Time.current.iso8601,
+
+    def self.log_translation_error(
+      post_id:,
+      target_language:,
+      error:,
+      processing_time:,
+      context: {}
+    )
+      write_log(
         event: "translation_failed",
         post_id: post_id,
         target_language: target_language,
         status: "error",
         error_message: error.message,
         error_class: error.class.name,
-        backtrace: (error.respond_to?(:backtrace) && error.backtrace ? error.backtrace.first(10) : nil),
+        backtrace:
+          (error.respond_to?(:backtrace) && error.backtrace ? error.backtrace.first(10) : nil),
         processing_time_ms: processing_time,
-        context: context.presence
-      }
-
-      write_log(log_entry)
+        context: context.presence,
+      )
     end
-    
+
     def self.log_translation_skipped(post_id:, target_language:, reason:)
-      log_entry = {
-        timestamp: Time.current.iso8601,
+      write_log(
         event: "translation_skipped",
         post_id: post_id,
         target_language: target_language,
         status: "skipped",
-        reason: reason
-      }
-      
-      write_log(log_entry)
+        reason: reason,
+      )
     end
-    
-    def self.log_provider_response(post_id:, target_language:, status:, body:, phase:, provider: nil)
-      log_entry = {
-        timestamp: Time.current.iso8601,
+
+    def self.log_provider_response(
+      post_id:,
+      target_language:,
+      status:,
+      body:,
+      phase:,
+      provider: nil
+    )
+      write_log(
         event: "provider_response",
         post_id: post_id,
         target_language: target_language,
         status_code: status,
         provider: provider,
         phase: phase,
-        body: body
-      }
-      
-      write_log(log_entry)
+        body: body,
+      )
     end
-    
+
     private
-    
+
     def self.write_log(log_entry)
-      # Ensure log directory exists
-      FileUtils.mkdir_p(File.dirname(LOG_FILE_PATH))
-      
-      # Write log entry as JSON line
-      File.open(LOG_FILE_PATH, "a") do |file|
-        file.puts(JSON.generate(log_entry))
-      end
+      log_entry[:timestamp] = Time.current.iso8601
+      logger.info(JSON.generate(log_entry))
     rescue => e
       Rails.logger.error("Failed to write translation log: #{e.message}")
     end

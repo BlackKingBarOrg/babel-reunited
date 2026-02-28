@@ -11,6 +11,7 @@ class FixUserPreferredLanguagesIndex < ActiveRecord::Migration[7.0]
     SQL
 
     remove_index :user_preferred_languages, %i[user_id language], if_exists: true
+    remove_index :user_preferred_languages, :user_id, if_exists: true
     add_index :user_preferred_languages, :user_id, unique: true
   end
 

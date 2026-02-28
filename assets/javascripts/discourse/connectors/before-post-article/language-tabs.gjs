@@ -5,14 +5,12 @@ import { on } from "@ember/modifier";
 import { action } from "@ember/object";
 import { service } from "@ember/service";
 import { htmlSafe } from "@ember/template";
+import concatClass from "discourse/helpers/concat-class";
 import icon from "discourse/helpers/d-icon";
 import { eq } from "discourse/truth-helpers";
 import { i18n } from "discourse-i18n";
+import { getSupportedLanguages } from "../../lib/supported-languages";
 
-/**
- * Simple language tabs connector component
- * Displays a basic language tabs box before each post
- */
 export default class LanguageTabsConnector extends Component {
   static getLanguageDisplayName(code) {
     return i18n(`babel_reunited.language_tabs.languages.${code}`, {
@@ -22,76 +20,10 @@ export default class LanguageTabsConnector extends Component {
 
   @service currentUser;
   @service messageBus;
+  @service siteSettings;
 
   @tracked currentLanguage = "original";
-  @tracked translationsVersion = 0; // 用于强制更新UI
-
-  // 获取按钮样式 - 使用箭头函数保持this上下文
-  getButtonStyle = (languageCode) => {
-    // 读取 translationsVersion 以确保在翻译更新时重新计算
-    this.translationsVersion;
-
-    const baseStyle =
-      "padding: 4px 16px; border-radius: 3px; cursor: pointer; font-size: 12px; height: 24px; line-height: 1;";
-
-    // Original 按钮永远保持蓝色样式
-    if (languageCode === "original") {
-      if (this.currentLanguage === "original") {
-        // 当前选中的 Original：蓝色背景，白色文字
-        return htmlSafe(
-          baseStyle +
-            " background: #007bff; color: white; border: 1px solid #007bff;"
-        );
-      } else {
-        // 未选中的 Original：白底，蓝字，蓝框
-        return htmlSafe(
-          baseStyle +
-            " background: white; color: #007bff; border: 1px solid #007bff;"
-        );
-      }
-    }
-
-    // 获取翻译状态
-    let status = "";
-    if (this.post?.post_translations) {
-      const translation = this.post.post_translations.find(
-        (t) => t.post_translation?.language === languageCode
-      );
-      status = translation?.post_translation?.status || "";
-    }
-
-    let styleString;
-    if (this.currentLanguage === languageCode) {
-      // 当前选中的语言：蓝色背景，白色文字
-      styleString =
-        baseStyle +
-        " background: #007bff; color: white; border: 1px solid #007bff;";
-    } else if (status === "completed") {
-      // 完成状态的翻译：白底，蓝字，蓝框
-      styleString =
-        baseStyle +
-        " background: white; color: #007bff; border: 1px solid #007bff;";
-    } else {
-      // 其他所有状态：白底，灰字，灰框
-      styleString =
-        baseStyle +
-        " background: white; color: #6c757d; border: 1px solid #6c757d; cursor: pointer; opacity: 0.8;";
-    }
-
-    return htmlSafe(styleString);
-  };
-
-  // 检查语言是否可用
-  isLanguageAvailable = (languageCode) => {
-    // 读取 translationsVersion 以确保在翻译更新时重新计算
-    this.translationsVersion;
-
-    if (languageCode === "original") {
-      return true; // 原始内容总是可用的
-    }
-    const isAvailable = this.availableLanguages.includes(languageCode);
-    return isAvailable;
-  };
+  @tracked _localTranslations = null;
 
   constructor() {
     super(...arguments);
@@ -102,6 +34,9 @@ export default class LanguageTabsConnector extends Component {
     this._onTranslationUpdate = (data) => {
       if (data.status === "completed" && data.translation) {
         this.updatePostTranslation(data.language, data.translation);
+      }
+      if (data.status === "failed") {
+        this.handleTranslationFailure(data.language);
       }
     };
 
@@ -119,45 +54,38 @@ export default class LanguageTabsConnector extends Component {
     );
   }
 
-  // 更新 post 对象的翻译数据
-  updatePostTranslation(language, translationData) {
-    if (!this.post.post_translations) {
-      this.post.post_translations = [];
-    }
-
-    const existingIndex = this.post.post_translations.findIndex(
-      (t) => t.post_translation?.language === language
-    );
-
-    if (existingIndex >= 0) {
-      // 更新现有翻译
-      this.post.post_translations[existingIndex].post_translation = {
-        ...this.post.post_translations[existingIndex].post_translation,
-        ...translationData,
-      };
-    } else {
-      // 添加新翻译
-      this.post.post_translations.push({
-        post_translation: translationData,
-      });
-    }
-
-    // 触发UI更新：增加版本号以通知所有依赖translationsVersion的getter重新计算
-    this.translationsVersion++;
+  get translations() {
+    return this._localTranslations ?? this.post?.post_translations ?? [];
   }
 
-  // 检查用户是否禁用了AI翻译功能
+  updatePostTranslation(language, translationData) {
+    const existing = this.translations.filter(
+      (t) => t.post_translation?.language !== language
+    );
+    this._localTranslations = [
+      ...existing,
+      { post_translation: translationData },
+    ];
+  }
+
+  handleTranslationFailure(language) {
+    const existing = this.translations.filter(
+      (t) => t.post_translation?.language !== language
+    );
+    this._localTranslations = [
+      ...existing,
+      { post_translation: { language, status: "failed" } },
+    ];
+    if (this.currentLanguage === language) {
+      this.currentLanguage = "original";
+    }
+  }
+
   get isAiTranslationDisabled() {
     return this.currentUser?.preferred_language_enabled === false;
   }
 
-  /**
-   * 初始化用户的偏好语言选择
-   * 如果用户设置了偏好语言且该语言翻译已完成，则自动选择
-   * 如果用户禁用了AI翻译功能，则不进行自动选择
-   */
   initializePreferredLanguage() {
-    // 如果用户禁用了AI翻译功能，直接使用原始内容
     if (this.isAiTranslationDisabled) {
       this.currentLanguage = "original";
       return;
@@ -168,18 +96,8 @@ export default class LanguageTabsConnector extends Component {
     }
 
     const preferredLanguage = this.currentUser.preferred_language;
-
-    // 检查偏好语言的翻译状态
-    let status = "";
-    if (this.post?.post_translations) {
-      const translation = this.post.post_translations.find(
-        (t) => t.post_translation?.language === preferredLanguage
-      );
-      status = translation?.post_translation?.status || "";
-    }
-
-    // 只有当翻译状态是完成状态时才自动选择
-    if (status === "completed") {
+    const translation = this.findTranslation(preferredLanguage);
+    if (translation?.post_translation?.status === "completed") {
       this.currentLanguage = preferredLanguage;
     }
   }
@@ -188,133 +106,97 @@ export default class LanguageTabsConnector extends Component {
     return this.args.post;
   }
 
-  get availableLanguages() {
-    // 读取 translationsVersion 以确保在翻译更新时重新计算
-    this.translationsVersion;
+  findTranslation(languageCode) {
+    return this.translations.find(
+      (t) => t.post_translation?.language === languageCode
+    );
+  }
 
-    // 从 post_translations 获取已存在的翻译
-    let languages = [];
-    if (this.post?.post_translations) {
-      languages = this.post.post_translations
-        .map((t) => {
-          return t.post_translation?.language;
-        })
-        .filter(Boolean);
+  getTranslationStatus(languageCode) {
+    return this.findTranslation(languageCode)?.post_translation?.status || "";
+  }
+
+  tabClass(languageCode) {
+    if (this.currentLanguage === languageCode) {
+      return "--active";
     }
+    const status = this.getTranslationStatus(languageCode);
+    if (status === "completed") {
+      return "--completed";
+    }
+    return "--pending";
+  }
 
-    return languages;
+  get availableLanguages() {
+    return this.translations
+      .map((t) => t.post_translation?.language)
+      .filter(Boolean);
   }
 
   get languageNames() {
-    // 读取 translationsVersion 以确保在翻译更新时重新计算
-    this.translationsVersion;
+    const supportedLanguages = getSupportedLanguages(this.siteSettings);
 
-    // 获取所有支持的语言（包括可用的和不可用的）
-    const supportedLanguages = ["en", "zh-cn", "es"];
-
-    const result = supportedLanguages.map((code) => {
+    return supportedLanguages.map((code) => {
       const name = LanguageTabsConnector.getLanguageDisplayName(code);
-      const available = this.isLanguageAvailable(code);
-
-      // 获取翻译状态
-      let status = "";
-      if (this.post?.post_translations) {
-        const translation = this.post.post_translations.find(
-          (t) => t.post_translation?.language === code
-        );
-        status = translation?.post_translation?.status || "";
-      }
+      const available = this.availableLanguages.includes(code);
+      const status = this.getTranslationStatus(code);
 
       return {
         code,
         name,
         available,
         status,
+        tabClass: this.tabClass(code),
         displayText:
           status && status !== "completed" ? `${name} (${status})` : name,
       };
     });
-
-    return result;
   }
 
-  // 获取当前显示的内容（HTML格式）
   get currentContent() {
     if (this.currentLanguage === "original") {
       return this.post?.cooked || this.post?.raw || "";
     }
 
-    // 检查 post_translations 中的翻译
-    let translation = null;
-    if (this.post?.post_translations) {
-      translation = this.post.post_translations.find(
-        (t) => t.post_translation?.language === this.currentLanguage
-      );
-    }
-
-    let translatedContent = "";
-    if (translation?.post_translation?.translated_content) {
-      translatedContent = translation.post_translation.translated_content;
-    }
-
-    if (translatedContent) {
-      return translatedContent;
-    }
-
-    return this.post?.cooked || "";
+    const translation = this.findTranslation(this.currentLanguage);
+    const content = translation?.post_translation?.translated_content;
+    return content || this.post?.cooked || "";
   }
 
   get currentLanguageName() {
     if (this.currentLanguage === "original") {
       return i18n("babel_reunited.language_tabs.original");
     }
-
     return LanguageTabsConnector.getLanguageDisplayName(this.currentLanguage);
   }
 
-  // 切换语言的方法
   @action
-  async switchLanguage(languageCode) {
-    // 如果选择的是原始内容，直接切换
+  switchLanguage(languageCode) {
     if (languageCode === "original") {
       this.currentLanguage = languageCode;
       return;
     }
 
-    // 获取翻译状态
-    let status = "";
-    if (this.post?.post_translations) {
-      const translation = this.post.post_translations.find(
-        (t) => t.post_translation?.language === languageCode
-      );
-      status = translation?.post_translation?.status || "";
-    }
-
-    // 如果翻译状态是完成状态，可以切换
+    const status = this.getTranslationStatus(languageCode);
     if (status === "completed") {
       this.currentLanguage = languageCode;
-      return;
+    } else {
+      this.currentLanguage = "original";
     }
-
-    // 如果翻译状态不是完成状态，回退到原文 Original
-    this.currentLanguage = "original";
   }
 
   <template>
-    {{! 只有在用户启用AI翻译功能时才显示语言切换标签 }}
     {{#if this.isAiTranslationDisabled}}
-      <div
-        style="font-size: 10px; color: #999; margin-bottom: 5px; margin-left: 12px;"
-      >
+      <div class="babel-reunited-disabled-notice">
         {{i18n "babel_reunited.language_tabs.disabled_by_user"}}
       </div>
     {{else}}
-      <div
-        class="ai-language-tabs"
-        style="display: flex; gap: 3px; flex-wrap: wrap; margin-bottom: 8px; margin-left: 12px;"
-      >
+      <div class="ai-language-tabs">
         <button
-          style={{this.getButtonStyle "original"}}
+          class={{concatClass
+            "babel-reunited-language-tab"
+            (if (eq this.currentLanguage "original") "--active")
+          }}
           {{on "click" (fn this.switchLanguage "original")}}
         >
           {{i18n "babel_reunited.language_tabs.original"}}
@@ -322,7 +204,10 @@ export default class LanguageTabsConnector extends Component {
 
         {{#each this.languageNames as |langInfo|}}
           <button
-            style={{this.getButtonStyle langInfo.code}}
+            class={{concatClass
+              "babel-reunited-language-tab"
+              langInfo.tabClass
+            }}
             {{on "click" (fn this.switchLanguage langInfo.code)}}
             title={{if
               langInfo.available
@@ -337,18 +222,13 @@ export default class LanguageTabsConnector extends Component {
           >
             {{langInfo.name}}
             {{#if (eq langInfo.status "translating")}}
-              <span
-                style="display: inline-block; animation: rotate-forever 1s infinite linear; margin-left: 4px;"
-              >
-                {{icon "spinner" class="loading-icon"}}
-              </span>
+              {{icon "spinner"}}
             {{/if}}
           </button>
         {{/each}}
       </div>
     {{/if}}
 
-    {{! 替换原post内容，直接显示当前选中的内容 }}
     <div class="cooked">
       {{htmlSafe this.currentContent}}
     </div>

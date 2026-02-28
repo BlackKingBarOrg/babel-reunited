@@ -1,29 +1,37 @@
-// 使用更高优先级的选择器
 .user-preferences .ai-translation-language {
-  // Toggle Switch Styles
+  .saved-notice {
+    margin-left: 8px;
+    opacity: 0;
+    transition: opacity 0.6s;
+
+    &.--visible {
+      opacity: 1;
+    }
+  }
+
   .ai-translation-toggle {
     margin-bottom: 15px;
-    
+
     .toggle-label {
       display: flex;
       align-items: center;
       gap: 10px;
       cursor: pointer;
-      font-size: 14px;
+      font-size: var(--font-0);
       font-weight: 500;
-      
+
       .toggle-checkbox {
         display: none;
       }
-      
+
       .toggle-slider {
         position: relative;
         width: 50px;
         height: 24px;
-        background: #ccc;
+        background: var(--primary-low-mid);
         border-radius: 24px;
         transition: all 0.3s ease;
-        
+
         &::before {
           content: "";
           position: absolute;
@@ -31,167 +39,58 @@
           left: 2px;
           width: 20px;
           height: 20px;
-          background: white;
+          background: var(--secondary);
           border-radius: 50%;
           transition: all 0.3s ease;
           box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
         }
       }
-      
+
       .toggle-text {
-        color: #333;
+        color: var(--primary);
         user-select: none;
       }
-      
+
       &:hover .toggle-slider {
-        background: #bbb;
+        background: var(--primary-medium);
       }
-      
+
       .toggle-checkbox:checked + .toggle-slider {
-        background: #007bff;
-        
+        background: var(--tertiary);
+
         &::before {
           transform: translateX(26px);
         }
       }
-      
+
       .toggle-checkbox:disabled + .toggle-slider {
         opacity: 0.6;
         cursor: not-allowed;
       }
     }
   }
+
   .language-selection {
     display: flex;
     gap: 8px;
     flex-wrap: wrap;
-    
+
     .language-option {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      padding: 10px 16px;
-      border: 2px solid #e9ecef;
-      border-radius: 8px;
-      background: #fff;
-      cursor: pointer;
-      transition: all 0.3s ease;
-      position: relative;
-      
-      &:hover {
-        border-color: #007bff !important;
-        background: #f8f9fa !important;
-        transform: translateY(-1px);
-        box-shadow: 0 2px 8px rgba(0, 123, 255, 0.15);
+      &.--selected {
+        font-weight: 600;
       }
-      
-      &.selected {
-        border-color: #007bff !important;
-        background: linear-gradient(135deg, #007bff 0%, #0056b3 100%) !important;
-        color: white !important;
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(0, 123, 255, 0.3);
-        
-        .flag {
-          filter: none !important;
-          transform: scale(1.1);
-        }
-        
-        .label {
-          font-weight: 600 !important;
-          color: white !important;
-        }
-        
-        // 添加选中指示器
-        &::after {
-          content: "✓";
-          position: absolute;
-          top: -5px;
-          right: -5px;
-          background: #28a745;
-          color: white;
-          border-radius: 50%;
-          width: 20px;
-          height: 20px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          font-size: 12px;
-          font-weight: bold;
-          border: 2px solid white;
-        }
-      }
-      
+
       &:disabled {
         opacity: 0.6;
         cursor: not-allowed;
-        transform: none;
-        
-        &:hover {
-          transform: none;
-          box-shadow: none;
-        }
-      }
-      
-      .flag {
-        font-size: 18px;
-        filter: grayscale(0.3);
-        transition: all 0.3s ease;
-      }
-      
-      .label {
-        font-size: 14px;
-        font-weight: 500;
-        transition: all 0.3s ease;
       }
     }
   }
-  
+
   .instructions {
     margin-top: 12px;
-    font-size: 13px;
-    color: #666;
+    font-size: var(--font-down-1);
+    color: var(--primary-medium);
     line-height: 1.4;
-  }
-}
-
-// 备用选择器，确保样式生效
-.ai-translation-language .language-option.selected {
-  border-color: #007bff !important;
-  background: linear-gradient(135deg, #007bff 0%, #0056b3 100%) !important;
-  color: white !important;
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0, 123, 255, 0.3);
-}
-
-.ai-translation-language .language-option.selected .flag {
-  filter: none !important;
-  transform: scale(1.1);
-}
-
-.ai-translation-language .language-option.selected .label {
-  font-weight: 600 !important;
-  color: white !important;
-}
-
-// Translation animation styles
-@keyframes pulse {
-  0% { opacity: 1; }
-  50% { opacity: 0.7; }
-  100% { opacity: 1; }
-}
-
-@keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
-}
-
-.translating-button {
-  animation: pulse 1.5s infinite;
-  
-  &::after {
-    content: "⟳";
-    margin-left: 4px;
-    animation: spin 1s linear infinite;
   }
 }

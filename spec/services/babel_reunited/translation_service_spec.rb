@@ -23,44 +23,60 @@ RSpec.describe BabelReunited::TranslationService do
     described_class.new(post: post, target_language: target_language, force_update: force_update)
   end
 
-  def stub_openai_success(translated_content: "<p>Hola mundo</p>", translated_title: "Titulo")
-    response_body = {
-      choices: [
-        {
-          message: {
-            content: {
-              translated_content: translated_content,
-              translated_title: translated_title,
-            }.to_json,
-          },
-        },
-      ],
-      model: "gpt-4o",
-      usage: {
-        total_tokens: 100,
-      },
-    }
+  def stub_llm_success(content: "Hola mundo", title_content: "Titulo traducido")
+    # Main translation request
+    stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return do |request|
+      body = JSON.parse(request.body)
+      prompt = body["messages"].first["content"]
 
-    stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
-      status: 200,
-      body: response_body.to_json,
-      headers: {
-        "Content-Type" => "application/json",
-      },
-    )
+      response_text =
+        if prompt.include?("Return ONLY the translated text, no quotes, no extra words")
+          title_content
+        else
+          content
+        end
+
+      {
+        status: 200,
+        body: {
+          choices: [{ message: { content: response_text } }],
+          model: "gpt-4o",
+          usage: {
+            total_tokens: 100,
+          },
+        }.to_json,
+        headers: {
+          "Content-Type" => "application/json",
+        },
+      }
+    end
+  end
+
+  describe "Result struct" do
+    it "reports success when no error" do
+      result = described_class::Result.new(translated_raw: "text")
+      expect(result.success?).to be true
+      expect(result.failure?).to be false
+    end
+
+    it "reports failure when error present" do
+      result = described_class::Result.new(error: "something went wrong")
+      expect(result.success?).to be false
+      expect(result.failure?).to be true
+    end
   end
 
   describe "input validation" do
     it "returns error for blank post" do
       result = described_class.new(post: nil, target_language: "es").call
       expect(result.failure?).to be true
-      expect(result[:error]).to eq("Post not found")
+      expect(result.error).to eq("Post not found")
     end
 
     it "returns error for blank target_language" do
       result = build_service(target_language: "").call
       expect(result.failure?).to be true
-      expect(result[:error]).to eq("Target language not specified")
+      expect(result.error).to eq("Target language not specified")
     end
   end
 
@@ -70,7 +86,7 @@ RSpec.describe BabelReunited::TranslationService do
 
       result = build_service.call
       expect(result.failure?).to be true
-      expect(result[:error]).to include("API key not configured")
+      expect(result.error).to include("API key not configured")
     end
 
     it "returns error when model config is nil" do
@@ -78,7 +94,7 @@ RSpec.describe BabelReunited::TranslationService do
 
       result = build_service.call
       expect(result.failure?).to be true
-      expect(result[:error]).to include("Invalid preset model")
+      expect(result.error).to include("Invalid preset model")
     end
 
     it "returns error when base_url is missing" do
@@ -88,7 +104,7 @@ RSpec.describe BabelReunited::TranslationService do
 
       result = build_service.call
       expect(result.failure?).to be true
-      expect(result[:error]).to include("Base URL not configured")
+      expect(result.error).to include("Base URL not configured")
     end
 
     it "returns error when model_name is missing" do
@@ -103,211 +119,92 @@ RSpec.describe BabelReunited::TranslationService do
 
       result = build_service.call
       expect(result.failure?).to be true
-      expect(result[:error]).to include("Model name not configured")
+      expect(result.error).to include("Model name not configured")
     end
   end
 
   describe "rate limiting" do
     it "returns error when rate limit exceeded" do
       BabelReunited::RateLimiter.stubs(:perform_request_if_allowed).returns(false)
-      stub_openai_success
+      stub_llm_success
 
       result = build_service.call
       expect(result.failure?).to be true
-      expect(result[:error]).to include("Rate limit exceeded")
+      expect(result.error).to include("Rate limit exceeded")
     end
   end
 
   describe "content length check" do
     it "returns error when content is too long" do
-      long_post =
-        Fabricate(
-          :post,
-          topic: topic,
-          user: user,
-          cooked: "<p>#{"a" * 500_000}</p>",
-          post_number: 2,
-        )
+      long_post = Fabricate(:post, topic: topic, user: user, post_number: 2)
+      long_post.stubs(:raw).returns("a" * 500_000)
 
-      stub_openai_success
+      stub_llm_success
       result = build_service(post: long_post).call
       expect(result.failure?).to be true
-      expect(result[:error]).to include("Content too long")
+      expect(result.error).to include("Content too long")
     end
   end
 
   describe "successful translation" do
-    it "returns translation result" do
-      stub_openai_success
+    it "returns translated_raw in result" do
+      stub_llm_success(content: "Hola mundo")
 
       result = build_service.call
-      expect(result.failure?).to be false
-      expect(result[:translation].translated_content).to eq("<p>Hola mundo</p>")
-      expect(result[:translation].source_language).to eq("auto")
+      expect(result.success?).to be true
+      expect(result.translated_raw).to eq("Hola mundo")
+      expect(result.source_language).to eq("auto")
     end
 
-    it "includes ai_response in context" do
-      stub_openai_success
+    it "includes ai_response metadata" do
+      stub_llm_success
 
       result = build_service.call
-      expect(result[:ai_response]).to be_present
-      expect(result[:ai_response][:confidence]).to eq(0.95)
-      expect(result[:ai_response][:provider_info][:model]).to eq("gpt-4o")
+      expect(result.ai_response).to be_present
+      expect(result.ai_response[:confidence]).to eq(0.95)
+      expect(result.ai_response[:provider_info][:model]).to eq("gpt-4o")
     end
 
     it "records the request for rate limiting" do
-      stub_openai_success
+      stub_llm_success
 
       expect { build_service.call }.to change {
         60 - BabelReunited::RateLimiter.remaining_requests
-      }.by(1)
+      }.by_at_least(1)
     end
   end
 
   describe "title translation" do
-    it "includes title for first post of topic" do
-      stub_openai_success(translated_title: "Titulo traducido")
+    it "translates title for first post" do
+      stub_llm_success(title_content: "Titulo traducido")
 
       result = build_service.call
-      expect(result[:translation].translated_title).to eq("Titulo traducido")
+      expect(result.translated_title).to eq("Titulo traducido")
     end
 
-    it "does not include title for non-first posts" do
+    it "does not translate title for non-first posts" do
       non_first_post = Fabricate(:post, topic: topic, user: user, post_number: 2)
-      stub_openai_success(translated_title: nil)
+      stub_llm_success
 
       result = build_service(post: non_first_post).call
-      expect(result.failure?).to be false
+      expect(result.success?).to be true
+      expect(result.translated_title).to be_nil
     end
 
-    it "does not include title when translate_title is disabled" do
+    it "does not translate title when translate_title is disabled" do
       SiteSetting.babel_reunited_translate_title = false
-      stub_openai_success(translated_title: nil)
+      stub_llm_success
 
       result = build_service.call
-      expect(result.failure?).to be false
+      expect(result.success?).to be true
+      expect(result.translated_title).to be_nil
     end
   end
 
-  describe "title fallback" do
-    it "fills missing title when fallback succeeds" do
-      service = build_service
-      service.stubs(:call_openai_api).returns(
-        {
-          translated_text: "<p>Hola mundo</p>",
-          translated_title: nil,
-          source_language: "auto",
-          confidence: 0.95,
-          provider_info: {
-            model: "gpt-4o",
-            provider: "openai",
-          },
-        },
-      )
-      service.stubs(:get_api_config).returns(
-        {
-          api_key: "sk-test-key",
-          base_url: "https://api.openai.com",
-          model: "gpt-4o",
-          max_tokens: 100,
-          provider: "openai",
-        },
-      )
-      service.expects(:translate_title_fallback).returns("Fallback Title")
-
-      result = service.call
-      expect(result.failure?).to be false
-      expect(result[:translation].translated_title).to eq("Fallback Title")
-    end
-
-    it "skips fallback when api config returns error" do
-      service = build_service
-      service.stubs(:call_openai_api).returns(
-        {
-          translated_text: "<p>Hola mundo</p>",
-          translated_title: nil,
-          source_language: "auto",
-          confidence: 0.95,
-          provider_info: {
-            model: "gpt-4o",
-            provider: "openai",
-          },
-        },
-      )
-      service.stubs(:get_api_config).returns({ error: "Invalid preset model" })
-      service.expects(:translate_title_fallback).never
-
-      result = service.call
-      expect(result.failure?).to be false
-      expect(result[:translation].translated_title).to be_nil
-    end
-  end
-
-  describe "JSON response parsing" do
-    it "parses direct JSON response" do
-      stub_openai_success
-
-      result = build_service.call
-      expect(result[:translation].translated_content).to be_present
-    end
-
-    it "extracts JSON from content with surrounding text" do
-      response_body = {
-        choices: [
-          {
-            message: {
-              content:
-                "Here is the translation:\n{\"translated_content\": \"<p>Hola</p>\", \"translated_title\": \"Titulo\"}\nDone.",
-            },
-          },
-        ],
-        model: "gpt-4o",
-        usage: {
-          total_tokens: 50,
-        },
-      }
-
-      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
-        status: 200,
-        body: response_body.to_json,
-        headers: {
-          "Content-Type" => "application/json",
-        },
-      )
-
-      result = build_service.call
-      expect(result[:translation].translated_content).to eq("<p>Hola</p>")
-    end
-
-    it "extracts from incomplete JSON" do
-      response_body = {
-        choices: [
-          { message: { content: "{\"translated_content\": \"<p>Hola</p>\", \"translated_ti" } },
-        ],
-        model: "gpt-4o",
-        usage: {
-          total_tokens: 50,
-        },
-      }
-
-      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
-        status: 200,
-        body: response_body.to_json,
-        headers: {
-          "Content-Type" => "application/json",
-        },
-      )
-
-      result = build_service.call
-      expect(result[:translation].translated_content).to eq("<p>Hola</p>")
-    end
-  end
-
-  describe "prepare_content_for_translation (tripwire)" do
-    it "uses post.cooked as translation input" do
-      post_with_cooked =
-        Fabricate(:post, topic: topic, user: user, raw: "Hello world", post_number: 3)
-      service = build_service(post: post_with_cooked)
+  describe "markdown protection" do
+    it "sends post.raw (not cooked) to the LLM" do
+      post_with_raw =
+        Fabricate(:post, topic: topic, user: user, raw: "Hello **bold** world", post_number: 3)
 
       request_body = nil
       stub_request(:post, "https://api.openai.com/v1/chat/completions")
@@ -318,7 +215,7 @@ RSpec.describe BabelReunited::TranslationService do
         .to_return(
           status: 200,
           body: {
-            choices: [{ message: { content: '{"translated_content": "<p>Hola mundo</p>"}' } }],
+            choices: [{ message: { content: "Hola **negrita** mundo" } }],
             model: "gpt-4o",
             usage: {
               total_tokens: 50,
@@ -329,38 +226,96 @@ RSpec.describe BabelReunited::TranslationService do
           },
         )
 
-      result = service.call
-      expect(result.failure?).to be false
+      result = build_service(post: post_with_raw).call
+      expect(result.success?).to be true
 
       parsed = JSON.parse(request_body)
       prompt = parsed["messages"].first["content"]
-      expect(prompt).to include(post_with_cooked.cooked)
+      expect(prompt).to include("Hello **bold** world")
+      expect(prompt).not_to include("<p>")
+    end
+
+    it "protects code blocks in the prompt" do
+      post_with_code =
+        Fabricate(
+          :post,
+          topic: topic,
+          user: user,
+          raw: "Hello\n```ruby\ndef foo\nend\n```\nWorld",
+          post_number: 4,
+        )
+
+      request_body = nil
+      stub_request(:post, "https://api.openai.com/v1/chat/completions")
+        .with do |req|
+          request_body = req.body
+          true
+        end
+        .to_return(
+          status: 200,
+          body: {
+            choices: [{ message: { content: "Hola\n\u27E6TK0\u27E7\nMundo" } }],
+            model: "gpt-4o",
+            usage: {
+              total_tokens: 50,
+            },
+          }.to_json,
+          headers: {
+            "Content-Type" => "application/json",
+          },
+        )
+
+      result = build_service(post: post_with_code).call
+      expect(result.success?).to be true
+
+      parsed = JSON.parse(request_body)
+      prompt = parsed["messages"].first["content"]
+      expect(prompt).to include("\u27E6TK")
+      expect(prompt).not_to include("def foo")
+
+      expect(result.translated_raw).to include("```ruby\ndef foo\nend\n```")
     end
   end
 
-  describe "prepare_title_for_translation" do
-    it "returns nil when topic title is blank" do
-      topic.update_column(:title, "")
+  describe "strip_llm_wrapper" do
+    it "strips 'Here is the translation:' preamble" do
+      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
+        status: 200,
+        body: {
+          choices: [{ message: { content: "Here is the translation:\nHola mundo" } }],
+          model: "gpt-4o",
+          usage: {
+            total_tokens: 50,
+          },
+        }.to_json,
+        headers: {
+          "Content-Type" => "application/json",
+        },
+      )
 
-      stub_openai_success(translated_title: nil)
-      result = build_service.call
-      expect(result.failure?).to be false
-    end
-
-    it "returns nil when translate_title setting is disabled" do
       SiteSetting.babel_reunited_translate_title = false
-      stub_openai_success(translated_title: nil)
-
       result = build_service.call
-      expect(result.failure?).to be false
+      expect(result.translated_raw).to eq("Hola mundo")
     end
 
-    it "returns title when conditions are met" do
-      SiteSetting.babel_reunited_translate_title = true
-      stub_openai_success(translated_title: "Titulo traducido")
+    it "strips markdown code block wrapping" do
+      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
+        status: 200,
+        body: {
+          choices: [{ message: { content: "```\nHola mundo\n```" } }],
+          model: "gpt-4o",
+          usage: {
+            total_tokens: 50,
+          },
+        }.to_json,
+        headers: {
+          "Content-Type" => "application/json",
+        },
+      )
 
+      SiteSetting.babel_reunited_translate_title = false
       result = build_service.call
-      expect(result[:translation].translated_title).to eq("Titulo traducido")
+      expect(result.translated_raw).to eq("Hola mundo")
     end
   end
 
@@ -377,13 +332,13 @@ RSpec.describe BabelReunited::TranslationService do
         },
       )
 
-      long_post =
-        Fabricate(:post, topic: topic, user: user, cooked: "<p>#{"a" * 5001}</p>", post_number: 4)
-      stub_openai_success
+      long_post = Fabricate(:post, topic: topic, user: user, post_number: 5)
+      long_post.stubs(:raw).returns("a" * 5001)
+      stub_llm_success
 
       result = build_service(post: long_post).call
       expect(result.failure?).to be true
-      expect(result[:error]).to include("Content too long")
+      expect(result.error).to include("Content too long")
     end
 
     it "uses max_tokens * 3 for preset providers" do
@@ -395,17 +350,16 @@ RSpec.describe BabelReunited::TranslationService do
           api_key: "sk-test-key",
           max_tokens: 1000,
           max_output_tokens: 500,
-          api_key_setting: :babel_reunited_openai_api_key,
         },
       )
 
-      long_post =
-        Fabricate(:post, topic: topic, user: user, cooked: "<p>#{"a" * 3001}</p>", post_number: 5)
-      stub_openai_success
+      long_post = Fabricate(:post, topic: topic, user: user, post_number: 6)
+      long_post.stubs(:raw).returns("a" * 3001)
+      stub_llm_success
 
       result = build_service(post: long_post).call
       expect(result.failure?).to be true
-      expect(result[:error]).to include("Content too long")
+      expect(result.error).to include("Content too long")
     end
 
     it "falls back to SiteSetting when max_tokens is nil for preset" do
@@ -418,22 +372,21 @@ RSpec.describe BabelReunited::TranslationService do
           api_key: "sk-test-key",
           max_tokens: nil,
           max_output_tokens: nil,
-          api_key_setting: :babel_reunited_openai_api_key,
         },
       )
 
-      long_post =
-        Fabricate(:post, topic: topic, user: user, cooked: "<p>#{"a" * 2001}</p>", post_number: 6)
-      stub_openai_success
+      long_post = Fabricate(:post, topic: topic, user: user, post_number: 7)
+      long_post.stubs(:raw).returns("a" * 2001)
+      stub_llm_success
 
       result = build_service(post: long_post).call
       expect(result.failure?).to be true
-      expect(result[:error]).to include("Content too long")
+      expect(result.error).to include("Content too long")
     end
   end
 
-  describe "handle_openai_error" do
-    it "handles 400 bad request with error message" do
+  describe "API error handling" do
+    it "handles 400 bad request" do
       stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
         status: 400,
         body: { error: { message: "Invalid model specified" } }.to_json,
@@ -444,152 +397,10 @@ RSpec.describe BabelReunited::TranslationService do
 
       result = build_service.call
       expect(result.failure?).to be true
-      expect(result[:error]).to include("Bad request")
-      expect(result[:error]).to include("Invalid model specified")
+      expect(result.error).to include("Bad request")
+      expect(result.error).to include("Invalid model specified")
     end
 
-    it "handles unknown status codes" do
-      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
-        status: 403,
-        body: { error: "Forbidden" }.to_json,
-        headers: {
-          "Content-Type" => "application/json",
-        },
-      )
-
-      result = build_service.call
-      expect(result.failure?).to be true
-      expect(result[:error]).to include("API error")
-    end
-
-    it "extracts nested error message" do
-      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
-        status: 400,
-        body: {
-          error: {
-            message: "Content filtering triggered",
-            type: "invalid_request",
-          },
-        }.to_json,
-        headers: {
-          "Content-Type" => "application/json",
-        },
-      )
-
-      result = build_service.call
-      expect(result.failure?).to be true
-      expect(result[:error]).to include("Content filtering triggered")
-    end
-
-    it "handles non-JSON error body" do
-      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
-        status: 502,
-        body: "Bad Gateway",
-        headers: {
-          "Content-Type" => "text/plain",
-        },
-      )
-
-      result = build_service.call
-      expect(result.failure?).to be true
-      expect(result[:error]).to include("temporarily unavailable")
-    end
-  end
-
-  describe "try_parse_json_response" do
-    it "returns nil when response has no JSON content" do
-      response_body = {
-        choices: [{ message: { content: "Just plain text, no JSON here" } }],
-        model: "gpt-4o",
-        usage: {
-          total_tokens: 50,
-        },
-      }
-
-      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
-        status: 200,
-        body: response_body.to_json,
-        headers: {
-          "Content-Type" => "application/json",
-        },
-      )
-
-      result = build_service.call
-      expect(result.failure?).to be true
-      expect(result[:error]).to include("Failed to parse JSON response")
-    end
-
-    it "returns nil when JSON has no translated_content" do
-      response_body = {
-        choices: [{ message: { content: '{"other_key": "value"}' } }],
-        model: "gpt-4o",
-        usage: {
-          total_tokens: 50,
-        },
-      }
-
-      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
-        status: 200,
-        body: response_body.to_json,
-        headers: {
-          "Content-Type" => "application/json",
-        },
-      )
-
-      result = build_service.call
-      expect(result.failure?).to be true
-      expect(result[:error]).to include("Failed to parse JSON response")
-    end
-  end
-
-  describe "extract_from_incomplete_json" do
-    it "handles content with simple escaped content" do
-      json_content = '{"translated_content": "<p>Hola mundo bonito</p>", "translated_ti'
-
-      response_body = {
-        choices: [{ message: { content: json_content } }],
-        model: "gpt-4o",
-        usage: {
-          total_tokens: 50,
-        },
-      }
-
-      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
-        status: 200,
-        body: response_body.to_json,
-        headers: {
-          "Content-Type" => "application/json",
-        },
-      )
-
-      result = build_service.call
-      expect(result.failure?).to be false
-      expect(result[:translation].translated_content).to include("Hola mundo bonito")
-    end
-
-    it "returns error when no match found" do
-      response_body = {
-        choices: [{ message: { content: '{"translated_content": "<p>incomplete' } }],
-        model: "gpt-4o",
-        usage: {
-          total_tokens: 50,
-        },
-      }
-
-      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
-        status: 200,
-        body: response_body.to_json,
-        headers: {
-          "Content-Type" => "application/json",
-        },
-      )
-
-      result = build_service.call
-      expect(result.failure?).to be true
-    end
-  end
-
-  describe "API error handling" do
     it "handles 401 unauthorized" do
       stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
         status: 401,
@@ -601,7 +412,7 @@ RSpec.describe BabelReunited::TranslationService do
 
       result = build_service.call
       expect(result.failure?).to be true
-      expect(result[:error]).to include("Invalid API key")
+      expect(result.error).to include("Invalid API key")
     end
 
     it "handles 429 rate limit" do
@@ -615,7 +426,7 @@ RSpec.describe BabelReunited::TranslationService do
 
       result = build_service.call
       expect(result.failure?).to be true
-      expect(result[:error]).to include("Rate limit exceeded")
+      expect(result.error).to include("Rate limit exceeded")
     end
 
     it "handles 500 server error" do
@@ -629,7 +440,7 @@ RSpec.describe BabelReunited::TranslationService do
 
       result = build_service.call
       expect(result.failure?).to be true
-      expect(result[:error]).to include("temporarily unavailable")
+      expect(result.error).to include("temporarily unavailable")
     end
 
     it "handles network errors" do
@@ -639,7 +450,71 @@ RSpec.describe BabelReunited::TranslationService do
 
       result = build_service.call
       expect(result.failure?).to be true
-      expect(result[:error]).to include("Network error")
+      expect(result.error).to include("Network error")
+    end
+
+    it "handles unknown status codes" do
+      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
+        status: 403,
+        body: { error: "Forbidden" }.to_json,
+        headers: {
+          "Content-Type" => "application/json",
+        },
+      )
+
+      result = build_service.call
+      expect(result.failure?).to be true
+      expect(result.error).to include("API error")
+    end
+
+    it "handles non-JSON error body" do
+      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
+        status: 502,
+        body: "Bad Gateway",
+        headers: {
+          "Content-Type" => "text/plain",
+        },
+      )
+
+      result = build_service.call
+      expect(result.failure?).to be true
+      expect(result.error).to include("temporarily unavailable")
+    end
+  end
+
+  describe "response parsing edge cases" do
+    it "handles empty response content" do
+      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
+        status: 200,
+        body: {
+          choices: [{ message: { content: "" } }],
+          model: "gpt-4o",
+          usage: {
+            total_tokens: 50,
+          },
+        }.to_json,
+        headers: {
+          "Content-Type" => "application/json",
+        },
+      )
+
+      result = build_service.call
+      expect(result.failure?).to be true
+      expect(result.error).to include("No translation in response")
+    end
+
+    it "handles missing choices in response" do
+      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
+        status: 200,
+        body: { model: "gpt-4o" }.to_json,
+        headers: {
+          "Content-Type" => "application/json",
+        },
+      )
+
+      result = build_service.call
+      expect(result.failure?).to be true
+      expect(result.error).to include("Invalid response format")
     end
   end
 end

@@ -1,13 +1,49 @@
 .ai-language-tabs {
-  button {
-    .d-icon-spinner {
-      animation: rotate-forever 1s infinite linear !important;
-      margin-left: 4px;
-      display: inline-block;
-    }
+  display: flex;
+  gap: 3px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+  margin-left: 12px;
+}
 
-    span .d-icon-spinner {
-      animation: rotate-forever 1s infinite linear !important;
-    }
+.babel-reunited-language-tab {
+  padding: 4px 16px;
+  border-radius: 3px;
+  font-size: var(--font-down-2);
+  border: 1px solid var(--primary-low);
+  color: var(--primary);
+  background: var(--secondary);
+  cursor: pointer;
+  height: 24px;
+  line-height: 1;
+
+  &.--active {
+    background: var(--tertiary);
+    color: var(--secondary);
+    border-color: var(--tertiary);
   }
+
+  &.--completed {
+    color: var(--tertiary);
+    border-color: var(--tertiary);
+  }
+
+  &.--pending {
+    opacity: 0.6;
+    color: var(--primary-medium);
+    border-color: var(--primary-low-mid);
+  }
+
+  .d-icon-spinner {
+    animation: rotate-forever 1s infinite linear;
+    margin-left: 4px;
+    display: inline-block;
+  }
+}
+
+.babel-reunited-disabled-notice {
+  font-size: var(--font-down-3);
+  color: var(--primary-medium);
+  margin-bottom: 5px;
+  margin-left: 12px;
 }
