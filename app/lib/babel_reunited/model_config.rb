@@ -158,59 +158,5 @@ module BabelReunited
 
       config.merge(api_key: SiteSetting.public_send(config[:api_key_setting]))
     end
-
-    def self.get_api_key
-      get_config&.dig(:api_key)
-    end
-
-    def self.get_model_name
-      get_config&.dig(:model_name)
-    end
-
-    def self.get_base_url
-      get_config&.dig(:base_url)
-    end
-
-    def self.get_max_tokens
-      get_config&.dig(:max_tokens)
-    end
-
-    def self.get_max_output_tokens
-      get_config&.dig(:max_output_tokens)
-    end
-
-    def self.get_provider
-      get_config&.dig(:provider)
-    end
-
-    def self.get_description
-      get_config&.dig(:description)
-    end
-
-    def self.get_tier
-      get_config&.dig(:tier)
-    end
-
-    def self.list_available_models
-      PRESET_MODELS.map do |key, config|
-        {
-          key: key,
-          name: config[:model_name],
-          provider: config[:provider],
-          description: config[:description],
-          tier: config[:tier],
-          max_tokens: config[:max_tokens],
-          max_output_tokens: config[:max_output_tokens],
-        }
-      end
-    end
-
-    def self.list_models_by_provider(provider)
-      PRESET_MODELS.select { |_, config| config[:provider] == provider }
-    end
-
-    def self.list_models_by_tier(tier)
-      PRESET_MODELS.select { |_, config| config[:tier] == tier }
-    end
   end
 end

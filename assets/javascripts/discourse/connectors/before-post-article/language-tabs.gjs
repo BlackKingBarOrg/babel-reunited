@@ -300,10 +300,6 @@ export default class LanguageTabsConnector extends Component {
     this.currentLanguage = "original";
   }
 
-  getLanguageName(languageCode) {
-    return LanguageTabsConnector.getLanguageDisplayName(languageCode);
-  }
-
   <template>
     {{! 只有在用户启用AI翻译功能时才显示语言切换标签 }}
     {{#if this.isAiTranslationDisabled}}
@@ -330,8 +326,13 @@ export default class LanguageTabsConnector extends Component {
             {{on "click" (fn this.switchLanguage langInfo.code)}}
             title={{if
               langInfo.available
-              "Switch to {{langInfo.name}}"
-              "Click to start translation for {{langInfo.name}}"
+              (i18n
+                "babel_reunited.language_tabs.switch_to" language=langInfo.name
+              )
+              (i18n
+                "babel_reunited.language_tabs.start_translation"
+                language=langInfo.name
+              )
             }}
           >
             {{langInfo.name}}

@@ -140,7 +140,7 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
     # Update translation status to failed
     translation.update!(
       status: "failed",
-      metadata: translation.metadata.merge(error: result.error, failed_at: Time.current),
+      metadata: (translation.metadata || {}).merge(error: result.error, failed_at: Time.current),
     )
 
     BabelReunited::TranslationLogger.log_translation_error(
@@ -173,7 +173,7 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
       translated_title: result.translation.translated_title,
       source_language: result.translation.source_language,
       metadata:
-        translation.metadata.merge(
+        (translation.metadata || {}).merge(
           confidence: result.ai_response[:confidence],
           provider_info: result.ai_response[:provider_info],
           translated_at: Time.current,
@@ -192,6 +192,8 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
     )
 
     # MessageBus reads from the already-sanitized DB record
+    post = Post.find_by(id: post_id)
+    audience = post ? BabelReunited::MessageBusAudience.options_for(post) : {}
     MessageBus.publish(
       "/post-translations/#{post_id}",
       {
@@ -213,6 +215,7 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
           },
         },
       },
+      **audience,
     )
   end
 
@@ -223,7 +226,7 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
     translation.presence&.update!(
       status: "failed",
       metadata:
-        translation.metadata.merge(
+        (translation.metadata || {}).merge(
           error: error.message,
           error_class: error.class.name,
           failed_at: Time.current,

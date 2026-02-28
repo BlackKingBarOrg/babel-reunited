@@ -109,7 +109,7 @@ RSpec.describe BabelReunited::TranslationService do
 
   describe "rate limiting" do
     it "returns error when rate limit exceeded" do
-      BabelReunited::RateLimiter.stubs(:can_make_request?).returns(false)
+      BabelReunited::RateLimiter.stubs(:perform_request_if_allowed).returns(false)
       stub_openai_success
 
       result = build_service.call

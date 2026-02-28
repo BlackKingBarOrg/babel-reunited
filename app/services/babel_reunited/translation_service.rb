@@ -77,8 +77,7 @@ module BabelReunited
       api_config = get_api_config
       return { error: api_config[:error] } if api_config[:error]
 
-      # Check rate limit
-      unless BabelReunited::RateLimiter.can_make_request?
+      unless BabelReunited::RateLimiter.perform_request_if_allowed
         return { error: "Rate limit exceeded. Please try again later." }
       end
 
@@ -96,11 +95,7 @@ module BabelReunited
       # Prepare the prompt for translation
       prompt = build_translation_prompt(content, target_language, title)
 
-      # Make API call
       response = make_openai_request(prompt, api_config)
-
-      # Record the request for rate limiting
-      BabelReunited::RateLimiter.record_request
 
       return { error: response[:error] } if response[:error]
 
@@ -137,44 +132,6 @@ module BabelReunited
         translated_content: translation_result[:translated_text],
         translated_title: translation_result[:translated_title],
         source_language: translation_result[:source_language],
-      )
-    end
-
-    def create_or_update_translation(translation_result, existing_translation)
-      if existing_translation.present?
-        # Update existing translation
-        existing_translation.update!(
-          translated_content: translation_result[:translated_text],
-          translated_title: translation_result[:translated_title],
-          source_language: translation_result[:source_language],
-          translation_provider: "openai",
-          metadata: {
-            confidence: translation_result[:confidence],
-            provider_info: translation_result[:provider_info],
-            translated_at: Time.current,
-            updated_at: Time.current,
-          },
-        )
-        existing_translation
-      else
-        # Create new translation
-        create_translation(translation_result)
-      end
-    end
-
-    def create_translation(translation_result)
-      PostTranslation.create!(
-        post: @post,
-        language: @target_language,
-        translated_content: translation_result[:translated_text],
-        translated_title: translation_result[:translated_title],
-        source_language: translation_result[:source_language],
-        translation_provider: "openai",
-        metadata: {
-          confidence: translation_result[:confidence],
-          provider_info: translation_result[:provider_info],
-          translated_at: Time.current,
-        },
       )
     end
 

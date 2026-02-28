@@ -47,6 +47,10 @@ module BabelReunited
     end
 
     def destroy
+      unless guardian.is_admin? || guardian.is_moderator? || (@post.user_id == current_user.id)
+        return render json: { error: "Not authorized" }, status: :forbidden
+      end
+
       translation = @post.post_translations.find_by(language: params[:language])
       return render json: { error: "Translation not found" }, status: :not_found unless translation
 
@@ -82,7 +86,7 @@ module BabelReunited
         preferred_language.language = language
       end
 
-      preferred_language.enabled = enabled if enabled.present?
+      preferred_language.enabled = ActiveModel::Type::Boolean.new.cast(enabled) unless enabled.nil?
 
       if preferred_language.save
         render json: {

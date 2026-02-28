@@ -2,28 +2,22 @@
 
 module BabelReunited
   class RateLimiter
-    def self.can_make_request?
+    def self.perform_request_if_allowed
       rate_limit = SiteSetting.babel_reunited_rate_limit_per_minute
       return true if rate_limit <= 0
 
       current_minute = Time.current.to_i / 60
       key = "babel_reunited_rate_limit:#{current_minute}"
 
-      current_count = Discourse.redis.get(key).to_i
-      current_count < rate_limit
-    end
+      new_count = Discourse.redis.incr(key)
+      Discourse.redis.expire(key, 120) if new_count == 1
 
-    def self.record_request
-      rate_limit = SiteSetting.babel_reunited_rate_limit_per_minute
-      return if rate_limit <= 0
-
-      current_minute = Time.current.to_i / 60
-      key = "babel_reunited_rate_limit:#{current_minute}"
-
-      Discourse.redis.multi do |multi|
-        multi.incr(key)
-        multi.expire(key, 120) # Expire after 2 minutes to handle edge cases
+      if new_count > rate_limit
+        Discourse.redis.decr(key)
+        return false
       end
+
+      true
     end
 
     def self.remaining_requests

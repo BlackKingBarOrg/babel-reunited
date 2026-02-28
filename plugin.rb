@@ -58,6 +58,22 @@ module ::BabelReunited
   def self.preloaded_post_translation(post, language)
     post.instance_variable_get(:@babel_reunited_translations)&.[](language)
   end
+
+  def self.preload_all_post_translations(posts)
+    return if posts.blank?
+
+    post_ids = posts.map(&:id)
+    translations = BabelReunited::PostTranslation.where(post_id: post_ids).order(created_at: :desc)
+    grouped = translations.group_by(&:post_id)
+
+    posts.each do |post|
+      post.instance_variable_set(:@babel_reunited_all_translations, grouped[post.id] || [])
+    end
+  end
+
+  def self.preloaded_all_translations(post)
+    post.instance_variable_get(:@babel_reunited_all_translations)
+  end
 end
 
 require_relative "lib/babel_reunited/engine"
@@ -76,6 +92,7 @@ after_initialize do
   require_relative "app/serializers/babel_reunited/post_translation_serializer"
   require_relative "lib/babel_reunited/rate_limiter"
   require_relative "lib/babel_reunited/translation_logger"
+  require_relative "lib/babel_reunited/message_bus_audience"
 
   # Mount the engine routes
   Discourse::Application.routes.append { mount ::BabelReunited::Engine, at: "/babel-reunited" }
@@ -97,32 +114,52 @@ after_initialize do
     end
   end
 
-  # Add translation methods to PostSerializer
-  add_to_serializer(:post, :available_translations, include_condition: -> { true }) do
-    object.available_translations
+  plugin_enabled_condition = -> { SiteSetting.babel_reunited_enabled }
+
+  add_to_serializer(:post, :available_translations, include_condition: plugin_enabled_condition) do
+    preloaded = BabelReunited.preloaded_all_translations(object)
+    if preloaded
+      preloaded.map(&:language)
+    else
+      object.available_translations
+    end
   end
 
-  add_to_serializer(:post, :post_translations, include_condition: -> { true }) do
-    object
-      .post_translations
-      .recent
-      .limit(5)
-      .map { |translation| BabelReunited::PostTranslationSerializer.new(translation).as_json }
+  add_to_serializer(:post, :post_translations, include_condition: plugin_enabled_condition) do
+    preloaded = BabelReunited.preloaded_all_translations(object)
+    translations =
+      if preloaded
+        preloaded.first(5)
+      else
+        object.post_translations.recent.limit(5).to_a
+      end
+    translations.map { |t| BabelReunited::PostTranslationSerializer.new(t).as_json }
   end
 
-  add_to_serializer(:post, :show_translation_widget, include_condition: -> { true }) do
-    object.post_translations.exists?
+  add_to_serializer(:post, :show_translation_widget, include_condition: plugin_enabled_condition) do
+    preloaded = BabelReunited.preloaded_all_translations(object)
+    if preloaded
+      preloaded.any?
+    else
+      object.post_translations.exists?
+    end
   end
 
-  add_to_serializer(:post, :show_translation_button, include_condition: -> { true }) { true }
-
-  add_to_serializer(:current_user, :preferred_language, include_condition: -> { true }) do
-    object.user_preferred_language&.language
+  add_to_serializer(:post, :show_translation_button, include_condition: plugin_enabled_condition) do
+    true
   end
 
-  add_to_serializer(:current_user, :preferred_language_enabled, include_condition: -> { true }) do
-    object.user_preferred_language&.enabled
-  end
+  add_to_serializer(
+    :current_user,
+    :preferred_language,
+    include_condition: plugin_enabled_condition,
+  ) { object.user_preferred_language&.language }
+
+  add_to_serializer(
+    :current_user,
+    :preferred_language_enabled,
+    include_condition: plugin_enabled_condition,
+  ) { object.user_preferred_language&.enabled }
 
   translated_title_condition = -> do
     SiteSetting.babel_reunited_enabled && BabelReunited.preferred_language_for(scope&.user).present?
@@ -163,6 +200,9 @@ after_initialize do
 
   TopicView.on_preload do |topic_view|
     next unless SiteSetting.babel_reunited_enabled
+
+    posts = topic_view.posts
+    BabelReunited.preload_all_post_translations(posts) if posts.present?
 
     language = BabelReunited.preferred_language_for(topic_view.guardian&.user)
     next if language.blank?
@@ -226,19 +266,15 @@ after_initialize do
     end
   end
 
-  on(:post_destroyed) do |post|
-    # Translations will be automatically deleted due to dependent: :destroy
-  end
-
   # User login event handler for language preference prompt
   on(:user_logged_in) do |user|
     next unless SiteSetting.babel_reunited_enabled
     next if user.user_preferred_language.present?
 
-    # Use MessageBus to trigger frontend modal display
     MessageBus.publish(
       "/language-preference-prompt/#{user.id}",
       { user_id: user.id, username: user.username },
+      user_ids: [user.id],
     )
   end
 
@@ -246,7 +282,6 @@ after_initialize do
   add_admin_route "babel_reunited.title", "babel-reunited", use_new_show_route: true
 
   # Register frontend widgets and components
-  register_asset "stylesheets/translation-widgets.scss"
   register_asset "stylesheets/preferences.scss"
   register_asset "stylesheets/language-tabs.scss"
   register_asset "stylesheets/language-preference-modal.scss"

@@ -11,6 +11,8 @@ en:
       language_tabs:
         disabled_by_user: "AI Translation is disabled by user"
         original: "Original"
+        switch_to: "Switch to %{language}"
+        start_translation: "Click to start translation for %{language}"
         languages:
           en: "English"
           zh-cn: "中文"
@@ -18,8 +20,6 @@ en:
       preferences:
         ai_translation_language: "AI Translation Language"
         ai_translation_language_description: "Choose your preferred language for AI-powered post translations. Posts will automatically display in this language when available."
-        current_language: "Current Language"
-        debug_info: "Debug Info"
         enable_ai_translation: "Enable AI Translation"
         enabled: "Enabled"
       language_preference_modal:

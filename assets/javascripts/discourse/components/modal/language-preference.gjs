@@ -66,13 +66,11 @@ export default class LanguagePreferenceModal extends Component {
     <DModal
       @inline={{@inline}}
       @closeModal={{@closeModal}}
-      @title={{i18n "js.babel_reunited.language_preference_modal.title"}}
+      @title={{i18n "babel_reunited.language_preference_modal.title"}}
       class="language-preference-modal"
     >
       <:body>
-        <p>{{i18n
-            "js.babel_reunited.language_preference_modal.description"
-          }}</p>
+        <p>{{i18n "babel_reunited.language_preference_modal.description"}}</p>
 
         <div class="language-buttons">
           <button
@@ -104,7 +102,7 @@ export default class LanguagePreferenceModal extends Component {
         <div class="disable-section">
           <div class="disable-text">
             {{i18n
-              "js.babel_reunited.language_preference_modal.disable_description"
+              "babel_reunited.language_preference_modal.disable_description"
             }}
           </div>
           <button
@@ -114,7 +112,7 @@ export default class LanguagePreferenceModal extends Component {
           >
             <span class="disable-icon">🚫</span>
             <span class="disable-label">{{i18n
-                "js.babel_reunited.language_preference_modal.disable"
+                "babel_reunited.language_preference_modal.disable"
               }}</span>
           </button>
         </div>
