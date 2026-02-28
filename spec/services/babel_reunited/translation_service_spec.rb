@@ -245,32 +245,36 @@ RSpec.describe BabelReunited::TranslationService do
           post_number: 4,
         )
 
+      # Pre-compute the token so the stub can echo it back
+      protector = BabelReunited::MarkdownProtector.new(post_with_code.raw)
+      _protected, tokens = protector.protect
+      token_key = tokens.keys.first
+
       request_body = nil
       stub_request(:post, "https://api.openai.com/v1/chat/completions")
-        .with do |req|
-          request_body = req.body
-          true
-        end
+        .with { |req| request_body = req.body; true }
         .to_return(
           status: 200,
           body: {
-            choices: [{ message: { content: "Hola\n\u27E6TK0\u27E7\nMundo" } }],
+            choices: [{ message: { content: "Hola\n#{token_key}\nMundo" } }],
             model: "gpt-4o",
-            usage: {
-              total_tokens: 50,
-            },
+            usage: { total_tokens: 50 },
           }.to_json,
-          headers: {
-            "Content-Type" => "application/json",
-          },
+          headers: { "Content-Type" => "application/json" },
         )
+
+      # Stub MarkdownProtector.new to return the same instance with same salt
+      BabelReunited::MarkdownProtector.stubs(:new).returns(protector)
+      # Re-initialize so protect can run again
+      protector.instance_variable_set(:@counter, 0)
+      protector.instance_variable_set(:@tokens, {})
 
       result = build_service(post: post_with_code).call
       expect(result.success?).to be true
 
       parsed = JSON.parse(request_body)
       prompt = parsed["messages"].first["content"]
-      expect(prompt).to include("\u27E6TK")
+      expect(prompt).to include("\u27E6")
       expect(prompt).not_to include("def foo")
 
       expect(result.translated_raw).to include("```ruby\ndef foo\nend\n```")

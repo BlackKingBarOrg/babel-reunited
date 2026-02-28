@@ -31,10 +31,6 @@ module BabelReunited
       api_config = get_api_config
       return Result.new(error: api_config[:error]) if api_config[:error]
 
-      unless BabelReunited::RateLimiter.perform_request_if_allowed
-        return Result.new(error: "Rate limit exceeded. Please try again later.")
-      end
-
       raw = @post.raw
       title = prepare_title
 
@@ -96,7 +92,7 @@ module BabelReunited
     def build_prompt(text, target_language)
       <<~PROMPT.strip
         Translate the following text to #{target_language}.
-        Preserve all \u27E6TK...\u27E7 placeholders exactly as they appear.
+        Preserve all \u27E6...\u27E7 placeholders exactly as they appear.
         If the content contains multiple languages, translate all of them to #{target_language}.
         If the text is already in #{target_language}, return it unchanged.
         Return ONLY the translated text, no explanations or wrapping.
@@ -131,6 +127,10 @@ module BabelReunited
     end
 
     def make_llm_request(prompt, api_config, max_tokens_override: nil)
+      unless BabelReunited::RateLimiter.perform_request_if_allowed
+        return { error: "Rate limit exceeded" }
+      end
+
       timeout = SiteSetting.babel_reunited_request_timeout_seconds
       conn =
         Faraday.new(

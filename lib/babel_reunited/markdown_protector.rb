@@ -19,13 +19,14 @@ module BabelReunited
       /:[a-z0-9_+-]+:/, # emoji shortcodes
     ]
 
-    TOKEN_PREFIX = "\u27E6TK"
-    TOKEN_SUFFIX = "\u27E7"
+    TOKEN_OPEN = "\u27E6"
+    TOKEN_CLOSE = "\u27E7"
 
     def initialize(text)
       @text = text
       @tokens = {}
       @counter = 0
+      @salt = SecureRandom.hex(4)
     end
 
     def protect
@@ -45,7 +46,7 @@ module BabelReunited
 
     def tokenize(text, pattern)
       text.gsub(pattern) do |match|
-        key = "#{TOKEN_PREFIX}#{@counter}#{TOKEN_SUFFIX}"
+        key = "#{TOKEN_OPEN}#{@salt}:#{@counter}#{TOKEN_CLOSE}"
         @tokens[key] = match
         @counter += 1
         key

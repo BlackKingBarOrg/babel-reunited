@@ -21,7 +21,7 @@ module BabelReunited
 
     def create
       target_language = params[:target_language]
-      force_update = params[:force_update] || false
+      force_update = ActiveModel::Type::Boolean.new.cast(params[:force_update]) || false
 
       if target_language.blank?
         return render json: { error: "Target language required" }, status: :bad_request
@@ -57,16 +57,19 @@ module BabelReunited
     end
 
     def get_user_preferred_language
-      language = BabelReunited.preferred_language_for(current_user)
       cast = ActiveModel::Type::Boolean.new
+
+      # Return language independently of enabled status so frontend preserves selection
+      language = current_user.custom_fields[BabelReunited::PREFERRED_LANGUAGE_FIELD]
       enabled_val = current_user.custom_fields[BabelReunited::PREFERRED_ENABLED_FIELD]
 
-      if enabled_val.nil?
+      if language.blank? || enabled_val.nil?
         legacy = current_user.user_preferred_language
-        enabled = legacy.nil? ? true : legacy.enabled
-      else
-        enabled = cast.cast(enabled_val)
+        language = legacy&.language if language.blank?
+        enabled_val = legacy&.enabled if enabled_val.nil?
       end
+
+      enabled = enabled_val.nil? ? true : cast.cast(enabled_val)
 
       render json: { language: language, enabled: enabled }
     end
@@ -122,7 +125,6 @@ module BabelReunited
       @post = Post.find_by(id: params[:post_id])
       return render json: { error: "Post not found" }, status: :not_found unless @post
 
-      # Check permissions
       render json: { error: "Access denied" }, status: :forbidden unless guardian.can_see?(@post)
     end
   end

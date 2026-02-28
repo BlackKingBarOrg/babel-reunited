@@ -174,14 +174,14 @@ RSpec.describe BabelReunited::TranslationsController do
            }
 
       expect(response.status).to eq(200)
-      expect(response.parsed_body["force_update"]).to eq("true")
+      expect(response.parsed_body["force_update"]).to eq(true)
       expect(
         job_enqueued?(
           job: Jobs::BabelReunited::TranslatePostJob,
           args: {
             post_id: post_record.id,
             target_language: "es",
-            force_update: "true",
+            force_update: true,
           },
         ),
       ).to be true

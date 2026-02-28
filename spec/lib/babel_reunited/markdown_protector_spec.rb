@@ -81,7 +81,7 @@ RSpec.describe BabelReunited::MarkdownProtector do
       protected_text, tokens = protector.protect
 
       expect(protected_text).not_to include("```")
-      expect(protected_text).to include("\u27E6TK")
+      expect(protected_text).to match(/\u27E6[a-f0-9]+:\d+\u27E7/)
       expect(tokens.size).to eq(1)
     end
 

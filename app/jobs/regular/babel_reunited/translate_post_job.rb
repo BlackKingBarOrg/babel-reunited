@@ -59,7 +59,8 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
 
   def with_translation_lock(post_id, language)
     lock_key = "babel_reunited:translate:#{post_id}:#{language}"
-    acquired = Discourse.redis.set(lock_key, "1", nx: true, ex: LOCK_TTL)
+    lock_token = SecureRandom.hex(16)
+    acquired = Discourse.redis.set(lock_key, lock_token, nx: true, ex: LOCK_TTL)
     unless acquired
       log_skipped(post_id, language, "locked")
       return
@@ -67,7 +68,8 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
     begin
       yield
     ensure
-      Discourse.redis.del(lock_key)
+      # Only release if we still own the lock (compare-and-delete)
+      Discourse.redis.del(lock_key) if Discourse.redis.get(lock_key) == lock_token
     end
   end
 
