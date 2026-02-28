@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-RSpec.describe "BabelReunited module helpers" do
+RSpec.describe BabelReunited do
   fab!(:user)
   fab!(:topic) { Fabricate(:topic, user: user) }
   fab!(:post_record) { Fabricate(:post, topic: topic, user: user) }
@@ -68,7 +68,9 @@ RSpec.describe "BabelReunited module helpers" do
   describe "PostTranslation.find_translation" do
     it "finds translation by post_id and language" do
       translation = Fabricate(:post_translation, post: post_record, language: "es")
-      expect(BabelReunited::PostTranslation.find_translation(post_record.id, "es")).to eq(translation)
+      expect(BabelReunited::PostTranslation.find_translation(post_record.id, "es")).to eq(
+        translation,
+      )
     end
 
     it "returns nil when not found" do
