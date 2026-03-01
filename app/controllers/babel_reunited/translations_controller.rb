@@ -13,7 +13,7 @@ module BabelReunited
     end
 
     def show
-      translation = @post.get_translation(params[:language])
+      translation = BabelReunited::PostTranslation.find_translation(@post.id, params[:language])
       return render json: { error: "Translation not found" }, status: :not_found unless translation
 
       render_serialized(translation, PostTranslationSerializer)
@@ -21,21 +21,19 @@ module BabelReunited
 
     def create
       target_language = params[:target_language]
-      force_update = params[:force_update] || false
+      force_update = ActiveModel::Type::Boolean.new.cast(params[:force_update]) || false
 
       if target_language.blank?
         return render json: { error: "Target language required" }, status: :bad_request
       end
 
-      # 验证语言代码格式 - 支持 zh-cn 格式
       unless target_language.match?(/\A[a-z]{2}(-[a-z]{2})?\z/)
         return render json: { error: "Invalid language code format" }, status: :bad_request
       end
 
       ::RateLimiter.new(current_user, "babel-reunited-translate", 10, 1.minute).performed!
 
-      # Always enqueue translation job - no skipping based on existing translations
-      @post.enqueue_translation_jobs([target_language], force_update: force_update)
+      BabelReunited.enqueue_translation_jobs(@post, [target_language], force_update: force_update)
 
       render json: {
                message: "Translation job enqueued",
@@ -47,6 +45,10 @@ module BabelReunited
     end
 
     def destroy
+      unless guardian.is_admin? || guardian.is_moderator? || (@post.user_id == current_user.id)
+        return render json: { error: "Not authorized" }, status: :forbidden
+      end
+
       translation = @post.post_translations.find_by(language: params[:language])
       return render json: { error: "Translation not found" }, status: :not_found unless translation
 
@@ -55,55 +57,65 @@ module BabelReunited
     end
 
     def get_user_preferred_language
-      preferred_language = current_user.user_preferred_language
+      cast = ActiveModel::Type::Boolean.new
 
-      if preferred_language
-        render json: { language: preferred_language.language, enabled: preferred_language.enabled }
-      else
-        render json: {
-                 language: nil,
-                 enabled: true, # Default to enabled if no preference set
-               }
+      # Return language independently of enabled status so frontend preserves selection
+      language = current_user.custom_fields[BabelReunited::PREFERRED_LANGUAGE_FIELD]
+      enabled_val = current_user.custom_fields[BabelReunited::PREFERRED_ENABLED_FIELD]
+
+      if language.blank? || enabled_val.nil?
+        legacy = current_user.user_preferred_language
+        language = legacy&.language if language.blank?
+        enabled_val = legacy&.enabled if enabled_val.nil?
       end
+
+      enabled = enabled_val.nil? ? true : cast.cast(enabled_val)
+
+      render json: { language: language, enabled: enabled }
     end
 
     def set_user_preferred_language
       language = params[:language]
       enabled = params[:enabled]
-
-      preferred_language =
-        current_user.user_preferred_language || current_user.build_user_preferred_language
+      cast = ActiveModel::Type::Boolean.new
 
       if language.present?
-        # Validate language code format - 支持 zh-cn 格式
         unless language.match?(/\A[a-z]{2}(-[a-z]{2})?\z/)
           return render json: { error: "Invalid language code format" }, status: :bad_request
         end
-        preferred_language.language = language
+        current_user.custom_fields[BabelReunited::PREFERRED_LANGUAGE_FIELD] = language
       end
 
-      preferred_language.enabled = enabled if enabled.present?
-
-      if preferred_language.save
-        render json: {
-                 success: true,
-                 language: preferred_language.language,
-                 enabled: preferred_language.enabled,
-               }
-      else
-        render json: { errors: preferred_language.errors.full_messages }, status: :bad_request
+      unless enabled.nil?
+        current_user.custom_fields[BabelReunited::PREFERRED_ENABLED_FIELD] = cast.cast(enabled)
       end
+
+      current_user.save_custom_fields
+
+      # Dual-write to legacy table for rollback safety
+      legacy = current_user.user_preferred_language || current_user.build_user_preferred_language
+      legacy.language = language if language.present?
+      legacy.enabled = cast.cast(enabled) unless enabled.nil?
+      legacy.save
+
+      final_language =
+        current_user.custom_fields[BabelReunited::PREFERRED_LANGUAGE_FIELD] || legacy.language
+      final_enabled = current_user.custom_fields[BabelReunited::PREFERRED_ENABLED_FIELD]
+      final_enabled = legacy.enabled if final_enabled.nil?
+
+      render json: { success: true, language: final_language, enabled: cast.cast(final_enabled) }
     end
 
     def translation_status
-      translations = @post.post_translations
-      pending_languages = translations.where(status: "translating").pluck(:language)
+      rows = @post.post_translations.select(:language, :status, :updated_at).to_a
+      pending = rows.select { |r| r.status == "translating" }.map(&:language)
+      last_updated = rows.map(&:updated_at).compact.max
 
       render json: {
                post_id: @post.id,
-               pending_translations: pending_languages,
-               available_translations: translations.pluck(:language),
-               last_updated: translations.maximum(:updated_at),
+               pending_translations: pending,
+               available_translations: rows.map(&:language),
+               last_updated: last_updated,
              }
     end
 
@@ -113,7 +125,6 @@ module BabelReunited
       @post = Post.find_by(id: params[:post_id])
       return render json: { error: "Post not found" }, status: :not_found unless @post
 
-      # Check permissions
       render json: { error: "Access denied" }, status: :forbidden unless guardian.can_see?(@post)
     end
   end

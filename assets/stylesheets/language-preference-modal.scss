@@ -1,29 +1,11 @@
 .language-preference-modal {
-  .modal-header {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    color: white;
-    border-radius: 8px 8px 0 0;
-    padding: 20px 24px;
-    text-align: center;
-    border-bottom: none;
-
-    .modal-title {
-      font-size: 20px;
-      font-weight: 600;
-      margin: 0;
-      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
-    }
-  }
-
   .modal-body {
-    padding: 32px 24px;
     text-align: center;
-    background: #fafbfc;
-    
+
     p {
-      margin-bottom: 32px;
-      color: #5a6c7d;
-      font-size: 16px;
+      margin-bottom: 24px;
+      color: var(--primary-medium);
+      font-size: var(--font-up-1);
       line-height: 1.6;
       max-width: 480px;
       margin-left: auto;
@@ -33,232 +15,88 @@
 
   .language-buttons {
     display: flex;
-    gap: 16px;
-    margin: 24px 0 32px 0;
+    gap: 12px;
+    margin: 24px 0;
     flex-wrap: wrap;
     justify-content: center;
-    max-width: 500px;
-    margin-left: auto;
-    margin-right: auto;
   }
 
   .language-btn {
     display: flex;
-    flex-direction: column;
     align-items: center;
-    padding: 20px 24px;
-    border: 2px solid #e8ecf0;
-    border-radius: 16px;
-    background: #ffffff;
+    padding: 12px 20px;
+    border: 2px solid var(--primary-low);
+    border-radius: 8px;
+    background: var(--secondary);
     cursor: pointer;
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    min-width: 120px;
-    font-size: 14px;
+    transition: all 0.2s ease;
+    font-size: var(--font-0);
     font-weight: 500;
-    color: #2c3e50;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-    position: relative;
-    overflow: hidden;
-
-    &::before {
-      content: '';
-      position: absolute;
-      top: 0;
-      left: -100%;
-      width: 100%;
-      height: 100%;
-      background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.4), transparent);
-      transition: left 0.5s;
-    }
+    color: var(--primary);
 
     &:hover {
-      border-color: #0078d4;
-      background: #ffffff;
-      transform: translateY(-4px);
-      box-shadow: 0 8px 25px rgba(0, 120, 212, 0.15);
-      
-      &::before {
-        left: 100%;
-      }
-    }
-
-    &:active {
-      transform: translateY(-2px);
-      box-shadow: 0 4px 15px rgba(0, 120, 212, 0.2);
+      border-color: var(--tertiary);
+      background: var(--tertiary-very-low);
     }
 
     &:disabled {
       opacity: 0.5;
       cursor: not-allowed;
-      transform: none;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-      
-      &::before {
-        display: none;
-      }
-    }
-
-    .flag {
-      font-size: 32px;
-      margin-bottom: 12px;
-      line-height: 1;
-      filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.1));
     }
 
     .language-name {
-      font-size: 15px;
       font-weight: 600;
-      text-align: center;
-      letter-spacing: 0.5px;
-    }
-  }
-
-  .language-btn-en {
-    &:hover {
-      border-color: #0078d4;
-      background: linear-gradient(135deg, #ffffff 0%, #f0f8ff 100%);
-    }
-  }
-
-  .language-btn-zh-cn {
-    &:hover {
-      border-color: #d32f2f;
-      background: linear-gradient(135deg, #ffffff 0%, #fff5f5 100%);
-    }
-  }
-
-  .language-btn-es {
-    &:hover {
-      border-color: #f57c00;
-      background: linear-gradient(135deg, #ffffff 0%, #fff8f0 100%);
     }
   }
 
   .disable-section {
-    margin-top: 40px;
+    margin-top: 24px;
     text-align: center;
-    padding: 24px;
-    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
-    border-radius: 12px;
-    border: 1px solid #dee2e6;
-    position: relative;
+    padding: 16px;
+    background: var(--primary-very-low);
+    border-radius: 8px;
+    border: 1px solid var(--primary-low);
 
     .disable-text {
-      color: #6c757d;
-      font-size: 14px;
-      margin-bottom: 16px;
-      font-style: italic;
+      color: var(--primary-medium);
+      font-size: var(--font-down-1);
+      margin-bottom: 12px;
     }
 
     .disable-btn {
       display: inline-flex;
       align-items: center;
-      gap: 8px;
-      background: #ffffff;
-      border: 2px solid #dc3545;
-      color: #dc3545;
-      padding: 10px 20px;
-      border-radius: 8px;
-      font-size: 14px;
+      gap: 6px;
+      background: var(--secondary);
+      border: 1px solid var(--danger);
+      color: var(--danger);
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-size: var(--font-down-1);
       font-weight: 600;
       cursor: pointer;
       transition: all 0.2s ease;
-      box-shadow: 0 2px 4px rgba(220, 53, 69, 0.1);
 
       &:hover {
-        background: #dc3545;
-        color: white;
-        transform: translateY(-1px);
-        box-shadow: 0 4px 8px rgba(220, 53, 69, 0.2);
-      }
-
-      &:active {
-        transform: translateY(0);
-        box-shadow: 0 2px 4px rgba(220, 53, 69, 0.1);
+        background: var(--danger);
+        color: var(--secondary);
       }
 
       &:disabled {
         opacity: 0.5;
         cursor: not-allowed;
-        transform: none;
-        box-shadow: 0 2px 4px rgba(220, 53, 69, 0.1);
-      }
-
-      .disable-icon {
-        font-size: 16px;
-      }
-
-      .disable-label {
-        font-size: 14px;
       }
     }
   }
 
-  .modal-footer {
-    background: #f8f9fa;
-    border-top: 1px solid #e8ecf0;
-    padding: 16px 24px;
-    border-radius: 0 0 8px 8px;
-    text-align: center;
-
-    .btn-flat {
-      color: #6c757d;
-      font-size: 14px;
-      font-weight: 500;
-      padding: 8px 16px;
-      border-radius: 6px;
-      transition: all 0.2s ease;
-
-      &:hover {
-        background: #e9ecef;
-        color: #495057;
-      }
-    }
-  }
-
-  // 响应式设计
+  // Responsive
   @media (max-width: 768px) {
-    .modal-body {
-      padding: 24px 16px;
-    }
-
     .language-buttons {
-      gap: 12px;
-      margin: 20px 0 24px 0;
+      gap: 8px;
     }
 
     .language-btn {
-      min-width: 100px;
-      padding: 16px 20px;
-
-      .flag {
-        font-size: 28px;
-        margin-bottom: 10px;
-      }
-
-      .language-name {
-        font-size: 14px;
-      }
+      padding: 10px 16px;
     }
-  }
-
-  // 动画效果
-  @keyframes fadeInUp {
-    from {
-      opacity: 0;
-      transform: translateY(20px);
-    }
-    to {
-      opacity: 1;
-      transform: translateY(0);
-    }
-  }
-
-  .language-btn {
-    animation: fadeInUp 0.6s ease-out;
-    
-    &:nth-child(1) { animation-delay: 0.1s; }
-    &:nth-child(2) { animation-delay: 0.2s; }
-    &:nth-child(3) { animation-delay: 0.3s; }
   }
 }

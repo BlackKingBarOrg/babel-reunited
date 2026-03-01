@@ -10,14 +10,10 @@ export default {
 
   initialize() {
     withPluginApi((api) => {
-      // 使用 renderInOutlet 替换 post-content-cooked-html outlet
-      // 现在总是渲染，让组件内部决定是否显示按钮
       api.renderInOutlet(
         "post-content-cooked-html",
         class extends LanguageTabsConnector {
-          static shouldRender(args) {
-            // 总是渲染组件，让组件内部决定是否显示按钮
-            // 组件会检查用户是否禁用了AI翻译功能
+          static shouldRender() {
             return true;
           }
         }
