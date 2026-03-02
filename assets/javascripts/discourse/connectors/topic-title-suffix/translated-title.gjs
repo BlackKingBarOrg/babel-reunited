@@ -15,15 +15,16 @@ export default class TranslatedTitleComponent extends Component {
   }
 
   get translatedTitle() {
-    const translatedTitle = this.topic?.translated_title;
+    const translatedTitle = this.topic?.babel_translated_title;
     return translatedTitle;
   }
 
   get shouldShowTranslatedTitle() {
-    const shouldShow = this.topic && 
-           this.translatedTitle && 
-           this.translatedTitle !== this.topic.title &&
-           this.translatedTitle.length > 0;
+    const shouldShow =
+      this.topic &&
+      this.translatedTitle &&
+      this.translatedTitle !== this.topic.title &&
+      this.translatedTitle.length > 0;
     return shouldShow;
   }
 
@@ -33,9 +34,12 @@ export default class TranslatedTitleComponent extends Component {
 
   <template>
     {{#if this.shouldShowTranslatedTitle}}
-      <div class="ai-translated-title" style="margin-left: 8px; font-size: 14px; color: #666;">
+      <div
+        class="ai-translated-title"
+        style="margin-left: 8px; font-size: 14px; color: #666;"
+      >
         <div class="translated-title-content">
-          <a 
+          <a
             href={{this.topicUrl}}
             data-topic-id={{this.topic.id}}
             class="translated-title-link"

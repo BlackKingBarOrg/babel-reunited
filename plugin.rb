@@ -214,9 +214,12 @@ after_initialize do
     SiteSetting.babel_reunited_enabled && BabelReunited.preferred_language_for(scope&.user).present?
   end
 
+  # NOTE: Field is named `babel_translated_title` (not `translated_title`) to avoid
+  # colliding with LocalizedFancyTopicTitleMixin's private `translated_title` method,
+  # which is called by `fancy_title` in topic serializers.
   add_to_serializer(
     :topic_view,
-    :translated_title,
+    :babel_translated_title,
     include_condition: translated_title_condition,
   ) do
     language = BabelReunited.preferred_language_for(scope&.user)
@@ -227,7 +230,7 @@ after_initialize do
 
   add_to_serializer(
     :listable_topic,
-    :translated_title,
+    :babel_translated_title,
     include_condition: translated_title_condition,
   ) do
     language = BabelReunited.preferred_language_for(scope&.user)
@@ -238,7 +241,7 @@ after_initialize do
 
   add_to_serializer(
     :topic_list_item,
-    :translated_title,
+    :babel_translated_title,
     include_condition: translated_title_condition,
   ) do
     language = BabelReunited.preferred_language_for(scope&.user)

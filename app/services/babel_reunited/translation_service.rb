@@ -118,7 +118,7 @@ module BabelReunited
         #{title}
       P
 
-      response = make_llm_request(prompt, api_config, max_tokens_override: 128)
+      response = make_llm_request(prompt, api_config, max_tokens_override: 1024)
       return nil if response[:error]
       response[:text]&.strip
     rescue => e
