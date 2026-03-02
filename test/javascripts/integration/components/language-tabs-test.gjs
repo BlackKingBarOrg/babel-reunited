@@ -140,7 +140,7 @@ module(
         <template><LanguageTabsConnector @post={{this.post}} /></template>
       );
 
-      assert.dom(".ai-language-tabs .d-icon-spinner").exists();
+      assert.dom(".ai-language-tabs .spinner.small").exists();
     });
 
     test("MessageBus update refreshes translation data and UI", async function (assert) {
@@ -150,7 +150,7 @@ module(
       );
 
       assert
-        .dom(".ai-language-tabs .d-icon-spinner")
+        .dom(".ai-language-tabs .spinner.small")
         .exists("spinner before update");
 
       await publishToMessageBus("/post-translations/1", {
@@ -164,7 +164,7 @@ module(
       });
 
       assert
-        .dom(".ai-language-tabs .d-icon-spinner")
+        .dom(".ai-language-tabs .spinner.small")
         .doesNotExist("spinner gone after update");
 
       await click(".ai-language-tabs button:nth-child(4)");
