@@ -11,6 +11,9 @@
 enabled_site_setting :babel_reunited_enabled
 
 register_asset "stylesheets/translated-title.scss"
+register_asset "stylesheets/preferences.scss"
+register_asset "stylesheets/language-tabs.scss"
+register_asset "stylesheets/language-preference-modal.scss"
 
 module ::BabelReunited
   PLUGIN_NAME = "babel-reunited"
@@ -323,9 +326,4 @@ after_initialize do
 
   # Add admin route
   add_admin_route "babel_reunited.title", "babel-reunited", use_new_show_route: true
-
-  # Register frontend widgets and components
-  register_asset "stylesheets/preferences.scss"
-  register_asset "stylesheets/language-tabs.scss"
-  register_asset "stylesheets/language-preference-modal.scss"
 end

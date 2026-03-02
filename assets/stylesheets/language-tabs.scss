@@ -2,8 +2,10 @@
   display: flex;
   gap: 3px;
   flex-wrap: wrap;
+  align-items: center;
   margin-bottom: 8px;
-  margin-left: 12px;
+  padding-left: var(--topic-body-width-padding);
+  padding-top: var(--space-2);
 }
 
 .babel-reunited-language-tab {
@@ -34,10 +36,12 @@
     border-color: var(--primary-low-mid);
   }
 
-  .d-icon-spinner {
-    animation: rotate-forever 1s infinite linear;
+  .spinner.small {
+    width: 8px;
+    height: 8px;
+    border-width: 2px;
     margin-left: 4px;
-    display: inline-block;
+    vertical-align: middle;
   }
 }
 

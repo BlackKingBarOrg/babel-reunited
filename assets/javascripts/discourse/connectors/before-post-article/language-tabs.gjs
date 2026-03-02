@@ -6,7 +6,6 @@ import { action } from "@ember/object";
 import { service } from "@ember/service";
 import { htmlSafe } from "@ember/template";
 import concatClass from "discourse/helpers/concat-class";
-import icon from "discourse/helpers/d-icon";
 import { eq } from "discourse/truth-helpers";
 import { i18n } from "discourse-i18n";
 import { getSupportedLanguages } from "../../lib/supported-languages";
@@ -222,7 +221,7 @@ export default class LanguageTabsConnector extends Component {
           >
             {{langInfo.name}}
             {{#if (eq langInfo.status "translating")}}
-              {{icon "spinner"}}
+              <div class="spinner small"></div>
             {{/if}}
           </button>
         {{/each}}
