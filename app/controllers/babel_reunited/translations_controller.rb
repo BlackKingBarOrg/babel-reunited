@@ -20,7 +20,7 @@ module BabelReunited
     end
 
     def create
-      target_language = params[:target_language]
+      target_language = params[:target_language]&.downcase
       force_update = ActiveModel::Type::Boolean.new.cast(params[:force_update]) || false
 
       if target_language.blank?
@@ -75,7 +75,7 @@ module BabelReunited
     end
 
     def set_user_preferred_language
-      language = params[:language]
+      language = params[:language]&.downcase
       enabled = params[:enabled]
       cast = ActiveModel::Type::Boolean.new
 

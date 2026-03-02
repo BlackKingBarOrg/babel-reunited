@@ -31,7 +31,8 @@ module BabelReunited
       translation_id:,
       ai_response:,
       processing_time:,
-      force_update: false
+      force_update: false,
+      translated_length: 0
     )
       model_name = ai_response.dig(:provider_info, :model) || ai_response[:model] || "unknown"
 
@@ -50,7 +51,7 @@ module BabelReunited
           else
             {}
           end,
-        translated_length: ai_response[:translated_text]&.length || 0,
+        translated_length: translated_length,
       )
     end
 

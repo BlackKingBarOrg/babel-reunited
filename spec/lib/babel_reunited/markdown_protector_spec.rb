@@ -73,6 +73,16 @@ RSpec.describe BabelReunited::MarkdownProtector do
       text = "Just plain text with nothing special"
       expect(roundtrip(text)).to eq(text)
     end
+
+    it "preserves regex backreference characters in code blocks" do
+      text = "Before\n```\nputs \"\\1\" and \\& and \\'\n```\nAfter"
+      expect(roundtrip(text)).to eq(text)
+    end
+
+    it "preserves regex backreference characters in inline code" do
+      text = "Use `\\1 \\& \\'` in your regex"
+      expect(roundtrip(text)).to eq(text)
+    end
   end
 
   describe "#protect" do

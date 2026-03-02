@@ -10,6 +10,9 @@ babel_reunited:
       - gpt-5
       - gpt-5-mini
       - gpt-5-nano
+      - gpt-4.1
+      - gpt-4.1-mini
+      - gpt-4.1-nano
       - gpt-4o
       - gpt-4o-mini
       - gpt-3.5-turbo
@@ -61,7 +64,7 @@ babel_reunited:
   babel_reunited_custom_max_output_tokens:
     default: 4096
     min: 100
-    max: 32000
+    max: 65000
     client: false
 
   babel_reunited_rate_limit_per_minute:

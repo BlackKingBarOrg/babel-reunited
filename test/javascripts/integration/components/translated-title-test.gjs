@@ -12,7 +12,7 @@ module(
       this.set("topic", {
         id: 1,
         title: "Original Title",
-        translated_title: "翻译标题",
+        babel_translated_title: "翻译标题",
         url: "/t/original-title/1",
       });
 
@@ -28,7 +28,7 @@ module(
       this.set("topic", {
         id: 1,
         title: "Original Title",
-        translated_title: "",
+        babel_translated_title: "",
         url: "/t/original-title/1",
       });
 
@@ -43,7 +43,7 @@ module(
       this.set("topic", {
         id: 1,
         title: "Same Title",
-        translated_title: "Same Title",
+        babel_translated_title: "Same Title",
         url: "/t/same-title/1",
       });
 
@@ -68,7 +68,7 @@ module(
       this.set("topic", {
         id: 1,
         title: "Original Title",
-        translated_title: "Título traducido",
+        babel_translated_title: "Título traducido",
         url: "/t/original-title/1",
       });
 

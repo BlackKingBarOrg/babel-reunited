@@ -5,6 +5,6 @@ export function getSupportedLanguages(siteSettings) {
   }
   return setting
     .split(",")
-    .map((s) => s.trim())
+    .map((s) => s.trim().toLowerCase())
     .filter(Boolean);
 }

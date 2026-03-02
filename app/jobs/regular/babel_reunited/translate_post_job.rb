@@ -68,8 +68,14 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
     begin
       yield
     ensure
-      # Only release if we still own the lock (compare-and-delete)
-      Discourse.redis.del(lock_key) if Discourse.redis.get(lock_key) == lock_token
+      # Atomic compare-and-delete via Lua to avoid TOCTOU race on lock release.
+      # Must use namespace_key because eval bypasses DiscourseRedis key prefixing.
+      namespaced_key = Discourse.redis.namespace_key(lock_key)
+      Discourse.redis.eval(
+        "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+        keys: [namespaced_key],
+        argv: [lock_token],
+      )
     end
   end
 
@@ -126,6 +132,7 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
       ai_response: result.ai_response,
       processing_time: processing_time,
       force_update: force_update,
+      translated_length: result.translated_raw&.length || 0,
     )
 
     publish_status(post, target_language, "completed", translation: translation, result: result)

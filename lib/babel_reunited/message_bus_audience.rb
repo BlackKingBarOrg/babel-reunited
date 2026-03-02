@@ -7,7 +7,9 @@ module BabelReunited
       return {} unless topic
 
       if topic.private_message?
-        { user_ids: topic.allowed_users.pluck(:id) }
+        user_ids = topic.allowed_users.pluck(:id)
+        user_ids |= topic.allowed_group_users.pluck(:id)
+        { user_ids: user_ids }
       elsif topic.category&.read_restricted?
         { group_ids: topic.category.secure_group_ids }
       else

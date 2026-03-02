@@ -38,7 +38,7 @@ module BabelReunited
 
     def self.restore(text, tokens)
       result = text.dup
-      tokens.to_a.reverse.each { |key, value| result.gsub!(key, value) }
+      tokens.to_a.reverse.each { |key, value| result.gsub!(key) { value } }
       result
     end
 

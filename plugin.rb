@@ -14,6 +14,7 @@ register_asset "stylesheets/translated-title.scss"
 register_asset "stylesheets/preferences.scss"
 register_asset "stylesheets/language-tabs.scss"
 register_asset "stylesheets/language-preference-modal.scss"
+register_asset "stylesheets/topic-list-original-title.scss"
 
 module ::BabelReunited
   PLUGIN_NAME = "babel-reunited"

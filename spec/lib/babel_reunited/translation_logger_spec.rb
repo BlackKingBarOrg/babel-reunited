@@ -58,25 +58,27 @@ RSpec.describe BabelReunited::TranslationLogger do
       described_class.log_translation_success(
         **base_args,
         ai_response: {
-          translated_text: "Hola",
+          confidence: 0.95,
           provider_info: {
             model: "gpt-4o",
             tokens_used: 100,
           },
         },
+        translated_length: 4,
       )
 
       entry = last_log_entry
       expect(entry["event"]).to eq("translation_completed")
       expect(entry["status"]).to eq("success")
       expect(entry["processing_time_ms"]).to eq(1500.5)
+      expect(entry["translated_length"]).to eq(4)
     end
 
     it "extracts model from provider_info" do
       described_class.log_translation_success(
         **base_args,
         ai_response: {
-          translated_text: "Hola",
+          confidence: 0.95,
           provider_info: {
             model: "gpt-4o",
           },
@@ -90,9 +92,9 @@ RSpec.describe BabelReunited::TranslationLogger do
       described_class.log_translation_success(
         **base_args,
         ai_response: {
-          translated_text: "Hola",
           model: "claude-3",
-          provider_info: {},
+          provider_info: {
+          },
         },
       )
 
@@ -100,21 +102,29 @@ RSpec.describe BabelReunited::TranslationLogger do
     end
 
     it "defaults to unknown when no model" do
+      described_class.log_translation_success(**base_args, ai_response: {})
+
+      expect(last_log_entry["ai_model"]).to eq("unknown")
+    end
+
+    it "defaults translated_length to 0 when not provided" do
       described_class.log_translation_success(
         **base_args,
         ai_response: {
-          translated_text: "Hola",
+          provider_info: {
+            model: "gpt-4o",
+          },
         },
       )
 
-      expect(last_log_entry["ai_model"]).to eq("unknown")
+      expect(last_log_entry["translated_length"]).to eq(0)
     end
 
     it "includes ai_usage when tokens_used present" do
       described_class.log_translation_success(
         **base_args,
         ai_response: {
-          translated_text: "Hola",
+          confidence: 0.95,
           provider_info: {
             model: "gpt-4o",
             tokens_used: 250,
