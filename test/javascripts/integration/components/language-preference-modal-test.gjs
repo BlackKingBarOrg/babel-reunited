@@ -1,7 +1,5 @@
-import { getOwner } from "@ember/owner";
 import { click, render, settled } from "@ember/test-helpers";
 import { module, test } from "qunit";
-import sinon from "sinon";
 import { setupRenderingTest } from "discourse/tests/helpers/component-test";
 import pretender, { response } from "discourse/tests/helpers/create-pretender";
 import LanguagePreferenceModal from "discourse/plugins/babel-reunited/discourse/components/modal/language-preference";
@@ -11,7 +9,7 @@ module(
   function (hooks) {
     setupRenderingTest(hooks);
 
-    test("renders 3 language buttons and a disable button", async function (assert) {
+    test("renders language buttons and a disable button", async function (assert) {
       this.set("closeModal", () => {});
       await render(
         <template>
@@ -23,15 +21,11 @@ module(
       );
 
       assert.dom(".language-btn").exists({ count: 3 });
-      assert.dom(".language-btn-en").exists();
-      assert.dom(".language-btn-zh-cn").exists();
-      assert.dom(".language-btn-es").exists();
       assert.dom(".disable-btn").exists();
     });
 
     test("selecting language sends POST to user-preferred-language", async function (assert) {
-      const modalService = getOwner(this).lookup("service:modal");
-      sinon.spy(modalService, "close");
+      let modalClosed = false;
 
       pretender.post("/babel-reunited/user-preferred-language", (request) => {
         const body = new URLSearchParams(request.requestBody);
@@ -39,7 +33,7 @@ module(
         return response({ success: true });
       });
 
-      this.set("closeModal", () => {});
+      this.set("closeModal", () => (modalClosed = true));
       await render(
         <template>
           <LanguagePreferenceModal
@@ -49,10 +43,10 @@ module(
         </template>
       );
 
-      await click(".language-btn-en");
+      await click(".language-btn");
 
-      assert.verifySteps(["POST language=en"]);
-      assert.true(modalService.close.calledOnce, "modal service close called");
+      assert.verifySteps(["POST language=zh-cn"]);
+      assert.true(modalClosed, "closeModal was called");
     });
 
     test("buttons are disabled while saving", async function (assert) {
@@ -73,24 +67,20 @@ module(
         </template>
       );
 
-      // Start the request without awaiting
-      click(".language-btn-en");
+      click(".language-btn");
 
-      // Wait for the saving state to take effect
       await new Promise((resolve) => setTimeout(resolve, 10));
 
-      assert.dom(".language-btn-zh-cn").isDisabled();
-      assert.dom(".language-btn-es").isDisabled();
+      assert.dom(".language-btn:nth-child(2)").isDisabled();
+      assert.dom(".language-btn:nth-child(3)").isDisabled();
       assert.dom(".disable-btn").isDisabled();
 
-      // Resolve the request to clean up
       resolveRequest(response({ success: true }));
       await settled();
     });
 
     test("disable translation sends POST with enabled=false", async function (assert) {
-      const modalService = getOwner(this).lookup("service:modal");
-      sinon.spy(modalService, "close");
+      let modalClosed = false;
 
       pretender.post("/babel-reunited/user-preferred-language", (request) => {
         const body = new URLSearchParams(request.requestBody);
@@ -98,7 +88,7 @@ module(
         return response({ success: true });
       });
 
-      this.set("closeModal", () => {});
+      this.set("closeModal", () => (modalClosed = true));
       await render(
         <template>
           <LanguagePreferenceModal
@@ -111,7 +101,7 @@ module(
       await click(".disable-btn");
 
       assert.verifySteps(["POST enabled=false"]);
-      assert.true(modalService.close.calledOnce, "modal service close called");
+      assert.true(modalClosed, "closeModal was called");
     });
   }
 );

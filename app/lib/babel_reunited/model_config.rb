@@ -40,6 +40,39 @@ module BabelReunited
         description: "OpenAI GPT-5 lightweight variant for speed and cost",
         tier: "Low",
       },
+      "gpt-4.1" => {
+        provider: "openai",
+        model_name: "gpt-4.1",
+        base_url: "https://api.openai.com",
+        max_tokens: 1_047_576,
+        max_output_tokens: 32_768,
+        output_token_param: :max_completion_tokens,
+        api_key_setting: :babel_reunited_openai_api_key,
+        description: "OpenAI GPT-4.1 flagship, 1M context with 32K output",
+        tier: "High",
+      },
+      "gpt-4.1-mini" => {
+        provider: "openai",
+        model_name: "gpt-4.1-mini",
+        base_url: "https://api.openai.com",
+        max_tokens: 1_047_576,
+        max_output_tokens: 32_768,
+        output_token_param: :max_completion_tokens,
+        api_key_setting: :babel_reunited_openai_api_key,
+        description: "OpenAI GPT-4.1 cost-effective variant, 1M context with 32K output",
+        tier: "Medium",
+      },
+      "gpt-4.1-nano" => {
+        provider: "openai",
+        model_name: "gpt-4.1-nano",
+        base_url: "https://api.openai.com",
+        max_tokens: 1_047_576,
+        max_output_tokens: 32_768,
+        output_token_param: :max_completion_tokens,
+        api_key_setting: :babel_reunited_openai_api_key,
+        description: "OpenAI GPT-4.1 lightweight variant, 1M context with 32K output",
+        tier: "Low",
+      },
       "gpt-4o" => {
         provider: "openai",
         model_name: "gpt-4o",
@@ -157,60 +190,6 @@ module BabelReunited
       return nil unless config
 
       config.merge(api_key: SiteSetting.public_send(config[:api_key_setting]))
-    end
-
-    def self.get_api_key
-      get_config&.dig(:api_key)
-    end
-
-    def self.get_model_name
-      get_config&.dig(:model_name)
-    end
-
-    def self.get_base_url
-      get_config&.dig(:base_url)
-    end
-
-    def self.get_max_tokens
-      get_config&.dig(:max_tokens)
-    end
-
-    def self.get_max_output_tokens
-      get_config&.dig(:max_output_tokens)
-    end
-
-    def self.get_provider
-      get_config&.dig(:provider)
-    end
-
-    def self.get_description
-      get_config&.dig(:description)
-    end
-
-    def self.get_tier
-      get_config&.dig(:tier)
-    end
-
-    def self.list_available_models
-      PRESET_MODELS.map do |key, config|
-        {
-          key: key,
-          name: config[:model_name],
-          provider: config[:provider],
-          description: config[:description],
-          tier: config[:tier],
-          max_tokens: config[:max_tokens],
-          max_output_tokens: config[:max_output_tokens],
-        }
-      end
-    end
-
-    def self.list_models_by_provider(provider)
-      PRESET_MODELS.select { |_, config| config[:provider] == provider }
-    end
-
-    def self.list_models_by_tier(tier)
-      PRESET_MODELS.select { |_, config| config[:tier] == tier }
     end
   end
 end

@@ -111,50 +111,6 @@ RSpec.describe BabelReunited::PostTranslation do
     end
   end
 
-  describe ".translate_post" do
-    fab!(:translation) { Fabricate(:post_translation, post: post, language: "es") }
-
-    it "finds translation for a post and language" do
-      expect(described_class.translate_post(post, "es")).to eq(translation)
-    end
-
-    it "returns nil when not found" do
-      expect(described_class.translate_post(post, "fr")).to be_nil
-    end
-  end
-
-  describe ".find_topic_translation" do
-    it "returns translated title from first post's translation" do
-      Fabricate(
-        :post_translation,
-        post: post,
-        language: "es",
-        translated_title: "Titulo en espanol",
-      )
-      expect(described_class.find_topic_translation(topic.id, "es")).to eq("Titulo en espanol")
-    end
-
-    it "returns nil when no translation exists" do
-      expect(described_class.find_topic_translation(topic.id, "fr")).to be_nil
-    end
-
-    it "returns nil when topic has no first post" do
-      expect(described_class.find_topic_translation(-1, "es")).to be_nil
-    end
-  end
-
-  describe ".find_topic_translation_info" do
-    it "returns the full translation record" do
-      translation = Fabricate(:post_translation, post: post, language: "es")
-      result = described_class.find_topic_translation_info(topic.id, "es")
-      expect(result).to eq(translation)
-    end
-
-    it "returns nil when no translation exists" do
-      expect(described_class.find_topic_translation_info(topic.id, "fr")).to be_nil
-    end
-  end
-
   describe "#translating?" do
     it "returns true when status is translating" do
       translation =

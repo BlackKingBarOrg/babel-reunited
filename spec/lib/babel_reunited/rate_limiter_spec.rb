@@ -7,27 +7,26 @@ RSpec.describe BabelReunited::RateLimiter do
     Discourse.redis.flushdb
   end
 
-  describe ".can_make_request?" do
+  describe ".perform_request_if_allowed" do
     it "returns true when under limit" do
-      expect(described_class.can_make_request?).to be true
+      expect(described_class.perform_request_if_allowed).to be true
+    end
+
+    it "returns true and decrements remaining on each call" do
+      expect { described_class.perform_request_if_allowed }.to change {
+        described_class.remaining_requests
+      }.by(-1)
     end
 
     it "returns false when at limit" do
-      5.times { described_class.record_request }
-      expect(described_class.can_make_request?).to be false
+      5.times { described_class.perform_request_if_allowed }
+      expect(described_class.perform_request_if_allowed).to be false
     end
 
-    it "returns false when over limit" do
-      6.times { described_class.record_request }
-      expect(described_class.can_make_request?).to be false
-    end
-  end
-
-  describe ".record_request" do
-    it "increments the counter" do
-      expect { described_class.record_request }.to change { described_class.remaining_requests }.by(
-        -1,
-      )
+    it "does not increment counter when over limit" do
+      5.times { described_class.perform_request_if_allowed }
+      described_class.perform_request_if_allowed
+      expect(described_class.remaining_requests).to eq(0)
     end
   end
 
@@ -37,17 +36,12 @@ RSpec.describe BabelReunited::RateLimiter do
     end
 
     it "returns correct remaining count" do
-      3.times { described_class.record_request }
+      3.times { described_class.perform_request_if_allowed }
       expect(described_class.remaining_requests).to eq(2)
     end
 
     it "returns 0 when limit is reached" do
-      5.times { described_class.record_request }
-      expect(described_class.remaining_requests).to eq(0)
-    end
-
-    it "does not go below 0" do
-      10.times { described_class.record_request }
+      5.times { described_class.perform_request_if_allowed }
       expect(described_class.remaining_requests).to eq(0)
     end
   end

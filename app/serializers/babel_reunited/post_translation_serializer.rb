@@ -13,11 +13,14 @@ module BabelReunited
                :confidence,
                :status
 
-    # Defense-in-depth: re-sanitize on read (Loofah scrub is idempotent)
     def translated_content
-      raw = object.translated_content
-      return raw if raw.blank?
-      Loofah.html5_fragment(raw).scrub!(:prune).to_s
+      # New path: pre-computed cooked content (already sanitized at write time)
+      return object.translated_content if object.translated_raw.present?
+
+      # Legacy path: old records without translated_raw
+      legacy = object.translated_content
+      return legacy if legacy.blank?
+      Loofah.html5_fragment(legacy).scrub!(:prune).to_s
     end
 
     # Title is sanitized to plain text by model before_save; no extra escaping needed

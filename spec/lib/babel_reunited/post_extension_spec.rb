@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-RSpec.describe BabelReunited::PostExtension do
+RSpec.describe BabelReunited do
   fab!(:user)
   fab!(:topic) { Fabricate(:topic, user: user) }
   fab!(:post_record) { Fabricate(:post, topic: topic, user: user) }
@@ -11,41 +11,7 @@ RSpec.describe BabelReunited::PostExtension do
     SiteSetting.babel_reunited_preset_model = "gpt-4o"
   end
 
-  describe "#get_translation" do
-    it "finds translation by language" do
-      translation = Fabricate(:post_translation, post: post_record, language: "es")
-      expect(post_record.get_translation("es")).to eq(translation)
-    end
-
-    it "returns nil when not found" do
-      expect(post_record.get_translation("fr")).to be_nil
-    end
-  end
-
-  describe "#has_translation?" do
-    it "returns true when translation exists" do
-      Fabricate(:post_translation, post: post_record, language: "es")
-      expect(post_record.has_translation?("es")).to be true
-    end
-
-    it "returns false when no translation exists" do
-      expect(post_record.has_translation?("fr")).to be false
-    end
-  end
-
-  describe "#available_translations" do
-    it "returns all translation languages" do
-      Fabricate(:post_translation, post: post_record, language: "es")
-      Fabricate(:post_translation, post: post_record, language: "fr")
-      expect(post_record.available_translations).to contain_exactly("es", "fr")
-    end
-
-    it "returns empty array when no translations" do
-      expect(post_record.available_translations).to eq([])
-    end
-  end
-
-  describe "#enqueue_translation_jobs" do
+  describe "BabelReunited.enqueue_translation_jobs" do
     it "enqueues jobs for each language" do
       expect_enqueued_with(
         job: Jobs::BabelReunited::TranslatePostJob,
@@ -60,18 +26,18 @@ RSpec.describe BabelReunited::PostExtension do
             post_id: post_record.id,
             target_language: "fr",
           },
-        ) { post_record.enqueue_translation_jobs(%w[es fr]) }
+        ) { BabelReunited.enqueue_translation_jobs(post_record, %w[es fr]) }
       end
     end
 
     it "does nothing when target_languages is blank" do
-      post_record.enqueue_translation_jobs([])
+      BabelReunited.enqueue_translation_jobs(post_record, [])
     end
   end
 
-  describe "#create_or_update_translation_record" do
+  describe "PostTranslation.create_or_update_record" do
     it "creates a new translation record with translating status" do
-      record = post_record.create_or_update_translation_record("es")
+      record = BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
       expect(record.status).to eq("translating")
       expect(record.language).to eq("es")
       expect(record.post_id).to eq(post_record.id)
@@ -80,7 +46,7 @@ RSpec.describe BabelReunited::PostExtension do
     it "updates existing record to translating status" do
       Fabricate(:post_translation, post: post_record, language: "es", status: "completed")
 
-      record = post_record.create_or_update_translation_record("es")
+      record = BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
       expect(record.status).to eq("translating")
     end
 
@@ -94,8 +60,21 @@ RSpec.describe BabelReunited::PostExtension do
       existing = Fabricate(:post_translation, post: post_record, language: "es")
       BabelReunited::PostTranslation.stubs(:find_translation).returns(existing)
 
-      record = post_record.create_or_update_translation_record("es")
+      record = BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
       expect(record.status).to eq("translating")
+    end
+  end
+
+  describe "PostTranslation.find_translation" do
+    it "finds translation by post_id and language" do
+      translation = Fabricate(:post_translation, post: post_record, language: "es")
+      expect(BabelReunited::PostTranslation.find_translation(post_record.id, "es")).to eq(
+        translation,
+      )
+    end
+
+    it "returns nil when not found" do
+      expect(BabelReunited::PostTranslation.find_translation(post_record.id, "fr")).to be_nil
     end
   end
 end

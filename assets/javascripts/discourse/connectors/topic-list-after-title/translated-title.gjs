@@ -15,7 +15,7 @@ export default class TopicListAfterTitleTranslatedComponent extends Component {
   }
 
   get translatedTitle() {
-    const translatedTitle = this.topic?.translated_title;
+    const translatedTitle = this.topic?.babel_translated_title;
     return translatedTitle;
   }
 

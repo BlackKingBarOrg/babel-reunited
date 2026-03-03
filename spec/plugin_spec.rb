@@ -265,20 +265,20 @@ RSpec.describe BabelReunited do
       )
     end
 
-    it "includes translated_title in topic_view" do
+    it "includes babel_translated_title in topic_view" do
       topic_view = TopicView.new(topic.id, user)
       json = TopicViewSerializer.new(topic_view, scope: guardian, root: false).as_json
-      expect(json[:translated_title]).to eq("Titulo traducido")
+      expect(json[:babel_translated_title]).to eq("Titulo traducido")
     end
 
-    it "includes translated_title in listable_topic" do
+    it "includes babel_translated_title in listable_topic" do
       json = ListableTopicSerializer.new(topic, scope: guardian, root: false).as_json
-      expect(json[:translated_title]).to eq("Titulo traducido")
+      expect(json[:babel_translated_title]).to eq("Titulo traducido")
     end
 
-    it "includes translated_title in topic_list_item" do
+    it "includes babel_translated_title in topic_list_item" do
       json = TopicListItemSerializer.new(topic, scope: guardian, root: false).as_json
-      expect(json[:translated_title]).to eq("Titulo traducido")
+      expect(json[:babel_translated_title]).to eq("Titulo traducido")
     end
   end
 
