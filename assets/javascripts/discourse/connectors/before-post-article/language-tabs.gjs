@@ -6,6 +6,8 @@ import { action } from "@ember/object";
 import { service } from "@ember/service";
 import { htmlSafe } from "@ember/template";
 import concatClass from "discourse/helpers/concat-class";
+import { ajax } from "discourse/lib/ajax";
+import { popupAjaxError } from "discourse/lib/ajax-error";
 import { eq } from "discourse/truth-helpers";
 import { i18n } from "discourse-i18n";
 import { getSupportedLanguages } from "../../lib/supported-languages";
@@ -23,6 +25,7 @@ export default class LanguageTabsConnector extends Component {
 
   @tracked currentLanguage = "original";
   @tracked _localTranslations = null;
+  @tracked _pendingLanguage = null;
 
   constructor() {
     super(...arguments);
@@ -33,9 +36,16 @@ export default class LanguageTabsConnector extends Component {
     this._onTranslationUpdate = (data) => {
       if (data.status === "completed" && data.translation) {
         this.updatePostTranslation(data.language, data.translation);
+        if (this._pendingLanguage === data.language) {
+          this.currentLanguage = data.language;
+          this._pendingLanguage = null;
+        }
       }
       if (data.status === "failed") {
         this.handleTranslationFailure(data.language);
+        if (this._pendingLanguage === data.language) {
+          this._pendingLanguage = null;
+        }
       }
     };
 
@@ -179,8 +189,37 @@ export default class LanguageTabsConnector extends Component {
     const status = this.getTranslationStatus(languageCode);
     if (status === "completed") {
       this.currentLanguage = languageCode;
-    } else {
-      this.currentLanguage = "original";
+    } else if (
+      status !== "translating" &&
+      this._pendingLanguage !== languageCode
+    ) {
+      this._requestTranslation(languageCode);
+    }
+  }
+
+  async _requestTranslation(languageCode) {
+    this._pendingLanguage = languageCode;
+
+    const existing = this.translations.filter(
+      (t) => t.post_translation?.language !== languageCode
+    );
+    this._localTranslations = [
+      ...existing,
+      { post_translation: { language: languageCode, status: "translating" } },
+    ];
+
+    try {
+      await ajax(`/babel-reunited/posts/${this.post.id}/translations`, {
+        type: "POST",
+        data: { target_language: languageCode },
+      });
+    } catch (error) {
+      this._pendingLanguage = null;
+      const reverted = this.translations.filter(
+        (t) => t.post_translation?.language !== languageCode
+      );
+      this._localTranslations = [...reverted];
+      popupAjaxError(error);
     }
   }
 

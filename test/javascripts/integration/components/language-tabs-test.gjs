@@ -1,7 +1,8 @@
 import { getOwner } from "@ember/owner";
-import { click, render } from "@ember/test-helpers";
+import { click, render, settled } from "@ember/test-helpers";
 import { module, test } from "qunit";
 import { setupRenderingTest } from "discourse/tests/helpers/component-test";
+import pretender, { response } from "discourse/tests/helpers/create-pretender";
 import { publishToMessageBus } from "discourse/tests/helpers/qunit-helpers";
 import LanguageTabsConnector from "discourse/plugins/babel-reunited/discourse/connectors/before-post-article/language-tabs";
 
@@ -87,16 +88,167 @@ module(
       assert.dom(".cooked").hasText("Original cooked content");
     });
 
-    test("clicking uncompleted language falls back to original", async function (assert) {
+    test("clicking uncompleted language triggers on-demand translation", async function (assert) {
+      pretender.post("/babel-reunited/posts/1/translations", (request) => {
+        const body = new URLSearchParams(request.requestBody);
+        assert.step(`POST target_language=${body.get("target_language")}`);
+        return response({ status: "queued" });
+      });
+
+      this.set(
+        "post",
+        createPost({
+          post_translations: [
+            {
+              post_translation: {
+                language: "en",
+                status: "completed",
+                translated_content: "<p>English translation</p>",
+              },
+            },
+            {
+              post_translation: {
+                language: "zh-cn",
+                status: "completed",
+                translated_content: "<p>中文翻译</p>",
+              },
+            },
+            {
+              post_translation: {
+                language: "es",
+                status: "pending",
+                translated_content: null,
+              },
+            },
+          ],
+        })
+      );
+      await render(
+        <template><LanguageTabsConnector @post={{this.post}} /></template>
+      );
+
+      await click(".ai-language-tabs button:nth-child(4)");
+
+      assert.verifySteps(["POST target_language=es"]);
+      assert
+        .dom(".ai-language-tabs button:nth-child(4) .spinner.small")
+        .exists("shows spinner after triggering translation");
+    });
+
+    test("clicking a translating tab does not trigger duplicate request", async function (assert) {
+      pretender.post("/babel-reunited/posts/1/translations", () => {
+        assert.step("POST called");
+        return response({ status: "queued" });
+      });
+
       this.set("post", createPost());
       await render(
         <template><LanguageTabsConnector @post={{this.post}} /></template>
       );
 
-      // es has status "translating" (not completed)
+      // es already has status "translating" — clicking should not fire AJAX
       await click(".ai-language-tabs button:nth-child(4)");
 
+      assert.verifySteps([]);
+    });
+
+    test("on-demand translation auto-switches on MessageBus completion", async function (assert) {
+      let resolveRequest;
+      pretender.post("/babel-reunited/posts/1/translations", () => {
+        return new Promise((resolve) => {
+          resolveRequest = resolve;
+        });
+      });
+
+      this.set(
+        "post",
+        createPost({
+          post_translations: [
+            {
+              post_translation: {
+                language: "en",
+                status: "completed",
+                translated_content: "<p>English translation</p>",
+              },
+            },
+            {
+              post_translation: {
+                language: "zh-cn",
+                status: "completed",
+                translated_content: "<p>中文翻译</p>",
+              },
+            },
+            {
+              post_translation: {
+                language: "es",
+                status: "failed",
+                translated_content: null,
+              },
+            },
+          ],
+        })
+      );
+      await render(
+        <template><LanguageTabsConnector @post={{this.post}} /></template>
+      );
+
+      // Click failed "es" tab to trigger on-demand
+      click(".ai-language-tabs button:nth-child(4)");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      resolveRequest(response({ status: "queued" }));
+      await settled();
+
       assert.dom(".cooked").hasText("Original cooked content");
+
+      await publishToMessageBus("/post-translations/1", {
+        status: "completed",
+        language: "es",
+        translation: {
+          language: "es",
+          status: "completed",
+          translated_content: "<p>Traducción en español</p>",
+        },
+      });
+
+      assert.dom(".cooked").hasText("Traducción en español");
+    });
+
+    test("on-demand translation reverts optimistic state on error", async function (assert) {
+      pretender.post("/babel-reunited/posts/1/translations", () => {
+        return response(429, { errors: ["rate limited"] });
+      });
+
+      this.set(
+        "post",
+        createPost({
+          post_translations: [
+            {
+              post_translation: {
+                language: "en",
+                status: "completed",
+                translated_content: "<p>English translation</p>",
+              },
+            },
+            {
+              post_translation: {
+                language: "zh-cn",
+                status: "completed",
+                translated_content: "<p>中文翻译</p>",
+              },
+            },
+          ],
+        })
+      );
+      await render(
+        <template><LanguageTabsConnector @post={{this.post}} /></template>
+      );
+
+      await click(".ai-language-tabs button:nth-child(4)");
+
+      assert
+        .dom(".ai-language-tabs button:nth-child(4) .spinner.small")
+        .doesNotExist("spinner removed after error");
     });
 
     test("Tripwire: currentContent in original mode returns post.cooked not post.raw", async function (assert) {
