@@ -117,18 +117,31 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
   def find_post(post_id, target_language)
     post = Post.find_by(id: post_id)
     if post.blank?
+      mark_translation_failed(post_id, target_language, "post_not_found")
       log_skipped(post_id, target_language, "post_not_found")
       return nil
     end
     if post.deleted_at.present? || post.hidden?
+      mark_translation_failed(post_id, target_language, "post_deleted_or_hidden")
       log_skipped(post_id, target_language, "post_deleted_or_hidden")
       return nil
     end
     unless BabelReunited.translation_enabled_for_post?(post)
+      mark_translation_failed(post_id, target_language, "category_not_enabled")
       log_skipped(post_id, target_language, "category_not_enabled")
       return nil
     end
     post
+  end
+
+  def mark_translation_failed(post_id, target_language, reason)
+    translation = BabelReunited::PostTranslation.find_translation(post_id, target_language)
+    return unless translation && !translation.failed?
+
+    translation.update!(
+      status: "failed",
+      metadata: (translation.metadata || {}).merge(error: reason, failed_at: Time.current),
+    )
   end
 
   def ensure_translation_record(post, target_language)
@@ -148,11 +161,16 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
     translated_cooked = PrettyText.cook(result.translated_raw, topic_id: post.topic_id)
     translated_cooked = Loofah.html5_fragment(translated_cooked).scrub!(:prune).to_s
 
+    translated_title = result.translated_title
+    if translated_title.present? && translated_title.length > 255
+      translated_title = translated_title[0...252] + "..."
+    end
+
     translation.update!(
       status: "completed",
       translated_raw: result.translated_raw,
       translated_content: translated_cooked,
-      translated_title: result.translated_title,
+      translated_title: translated_title,
       source_language: result.source_language,
       source_sha: source_sha,
       metadata:
