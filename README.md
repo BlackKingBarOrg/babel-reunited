@@ -27,10 +27,20 @@ We are rebuilding the tower. Not toward heaven, but toward understanding.
 - Repository: `https://github.com/Zealot-Rush/babel-reunited`
 
 ## Features
-- Automatically translates posts after creation/edition to selected target languages (default: zh-cn, en, es; only these three are currently supported).
-- Supports OpenAI, xAI (Grok), DeepSeek, or your own OpenAI-compatible API.
-- Translated topic titles can appear in lists/details; translated post content can be shown and switched inline.
-- Users can set a preferred language and toggle the feature; built‑in rate limiting and content length limits.
+
+- Automatic translation of posts on creation and edit, with configurable target languages (default: `zh-cn`, `en`, `es`)
+- Optional category-level whitelist to limit which categories are translated
+- Translated topic titles displayed in topic lists and topic detail pages
+- Inline language tabs on each post for switching between translations
+- Per-user language preference with opt-out toggle (prompted on first login)
+- On-demand translation fallback when a translation is not yet available
+- Multiple AI provider support: OpenAI, xAI (Grok), DeepSeek, or any OpenAI-compatible API
+- Markdown formatting preservation during translation
+- Redis-based per-minute rate limiting and content length limits
+- Real-time translation status via MessageBus (translating / completed / failed)
+- Preloaded translations to avoid N+1 queries on topic lists and topic views
+- Admin panel for monitoring translation status
+- Rake tasks for backfilling missing translations and re-translating legacy records
 
 ---
 
@@ -38,165 +48,163 @@ We are rebuilding the tower. Not toward heaven, but toward understanding.
 
 ```bash
 cd /path/to/discourse/plugins
-git clone https://github.com/Zealot-Rush/babel-reunited.git
+git clone https://github.com/BlackKingBarOrg/babel-reunited.git
 ```
 
-### Production steps (non‑Docker)
-1) Enter your Discourse root directory:
-```bash
-cd /path/to/discourse
-```
-2) Run database migrations (if the plugin includes any):
+### Production (non-Docker)
+
+From the Discourse root directory:
+
 ```bash
 RAILS_ENV=production bin/rails db:migrate
-```
-3) Precompile frontend assets:
-```bash
 RAILS_ENV=production bin/rake assets:precompile
+# then restart your application server
 ```
 
-> For development/testing, usually restarting the Rails server and frontend dev process is enough—no precompilation necessary.
+For development, restarting the Rails server is sufficient.
 
 ---
 
-## Enable and Configure
-1) In Discourse admin → Settings, search and enable:
-- `babel_reunited_enabled`
+## Configuration
 
-2) Configure model and keys (fill in per your provider; leave unused ones blank):
-- Preset model: `babel_reunited_preset_model` (default `gpt-4o`).
-  - Options: `gpt-4o`, `gpt-4o-mini`, `gpt-3.5-turbo`, `grok-4`, `grok-3`, `grok-2`, `deepseek-r1`, `deepseek-v3`, `deepseek-v2`, `custom`
-- Provider keys:
-  - `babel_reunited_openai_api_key`
-  - `babel_reunited_xai_api_key`
-  - `babel_reunited_deepseek_api_key`
-- Custom model (effective when preset is `custom`):
-  - `babel_reunited_custom_model_name`
-  - `babel_reunited_custom_base_url`
-  - `babel_reunited_custom_api_key`
-  - `babel_reunited_custom_max_tokens`
-  - `babel_reunited_custom_max_output_tokens`
+All settings are under Admin > Settings, prefixed with `babel_reunited_`.
 
-3) Translation policy:
-- Auto translate languages: `babel_reunited_auto_translate_languages` (currently supports and defaults to `zh-cn,en,es`).
-- Translate title: `babel_reunited_translate_title`
-- Preserve formatting: `babel_reunited_preserve_formatting`
-- Rate limit: `babel_reunited_rate_limit_per_minute`
-- Max content length: `babel_reunited_max_content_length`
+### 1. Enable the plugin
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `babel_reunited_enabled` | `false` | Master switch for the plugin |
+
+### 2. Choose a model
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `babel_reunited_preset_model` | `gpt-4o` | Select a preset model or `custom` |
+
+Available presets:
+
+| Provider | Models |
+|----------|--------|
+| OpenAI | `gpt-5`, `gpt-5-mini`, `gpt-5-nano`, `gpt-4.1`, `gpt-4.1-mini`, `gpt-4.1-nano`, `gpt-4o`, `gpt-4o-mini`, `gpt-3.5-turbo` |
+| xAI | `grok-4`, `grok-4-fast-non-reasoning`, `grok-3`, `grok-2` |
+| DeepSeek | `deepseek-r1`, `deepseek-v3` |
+
+### 3. API keys
+
+Provide the key for your chosen provider. Leave the others blank.
+
+| Setting | Provider |
+|---------|----------|
+| `babel_reunited_openai_api_key` | OpenAI |
+| `babel_reunited_xai_api_key` | xAI |
+| `babel_reunited_deepseek_api_key` | DeepSeek |
+
+### 4. Custom model (when preset is `custom`)
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `babel_reunited_custom_model_name` | | Model identifier |
+| `babel_reunited_custom_base_url` | | OpenAI-compatible API base URL |
+| `babel_reunited_custom_api_key` | | API key for the custom endpoint |
+| `babel_reunited_custom_max_tokens` | `16000` | Max input tokens |
+| `babel_reunited_custom_max_output_tokens` | `4096` | Max output tokens |
+
+### 5. Translation behavior
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `babel_reunited_auto_translate_languages` | `zh-cn,en,es` | Comma-separated target language codes |
+| `babel_reunited_enabled_categories` | (all) | Restrict translation to specific categories; blank means all |
+| `babel_reunited_translate_title` | `true` | Translate topic titles (first post only) |
+| `babel_reunited_preserve_formatting` | `true` | Preserve Markdown formatting in translations |
+| `babel_reunited_rate_limit_per_minute` | `60` | Max translation requests per minute |
+| `babel_reunited_max_content_length` | `4000` | Max post character length to translate |
+| `babel_reunited_request_timeout_seconds` | `300` | Timeout for each provider API request |
 
 ---
 
-## Verifying the Installation
-1) Create or edit a post:
-- A “translating” record appears immediately for the target languages; the background job queues the AI translation.
-- When done, translated content becomes available in‑post; if title translation is enabled and the first post’s translation is complete, topic lists/details can show the translated title.
+## How It Works
 
-2) If the user hasn’t set a preferred language on first login, a modal prompt is shown (triggered via MessageBus).
-
-3) Logs (optional):
-
-> Default log path used by the helper script is: `/discourse/log/babel_reunited_translation.log`. In production, adjust the script or create a symlink as needed.
+1. When a post is created or edited, the plugin enqueues a Sidekiq job for each target language.
+2. Each job acquires a Redis lock, calls the configured AI provider, and stores the result.
+3. Translated content is cooked through Discourse’s `PrettyText` pipeline and sanitized before storage.
+4. Translation status updates are pushed to the frontend via MessageBus in real time.
+5. Users with a preferred language see translated titles in topic lists and can switch between language tabs on posts.
 
 ---
 
 ## Rake Tasks
 
+All tasks run from the Discourse root. The plugin must be enabled and languages must be configured.
+
 ### `babel_reunited:process_missing_posts`
 
-This rake task processes all posts that don't have any translations and adds translation jobs to Sidekiq for them.
-
-**Usage:**
+Finds posts without any translation records and enqueues translation jobs.
 
 ```bash
-# DRY RUN mode (default, preview only - no jobs will be queued)
+# Preview (default, no jobs queued)
 bin/rake babel_reunited:process_missing_posts
-# or explicitly
-DRY_RUN=true bin/rake babel_reunited:process_missing_posts
 
-# Actual execution mode (queues translation jobs)
+# Execute
 DRY_RUN=false bin/rake babel_reunited:process_missing_posts
 ```
 
-**What it does:**
+### `babel_reunited:retranslate_legacy`
 
-1. Finds all posts that have no translation records at all
-2. Gets the auto-translate languages from `babel_reunited_auto_translate_languages` setting
-3. For each post without translations:
-   - Creates translation records with "translating" status
-   - Enqueues translation jobs to Sidekiq for each target language
+Re-translates completed records that are missing the `translated_raw` field (from before that column was added).
 
-**Output:**
+```bash
+# Preview
+bin/rake babel_reunited:retranslate_legacy
 
-- **DRY RUN mode**: Shows the number of posts found, sample posts (first 10), and how many translation jobs would be queued
-- **Actual execution**: Shows progress (every 100 posts), final statistics (processed count, failed count, queued jobs count)
-
-**Requirements:**
-
-- Plugin must be enabled (`babel_reunited_enabled` must be true)
-- Auto-translate languages must be configured (`babel_reunited_auto_translate_languages` must not be blank)
-
-**Example output (DRY RUN):**
-
-```
-Auto-translate languages: zh-cn, en, es
-
-Found 1523 posts without any translations
-
-DRY RUN mode - no jobs will be queued
-Use DRY_RUN=false to actually queue translation jobs
-
-Sample posts that would be processed:
-  Post ID: 123, Topic ID: 45, User: alice
-  Post ID: 124, Topic ID: 45, User: bob
-  ... and 1521 more posts
-
-Would queue 4569 translation jobs (1523 posts × 3 languages)
+# Execute
+DRY_RUN=false bin/rake babel_reunited:retranslate_legacy
 ```
 
-**Example output (Actual execution):**
+### `babel_reunited:migrate_user_preferences`
 
-```
-Auto-translate languages: zh-cn, en, es
+Migrates user language preferences from the legacy `user_preferred_languages` table to Discourse custom fields.
 
-Found 1523 posts without any translations
-Processing posts and queueing translation jobs...
-Processed 100/1523 posts...
-Processed 200/1523 posts...
-...
-
-==================================================
-Processing complete
-==================================================
-Processed: 1523 posts
-Failed: 0 posts
-Queued: 4569 translation jobs
-==================================================
+```bash
+bin/rake babel_reunited:migrate_user_preferences
 ```
 
 ---
 
-## FAQ
-- Translation didn’t trigger:
-  - Is `babel_reunited_enabled` turned on?
-  - Is the post non‑empty and within `babel_reunited_max_content_length`?
-  - Is `babel_reunited_auto_translate_languages` at its default value?
-  - Are the provider/API accessible, keys valid, and quota sufficient?
-- Rate limiting: lower `rate_limit_per_minute`, reduce auto languages, or upgrade your API quota.
-- Missing translated title: only shown when the first post’s translation exists and is complete; ensure `translate_title` is enabled.
+## Troubleshooting
+
+**Translation not triggering**
+- Verify `babel_reunited_enabled` is on.
+- Check that the post’s category is in `babel_reunited_enabled_categories` (or that the setting is blank for all categories).
+- Confirm the post is non-empty and within `babel_reunited_max_content_length`.
+- Ensure the provider API key is set and the API is reachable.
+
+**Rate limiting**
+- The plugin enforces a local per-minute rate limit (`babel_reunited_rate_limit_per_minute`). Reduce the number of target languages or increase the limit if translations are being throttled.
+
+**Translated title not showing**
+- Title translation only applies to the first post of a topic.
+- Confirm `babel_reunited_translate_title` is enabled.
+- The user must have a preferred language set.
+
+**Translation logs**
+- Structured logs are written to `log/babel_reunited_translation.log` in the Discourse root.
 
 ---
 
-## Uninstall (non‑Docker)
-1) Remove the `plugins/babel-reunited` directory.
-2) If needed, perform DB rollbacks/cleanup (backup first).
-3) In production, re‑precompile assets and restart the app:
+## Uninstall
+
+1. Remove the `plugins/babel-reunited` directory.
+2. Run migration rollbacks or clean up the `post_translations` and `user_preferred_languages` tables manually (back up first).
+3. In production, precompile assets and restart:
+
 ```bash
 RAILS_ENV=production bin/rake assets:precompile
-# restart your service
 ```
 
 ---
 
-## Version Info
+## Version
+
 - Plugin version: `0.1.0`
-- Compatibility: Discourse ≥ 2.7.0 (latest stable recommended)
+- Requires Discourse >= 2.7.0
