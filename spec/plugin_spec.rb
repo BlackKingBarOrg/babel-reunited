@@ -335,8 +335,8 @@ RSpec.describe BabelReunited do
   end
 
   describe "category whitelist" do
-    fab!(:allowed_category) { Fabricate(:category) }
-    fab!(:blocked_category) { Fabricate(:category) }
+    fab!(:allowed_category, :category)
+    fab!(:blocked_category, :category)
 
     describe ".translation_enabled_for_category?" do
       it "returns true when setting is blank" do
@@ -451,14 +451,11 @@ RSpec.describe BabelReunited do
     describe "babel_translated_title with category whitelist" do
       let(:guardian) { Guardian.new(user) }
 
-      before do
-        Fabricate(:user_preferred_language, user: user, language: "es", enabled: true)
-      end
+      before { Fabricate(:user_preferred_language, user: user, language: "es", enabled: true) }
 
       it "returns nil for non-whitelisted category in topic_view" do
         topic_in_blocked = Fabricate(:topic, user: user, category: blocked_category)
-        blocked_post =
-          Fabricate(:post, topic: topic_in_blocked, user: user, post_number: 1)
+        blocked_post = Fabricate(:post, topic: topic_in_blocked, user: user, post_number: 1)
         topic_in_blocked.update!(first_post: blocked_post)
         Fabricate(
           :post_translation,
@@ -477,8 +474,7 @@ RSpec.describe BabelReunited do
 
       it "returns nil for non-whitelisted category in topic_list_item" do
         topic_in_blocked = Fabricate(:topic, user: user, category: blocked_category)
-        blocked_post =
-          Fabricate(:post, topic: topic_in_blocked, user: user, post_number: 1)
+        blocked_post = Fabricate(:post, topic: topic_in_blocked, user: user, post_number: 1)
         topic_in_blocked.update!(first_post: blocked_post)
         Fabricate(
           :post_translation,
