@@ -46,22 +46,53 @@ We are rebuilding the tower. Not toward heaven, but toward understanding.
 
 ## Installation
 
+### Docker (recommended)
+
+Most production Discourse instances run inside Docker. To install:
+
+1) Open your container config (usually `/var/discourse/containers/app.yml`).
+2) Add the plugin's git clone command to the `after_code` hook:
+
+```yaml
+hooks:
+  after_code:
+    - exec:
+        cd: $home/plugins
+        cmd:
+          - git clone https://github.com/discourse/docker_manager.git
+          - git clone https://github.com/BlackKingBarOrg/babel-reunited.git  # <-- add this line
+```
+
+3) Rebuild the container:
+
+```bash
+cd /var/discourse
+./launcher rebuild app
+```
+
+The rebuild process will clone the plugin, run migrations, and precompile assets automatically.
+
+> **Updating**: To pull the latest version, simply run `./launcher rebuild app` again. The rebuild always fetches the newest code from the repository.
+
+### Non-Docker (development / bare-metal)
+
+1) Clone the plugin into your Discourse plugins directory:
+
 ```bash
 cd /path/to/discourse/plugins
 git clone https://github.com/BlackKingBarOrg/babel-reunited.git
 ```
 
-### Production (non-Docker)
-
-From the Discourse root directory:
+2) Run database migrations and precompile assets:
 
 ```bash
+cd /path/to/discourse
 RAILS_ENV=production bin/rails db:migrate
 RAILS_ENV=production bin/rake assets:precompile
 # then restart your application server
 ```
 
-For development, restarting the Rails server is sufficient.
+> For local development, just restart the Rails server — no precompilation necessary.
 
 ---
 
@@ -194,13 +225,27 @@ bin/rake babel_reunited:migrate_user_preferences
 
 ## Uninstall
 
-1. Remove the `plugins/babel-reunited` directory.
-2. Run migration rollbacks or clean up the `post_translations` and `user_preferred_languages` tables manually (back up first).
-3. In production, precompile assets and restart:
+### Docker
+
+1) Remove the `git clone` line for `babel-reunited` from `app.yml`.
+2) Rebuild the container:
+
+```bash
+cd /var/discourse
+./launcher rebuild app
+```
+
+### Non-Docker
+
+1) Remove the `plugins/babel-reunited` directory.
+2) Re-precompile assets and restart:
 
 ```bash
 RAILS_ENV=production bin/rake assets:precompile
+# restart your service
 ```
+
+> Plugin tables (`babel_reunited_*`) will remain in the database after uninstall. To remove them, back up first, then drop manually.
 
 ---
 
