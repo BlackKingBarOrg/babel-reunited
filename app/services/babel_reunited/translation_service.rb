@@ -128,7 +128,7 @@ module BabelReunited
 
     def make_llm_request(prompt, api_config, max_tokens_override: nil)
       unless BabelReunited::RateLimiter.perform_request_if_allowed
-        return { error: "Rate limit exceeded" }
+        return { error: "Local rate limit exceeded" }
       end
 
       timeout = SiteSetting.babel_reunited_request_timeout_seconds

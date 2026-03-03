@@ -50,6 +50,28 @@ RSpec.describe BabelReunited do
       expect(record.status).to eq("translating")
     end
 
+    it "preserves existing translated_content when updating" do
+      Fabricate(
+        :post_translation,
+        post: post_record,
+        language: "es",
+        status: "completed",
+        translated_content: "<p>Hola mundo</p>",
+        translated_title: "Titulo",
+      )
+
+      record = BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
+      expect(record.status).to eq("translating")
+      expect(record.translated_content).to eq("<p>Hola mundo</p>")
+      expect(record.translated_title).to eq("Titulo")
+    end
+
+    it "sets empty content for new records" do
+      record = BabelReunited::PostTranslation.create_or_update_record(post_record.id, "de")
+      expect(record.translated_content).to eq("")
+      expect(record.translated_title).to eq("")
+    end
+
     it "handles race condition with RecordNotUnique" do
       BabelReunited::PostTranslation
         .stubs(:find_or_initialize_by)

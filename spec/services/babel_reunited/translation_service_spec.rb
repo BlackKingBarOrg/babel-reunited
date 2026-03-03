@@ -130,7 +130,7 @@ RSpec.describe BabelReunited::TranslationService do
 
       result = build_service.call
       expect(result.failure?).to be true
-      expect(result.error).to include("Rate limit exceeded")
+      expect(result.error).to include("Local rate limit exceeded")
     end
   end
 
@@ -252,15 +252,22 @@ RSpec.describe BabelReunited::TranslationService do
 
       request_body = nil
       stub_request(:post, "https://api.openai.com/v1/chat/completions")
-        .with { |req| request_body = req.body; true }
+        .with do |req|
+          request_body = req.body
+          true
+        end
         .to_return(
           status: 200,
           body: {
             choices: [{ message: { content: "Hola\n#{token_key}\nMundo" } }],
             model: "gpt-4o",
-            usage: { total_tokens: 50 },
+            usage: {
+              total_tokens: 50,
+            },
           }.to_json,
-          headers: { "Content-Type" => "application/json" },
+          headers: {
+            "Content-Type" => "application/json",
+          },
         )
 
       # Stub MarkdownProtector.new to return the same instance with same salt
