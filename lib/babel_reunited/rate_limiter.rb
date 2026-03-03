@@ -1,6 +1,9 @@
 # frozen_string_literal: true
 
 module BabelReunited
+  class RateLimitError < StandardError
+  end
+
   class RateLimiter
     def self.perform_request_if_allowed
       rate_limit = SiteSetting.babel_reunited_rate_limit_per_minute
