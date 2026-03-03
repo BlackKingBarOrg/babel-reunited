@@ -59,11 +59,33 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
       }.not_to raise_error
     end
 
+    it "marks existing translation as failed when post is deleted" do
+      BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
+      post_record.trash!
+
+      described_class.new.execute(post_id: post_record.id, target_language: "es")
+
+      translation = BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      expect(translation.status).to eq("failed")
+      expect(translation.metadata["error"]).to eq("post_not_found")
+    end
+
     it "skips hidden posts" do
       post_record.update!(hidden: true)
       expect {
         described_class.new.execute(post_id: post_record.id, target_language: "es")
       }.not_to raise_error
+    end
+
+    it "marks existing translation as failed when post is hidden" do
+      BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
+      post_record.update!(hidden: true)
+
+      described_class.new.execute(post_id: post_record.id, target_language: "es")
+
+      translation = BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      expect(translation.status).to eq("failed")
+      expect(translation.metadata["error"]).to eq("post_deleted_or_hidden")
     end
 
     it "skips posts in non-whitelisted categories" do
@@ -188,6 +210,22 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
 
       translation = BabelReunited::PostTranslation.find_translation(post_record.id, "es")
       expect(translation.source_sha).to eq(Digest::SHA256.hexdigest(post_record.raw))
+    end
+
+    it "truncates translated title longer than 255 characters" do
+      long_title = "A" * 300
+      BabelReunited::TranslationService
+        .any_instance
+        .stubs(:call)
+        .returns(success_result(translated_title: long_title))
+
+      BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
+      described_class.new.execute(post_id: post_record.id, target_language: "es")
+
+      translation = BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      expect(translation.status).to eq("completed")
+      expect(translation.translated_title.length).to eq(255)
+      expect(translation.translated_title).to end_with("...")
     end
   end
 
