@@ -82,21 +82,22 @@ module BabelReunited
 
     def self.create_or_update_record(post_id, target_language)
       record = find_or_initialize_by(post_id: post_id, language: target_language)
-      record.assign_attributes(
+      attrs = {
         status: "translating",
-        translated_content: "",
-        translated_title: "",
         translation_provider: record.translation_provider.presence || "openai",
         metadata: (record.metadata || {}).merge(translating_started_at: Time.current),
-      )
+      }
+      if record.new_record?
+        attrs[:translated_content] = ""
+        attrs[:translated_title] = ""
+      end
+      record.assign_attributes(attrs)
       record.save!
       record
     rescue ActiveRecord::RecordNotUnique
       record = find_translation(post_id, target_language)
       record.update!(
         status: "translating",
-        translated_content: "",
-        translated_title: "",
         metadata: (record.metadata || {}).merge(translating_started_at: Time.current),
       )
       record

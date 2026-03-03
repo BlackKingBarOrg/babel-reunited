@@ -128,7 +128,10 @@ RSpec.describe BabelReunited::TranslationService do
       BabelReunited::RateLimiter.stubs(:perform_request_if_allowed).returns(false)
       stub_llm_success
 
-      expect { build_service.call }.to raise_error(BabelReunited::RateLimitError)
+      expect { build_service.call }.to raise_error(
+        BabelReunited::RateLimitError,
+        "Local rate limit exceeded",
+      )
     end
   end
 
@@ -250,15 +253,22 @@ RSpec.describe BabelReunited::TranslationService do
 
       request_body = nil
       stub_request(:post, "https://api.openai.com/v1/chat/completions")
-        .with { |req| request_body = req.body; true }
+        .with do |req|
+          request_body = req.body
+          true
+        end
         .to_return(
           status: 200,
           body: {
             choices: [{ message: { content: "Hola\n#{token_key}\nMundo" } }],
             model: "gpt-4o",
-            usage: { total_tokens: 50 },
+            usage: {
+              total_tokens: 50,
+            },
           }.to_json,
-          headers: { "Content-Type" => "application/json" },
+          headers: {
+            "Content-Type" => "application/json",
+          },
         )
 
       # Stub MarkdownProtector.new to return the same instance with same salt
