@@ -5,6 +5,39 @@ require "digest/sha2"
 class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
   LOCK_TTL = 300 # 5 minutes
 
+  sidekiq_options retry: 5
+
+  sidekiq_retry_in do |count, exception|
+    case exception.wrapped
+    when BabelReunited::RateLimitError
+      (count + 1) * 30 + rand(15)
+    end
+  end
+
+  sidekiq_retries_exhausted do |msg|
+    args = msg["args"]&.first || {}
+    post_id = args["post_id"]
+    target_language = args["target_language"]
+
+    if post_id && target_language
+      translation = ::BabelReunited::PostTranslation.find_translation(post_id, target_language)
+      if translation
+        translation.update!(
+          status: "failed",
+          metadata:
+            (translation.metadata || {}).merge(
+              error: "Translation failed after all retries",
+              failed_at: Time.current,
+            ),
+        )
+      end
+    end
+
+    Rails.logger.error(
+      "Translation job exhausted retries for post #{post_id} (#{target_language}): #{msg["error_message"]}",
+    )
+  end
+
   def execute(args)
     post_id = args[:post_id]
     target_language = args[:target_language]
@@ -51,6 +84,8 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
         handle_failure(result, post_id, target_language, translation, processing_time)
       end
     end
+  rescue BabelReunited::RateLimitError
+    raise
   rescue => e
     handle_unexpected_error(e, args[:post_id], args[:target_language])
   end
