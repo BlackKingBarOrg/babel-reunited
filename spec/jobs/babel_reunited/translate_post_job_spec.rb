@@ -226,6 +226,32 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
     end
   end
 
+  describe "rate limit retry" do
+    before do
+      BabelReunited::TranslationService
+        .any_instance
+        .stubs(:call)
+        .raises(BabelReunited::RateLimitError.new("Rate limit exceeded"))
+    end
+
+    it "raises RateLimitError for Sidekiq retry" do
+      BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
+
+      expect {
+        described_class.new.execute(post_id: post_record.id, target_language: "es")
+      }.to raise_error(BabelReunited::RateLimitError)
+    end
+
+    it "does not mark translation as failed" do
+      BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
+
+      described_class.new.execute(post_id: post_record.id, target_language: "es") rescue nil
+
+      translation = BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      expect(translation.status).not_to eq("failed")
+    end
+  end
+
   describe "unexpected exceptions" do
     before do
       BabelReunited::TranslationService

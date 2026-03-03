@@ -124,13 +124,14 @@ RSpec.describe BabelReunited::TranslationService do
   end
 
   describe "rate limiting" do
-    it "returns error when rate limit exceeded" do
+    it "raises RateLimitError when rate limit exceeded" do
       BabelReunited::RateLimiter.stubs(:perform_request_if_allowed).returns(false)
       stub_llm_success
 
-      result = build_service.call
-      expect(result.failure?).to be true
-      expect(result.error).to include("Local rate limit exceeded")
+      expect { build_service.call }.to raise_error(
+        BabelReunited::RateLimitError,
+        "Local rate limit exceeded",
+      )
     end
   end
 
