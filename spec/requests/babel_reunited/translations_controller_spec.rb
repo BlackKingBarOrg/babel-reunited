@@ -187,6 +187,37 @@ RSpec.describe BabelReunited::TranslationsController do
       ).to be true
     end
 
+    it "returns 403 for non-whitelisted category" do
+      blocked_category = Fabricate(:category)
+      topic_in_blocked = Fabricate(:topic, user: user, category: blocked_category)
+      blocked_post = Fabricate(:post, topic: topic_in_blocked, user: user)
+
+      allowed_category = Fabricate(:category)
+      SiteSetting.babel_reunited_enabled_categories = allowed_category.id.to_s
+
+      post "/babel-reunited/posts/#{blocked_post.id}/translations.json",
+           params: {
+             target_language: "es",
+           }
+
+      expect(response.status).to eq(403)
+    end
+
+    it "succeeds for whitelisted category" do
+      allowed_category = Fabricate(:category)
+      topic_in_allowed = Fabricate(:topic, user: user, category: allowed_category)
+      allowed_post = Fabricate(:post, topic: topic_in_allowed, user: user)
+
+      SiteSetting.babel_reunited_enabled_categories = allowed_category.id.to_s
+
+      post "/babel-reunited/posts/#{allowed_post.id}/translations.json",
+           params: {
+             target_language: "es",
+           }
+
+      expect(response.status).to eq(200)
+    end
+
     it "rate limits translation requests" do
       RateLimiter
         .any_instance

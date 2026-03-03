@@ -5,8 +5,11 @@ en:
         babel_reunited: "Babel Reunited"
   babel_reunited:
     title: "Babel Reunited"
+    errors:
+      category_not_enabled: "Translation is not enabled for this category."
   site_settings:
     babel_reunited_enabled: "Enable Babel Reunited plugin"
+    babel_reunited_enabled_categories: "Only translate posts in these categories. Leave empty to translate in all categories."
     babel_reunited_preset_model: "Select preset model"
     babel_reunited_auto_translate_languages: "Auto-translate to languages (comma-separated language codes)"
     

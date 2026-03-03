@@ -334,6 +334,168 @@ RSpec.describe BabelReunited do
     end
   end
 
+  describe "category whitelist" do
+    fab!(:allowed_category) { Fabricate(:category) }
+    fab!(:blocked_category) { Fabricate(:category) }
+
+    describe ".translation_enabled_for_category?" do
+      it "returns true when setting is blank" do
+        SiteSetting.babel_reunited_enabled_categories = ""
+        expect(BabelReunited.translation_enabled_for_category?(allowed_category.id)).to be true
+      end
+
+      it "returns true when category is in the whitelist" do
+        SiteSetting.babel_reunited_enabled_categories = allowed_category.id.to_s
+        expect(BabelReunited.translation_enabled_for_category?(allowed_category.id)).to be true
+      end
+
+      it "returns false when category is not in the whitelist" do
+        SiteSetting.babel_reunited_enabled_categories = allowed_category.id.to_s
+        expect(BabelReunited.translation_enabled_for_category?(blocked_category.id)).to be false
+      end
+
+      it "returns false when category_id is nil and whitelist is set" do
+        SiteSetting.babel_reunited_enabled_categories = allowed_category.id.to_s
+        expect(BabelReunited.translation_enabled_for_category?(nil)).to be false
+      end
+    end
+
+    describe "post_created event with category whitelist" do
+      it "does not enqueue jobs for non-whitelisted category" do
+        topic_in_blocked = Fabricate(:topic, user: user, category: blocked_category)
+        new_post = Fabricate(:post, topic: topic_in_blocked, user: user)
+
+        SiteSetting.babel_reunited_enabled_categories = allowed_category.id.to_s
+
+        DiscourseEvent.trigger(:post_created, new_post)
+
+        expect(
+          job_enqueued?(
+            job: Jobs::BabelReunited::TranslatePostJob,
+            args: {
+              post_id: new_post.id,
+              target_language: "zh-cn",
+            },
+          ),
+        ).to be false
+      end
+
+      it "enqueues jobs for whitelisted category" do
+        topic_in_allowed = Fabricate(:topic, user: user, category: allowed_category)
+        new_post = Fabricate(:post, topic: topic_in_allowed, user: user)
+
+        SiteSetting.babel_reunited_enabled_categories = allowed_category.id.to_s
+
+        DiscourseEvent.trigger(:post_created, new_post)
+
+        %w[zh-cn en es].each do |lang|
+          expect(
+            job_enqueued?(
+              job: Jobs::BabelReunited::TranslatePostJob,
+              args: {
+                post_id: new_post.id,
+                target_language: lang,
+              },
+            ),
+          ).to be true
+        end
+      end
+    end
+
+    describe "post_edited event with category whitelist" do
+      it "does not enqueue jobs for non-whitelisted category" do
+        topic_in_blocked = Fabricate(:topic, user: user, category: blocked_category)
+        blocked_post = Fabricate(:post, topic: topic_in_blocked, user: user)
+
+        SiteSetting.babel_reunited_enabled_categories = allowed_category.id.to_s
+
+        revisor = OpenStruct.new(topic_diff: {})
+        DiscourseEvent.trigger(:post_edited, blocked_post, false, revisor)
+
+        expect(
+          job_enqueued?(
+            job: Jobs::BabelReunited::TranslatePostJob,
+            args: {
+              post_id: blocked_post.id,
+              target_language: "zh-cn",
+            },
+          ),
+        ).to be false
+      end
+    end
+
+    describe "show_translation_button with category whitelist" do
+      let(:guardian) { Guardian.new(user) }
+
+      it "returns false for non-whitelisted category" do
+        topic_in_blocked = Fabricate(:topic, user: user, category: blocked_category)
+        blocked_post = Fabricate(:post, topic: topic_in_blocked, user: user)
+
+        SiteSetting.babel_reunited_enabled_categories = allowed_category.id.to_s
+
+        json = PostSerializer.new(blocked_post, scope: guardian, root: false).as_json
+        expect(json[:show_translation_button]).to be false
+      end
+
+      it "returns true for whitelisted category" do
+        topic_in_allowed = Fabricate(:topic, user: user, category: allowed_category)
+        allowed_post = Fabricate(:post, topic: topic_in_allowed, user: user)
+
+        SiteSetting.babel_reunited_enabled_categories = allowed_category.id.to_s
+
+        json = PostSerializer.new(allowed_post, scope: guardian, root: false).as_json
+        expect(json[:show_translation_button]).to be true
+      end
+    end
+
+    describe "babel_translated_title with category whitelist" do
+      let(:guardian) { Guardian.new(user) }
+
+      before do
+        Fabricate(:user_preferred_language, user: user, language: "es", enabled: true)
+      end
+
+      it "returns nil for non-whitelisted category in topic_view" do
+        topic_in_blocked = Fabricate(:topic, user: user, category: blocked_category)
+        blocked_post =
+          Fabricate(:post, topic: topic_in_blocked, user: user, post_number: 1)
+        topic_in_blocked.update!(first_post: blocked_post)
+        Fabricate(
+          :post_translation,
+          post: blocked_post,
+          language: "es",
+          translated_title: "Titulo bloqueado",
+          status: "completed",
+        )
+
+        SiteSetting.babel_reunited_enabled_categories = allowed_category.id.to_s
+
+        topic_view = TopicView.new(topic_in_blocked.id, user)
+        json = TopicViewSerializer.new(topic_view, scope: guardian, root: false).as_json
+        expect(json[:babel_translated_title]).to be_nil
+      end
+
+      it "returns nil for non-whitelisted category in topic_list_item" do
+        topic_in_blocked = Fabricate(:topic, user: user, category: blocked_category)
+        blocked_post =
+          Fabricate(:post, topic: topic_in_blocked, user: user, post_number: 1)
+        topic_in_blocked.update!(first_post: blocked_post)
+        Fabricate(
+          :post_translation,
+          post: blocked_post,
+          language: "es",
+          translated_title: "Titulo bloqueado",
+          status: "completed",
+        )
+
+        SiteSetting.babel_reunited_enabled_categories = allowed_category.id.to_s
+
+        json = TopicListItemSerializer.new(topic_in_blocked, scope: guardian, root: false).as_json
+        expect(json[:babel_translated_title]).to be_nil
+      end
+    end
+  end
+
   describe "BabelReunited module methods" do
     describe ".preferred_language_for" do
       it "returns language when user has enabled preference" do

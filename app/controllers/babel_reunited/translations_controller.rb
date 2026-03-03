@@ -20,6 +20,14 @@ module BabelReunited
     end
 
     def create
+      unless BabelReunited.translation_enabled_for_post?(@post)
+        raise Discourse::InvalidAccess.new(
+                nil,
+                nil,
+                custom_message: "babel_reunited.errors.category_not_enabled",
+              )
+      end
+
       target_language = params[:target_language]&.downcase
       force_update = ActiveModel::Type::Boolean.new.cast(params[:force_update]) || false
 

@@ -94,6 +94,16 @@ export default class LanguageTabsConnector extends Component {
     return this.currentUser?.preferred_language_enabled === false;
   }
 
+  get translationEnabledForCategory() {
+    const allowedRaw = this.siteSettings.babel_reunited_enabled_categories;
+    if (!allowedRaw) {
+      return true;
+    }
+    const allowedIds = allowedRaw.split("|").map(Number);
+    const categoryId = this.post?.topic?.category_id ?? this.post?.category_id;
+    return categoryId ? allowedIds.includes(categoryId) : false;
+  }
+
   initializePreferredLanguage() {
     if (this.isAiTranslationDisabled) {
       this.currentLanguage = "original";
@@ -228,7 +238,7 @@ export default class LanguageTabsConnector extends Component {
       <div class="babel-reunited-disabled-notice">
         {{i18n "babel_reunited.language_tabs.disabled_by_user"}}
       </div>
-    {{else}}
+    {{else if this.translationEnabledForCategory}}
       <div class="ai-language-tabs">
         <button
           class={{concatClass

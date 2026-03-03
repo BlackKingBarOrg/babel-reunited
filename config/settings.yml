@@ -3,6 +3,11 @@ babel_reunited:
     default: false
     client: true
 
+  babel_reunited_enabled_categories:
+    type: category_list
+    default: ""
+    client: true
+
   babel_reunited_preset_model:
     type: enum
     default: "gpt-4o"

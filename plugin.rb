@@ -39,6 +39,18 @@ module ::BabelReunited
     legacy&.language.presence
   end
 
+  def self.translation_enabled_for_category?(category_id)
+    allowed = SiteSetting.babel_reunited_enabled_categories
+    return true if allowed.blank?
+    return false if category_id.nil?
+
+    allowed.split("|").include?(category_id.to_s)
+  end
+
+  def self.translation_enabled_for_post?(post)
+    translation_enabled_for_category?(post.topic&.category_id)
+  end
+
   def self.enqueue_translation_jobs(post, target_languages, force_update: false)
     return if target_languages.blank?
 
@@ -178,6 +190,8 @@ after_initialize do
   end
 
   add_to_serializer(:post, :show_translation_widget, include_condition: plugin_enabled_condition) do
+    next false unless BabelReunited.translation_enabled_for_post?(object)
+
     preloaded = BabelReunited.preloaded_all_translations(object)
     if preloaded
       preloaded.any?
@@ -187,7 +201,7 @@ after_initialize do
   end
 
   add_to_serializer(:post, :show_translation_button, include_condition: plugin_enabled_condition) do
-    true
+    BabelReunited.translation_enabled_for_post?(object)
   end
 
   add_to_serializer(
@@ -223,6 +237,8 @@ after_initialize do
     :babel_translated_title,
     include_condition: translated_title_condition,
   ) do
+    return nil unless BabelReunited.translation_enabled_for_category?(object.topic&.category_id)
+
     language = BabelReunited.preferred_language_for(scope&.user)
     return nil unless language
 
@@ -234,6 +250,8 @@ after_initialize do
     :babel_translated_title,
     include_condition: translated_title_condition,
   ) do
+    return nil unless BabelReunited.translation_enabled_for_category?(object.category_id)
+
     language = BabelReunited.preferred_language_for(scope&.user)
     return nil unless language
 
@@ -245,6 +263,8 @@ after_initialize do
     :babel_translated_title,
     include_condition: translated_title_condition,
   ) do
+    return nil unless BabelReunited.translation_enabled_for_category?(object.category_id)
+
     language = BabelReunited.preferred_language_for(scope&.user)
     return nil unless language
 
@@ -278,6 +298,7 @@ after_initialize do
   on(:post_created) do |post|
     next unless SiteSetting.babel_reunited_enabled
     next if post.raw.blank?
+    next unless BabelReunited.translation_enabled_for_post?(post)
 
     auto_translate_languages = SiteSetting.babel_reunited_auto_translate_languages
     if auto_translate_languages.present?
@@ -294,6 +315,7 @@ after_initialize do
   on(:post_edited) do |post|
     next unless SiteSetting.babel_reunited_enabled
     next if post.raw.blank?
+    next unless BabelReunited.translation_enabled_for_post?(post)
 
     existing_languages = post.post_translations.pluck(:language)
 
