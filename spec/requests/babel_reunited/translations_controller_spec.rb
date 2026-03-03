@@ -187,7 +187,7 @@ RSpec.describe BabelReunited::TranslationsController do
       ).to be true
     end
 
-    it "returns 403 for non-whitelisted category" do
+    it "returns 403 for non-whitelisted category and does not enqueue job" do
       blocked_category = Fabricate(:category)
       topic_in_blocked = Fabricate(:topic, user: user, category: blocked_category)
       blocked_post = Fabricate(:post, topic: topic_in_blocked, user: user)
@@ -201,6 +201,15 @@ RSpec.describe BabelReunited::TranslationsController do
            }
 
       expect(response.status).to eq(403)
+      expect(
+        job_enqueued?(
+          job: Jobs::BabelReunited::TranslatePostJob,
+          args: {
+            post_id: blocked_post.id,
+            target_language: "es",
+          },
+        ),
+      ).to be false
     end
 
     it "succeeds for whitelisted category" do
