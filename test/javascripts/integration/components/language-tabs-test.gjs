@@ -322,5 +322,36 @@ module(
       await click(".ai-language-tabs button:nth-child(4)");
       assert.dom(".cooked").hasText("Traducción en español");
     });
+
+    test("hides tabs when category is not in whitelist", async function (assert) {
+      this.siteSettings.babel_reunited_enabled_categories = "99";
+      this.set("post", createPost({ topic: { category_id: 42 } }));
+      await render(
+        <template><LanguageTabsConnector @post={{this.post}} /></template>
+      );
+
+      assert.dom(".ai-language-tabs").doesNotExist();
+      assert.dom(".cooked").hasText("Original cooked content");
+    });
+
+    test("shows tabs when category is in whitelist", async function (assert) {
+      this.siteSettings.babel_reunited_enabled_categories = "42";
+      this.set("post", createPost({ topic: { category_id: 42 } }));
+      await render(
+        <template><LanguageTabsConnector @post={{this.post}} /></template>
+      );
+
+      assert.dom(".ai-language-tabs").exists();
+    });
+
+    test("shows tabs when whitelist is empty", async function (assert) {
+      this.siteSettings.babel_reunited_enabled_categories = "";
+      this.set("post", createPost());
+      await render(
+        <template><LanguageTabsConnector @post={{this.post}} /></template>
+      );
+
+      assert.dom(".ai-language-tabs").exists();
+    });
   }
 );

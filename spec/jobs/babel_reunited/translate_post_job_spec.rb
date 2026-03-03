@@ -65,6 +65,19 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
         described_class.new.execute(post_id: post_record.id, target_language: "es")
       }.not_to raise_error
     end
+
+    it "skips posts in non-whitelisted categories" do
+      blocked_category = Fabricate(:category)
+      topic_in_blocked = Fabricate(:topic, user: user, category: blocked_category)
+      blocked_post = Fabricate(:post, topic: topic_in_blocked, user: user)
+
+      allowed_category = Fabricate(:category)
+      SiteSetting.babel_reunited_enabled_categories = allowed_category.id.to_s
+
+      BabelReunited::TranslationService.any_instance.expects(:call).never
+
+      described_class.new.execute(post_id: blocked_post.id, target_language: "es")
+    end
   end
 
   describe "Redis lock" do

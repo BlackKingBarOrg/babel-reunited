@@ -89,6 +89,10 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
       log_skipped(post_id, target_language, "post_deleted_or_hidden")
       return nil
     end
+    unless BabelReunited.translation_enabled_for_post?(post)
+      log_skipped(post_id, target_language, "category_not_enabled")
+      return nil
+    end
     post
   end
 
