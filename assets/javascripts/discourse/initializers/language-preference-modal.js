@@ -11,14 +11,15 @@ export default {
 
       const modal = api.container.lookup("service:modal");
       const messageBus = api.container.lookup("service:message-bus");
-      if (!modal || !messageBus) {
+      const siteSettings = api.container.lookup("service:site-settings");
+      const router = api.container.lookup("service:router");
+      if (!modal || !messageBus || !siteSettings || !router) {
         return;
       }
 
       let pendingModalTimeoutId = null;
 
       const isInEnabledCategory = () => {
-        const siteSettings = api.container.lookup("service:site-settings");
         const enabledCategories =
           siteSettings.babel_reunited_enabled_categories;
         if (!enabledCategories) {
@@ -26,7 +27,6 @@ export default {
         }
 
         const allowedIds = enabledCategories.split("|").map(Number);
-        const router = api.container.lookup("service:router");
         let route = router.currentRoute;
         while (route) {
           const attrs = route.attributes;
