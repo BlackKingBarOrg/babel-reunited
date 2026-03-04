@@ -31,9 +31,21 @@ namespace :babel_reunited do
     posts_with_translations = BabelReunited::PostTranslation.select(:post_id).distinct
     posts_without_translations =
       Post
+        .joins(:topic)
         .where.not(id: posts_with_translations)
-        .where("raw IS NOT NULL AND raw != ''")
-        .where(deleted_at: nil)
+        .where("posts.raw IS NOT NULL AND posts.raw != ''")
+        .where(posts: { deleted_at: nil })
+
+    enabled_categories = SiteSetting.babel_reunited_enabled_categories
+    if enabled_categories.present?
+      category_ids = enabled_categories.split("|").map(&:to_i)
+      posts_without_translations =
+        posts_without_translations.where(topics: { category_id: category_ids })
+      puts "Filtering by enabled categories: #{category_ids.join(", ")}"
+    else
+      puts "No category restriction (all categories)"
+    end
+    puts ""
 
     total_count = posts_without_translations.count
     puts "Found #{total_count} posts without any translations"
@@ -64,7 +76,9 @@ namespace :babel_reunited do
       puts "Processing posts and queueing translation jobs..."
       posts_without_translations.find_each do |post|
         begin
-          languages.each { |language| BabelReunited::PostTranslation.create_or_update_record(post.id, language) }
+          languages.each do |language|
+            BabelReunited::PostTranslation.create_or_update_record(post.id, language)
+          end
           BabelReunited.enqueue_translation_jobs(post, languages)
           processed += 1
 
