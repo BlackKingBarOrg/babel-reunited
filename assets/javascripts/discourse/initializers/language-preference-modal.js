@@ -17,6 +17,32 @@ export default {
 
       let pendingModalTimeoutId = null;
 
+      const isInEnabledCategory = () => {
+        const siteSettings = api.container.lookup("service:site-settings");
+        const enabledCategories =
+          siteSettings.babel_reunited_enabled_categories;
+        if (!enabledCategories) {
+          return true;
+        }
+
+        const allowedIds = enabledCategories.split("|").map(Number);
+        const router = api.container.lookup("service:router");
+        let route = router.currentRoute;
+        while (route) {
+          const attrs = route.attributes;
+          if (attrs) {
+            if (attrs.category?.id !== undefined) {
+              return allowedIds.includes(attrs.category.id);
+            }
+            if (attrs.category_id !== undefined) {
+              return allowedIds.includes(attrs.category_id);
+            }
+          }
+          route = route.parent;
+        }
+        return false;
+      };
+
       const scheduleModalShow = () => {
         if (
           currentUser.preferred_language_enabled === false ||
@@ -26,6 +52,10 @@ export default {
         }
 
         if (localStorage.getItem("language_preference_modal_shown")) {
+          return;
+        }
+
+        if (!isInEnabledCategory()) {
           return;
         }
 
