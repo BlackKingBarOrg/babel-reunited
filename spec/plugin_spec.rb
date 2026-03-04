@@ -164,6 +164,54 @@ RSpec.describe BabelReunited do
     end
   end
 
+  describe "category_created event" do
+    fab!(:category_with_definition)
+
+    it "enqueues translation jobs for the category definition post" do
+      first_post = category_with_definition.topic.first_post
+
+      DiscourseEvent.trigger(:category_created, category_with_definition)
+
+      %w[zh-cn en es].each do |lang|
+        expect(
+          job_enqueued?(
+            job: Jobs::BabelReunited::TranslatePostJob,
+            args: {
+              post_id: first_post.id,
+              target_language: lang,
+            },
+          ),
+        ).to be true
+      end
+
+      %w[zh-cn en es].each do |lang|
+        translation = BabelReunited::PostTranslation.find_translation(first_post.id, lang)
+        expect(translation).to be_present
+        expect(translation.status).to eq("translating")
+      end
+    end
+
+    it "does nothing when plugin is disabled" do
+      SiteSetting.babel_reunited_enabled = false
+      first_post = category_with_definition.topic.first_post
+
+      DiscourseEvent.trigger(:category_created, category_with_definition)
+
+      expect(BabelReunited::PostTranslation.where(post_id: first_post.id).count).to eq(0)
+    end
+
+    it "does not trigger when category is not in enabled_categories" do
+      other_category = Fabricate(:category)
+      SiteSetting.babel_reunited_enabled_categories = other_category.id.to_s
+
+      first_post = category_with_definition.topic.first_post
+
+      DiscourseEvent.trigger(:category_created, category_with_definition)
+
+      expect(BabelReunited::PostTranslation.where(post_id: first_post.id).count).to eq(0)
+    end
+  end
+
   describe "user_logged_in event" do
     it "publishes MessageBus prompt for users without preference" do
       messages =

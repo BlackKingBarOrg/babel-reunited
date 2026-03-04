@@ -119,6 +119,36 @@ module ::BabelReunited
   def self.preloaded_all_translations(post)
     post.instance_variable_get(:@babel_reunited_all_translations)
   end
+
+  def self.auto_translate_languages
+    raw = SiteSetting.babel_reunited_auto_translate_languages
+    return [] if raw.blank?
+    raw.split(",").map(&:strip).reject(&:blank?)
+  end
+
+  def self.trigger_auto_translation(post)
+    return unless SiteSetting.babel_reunited_enabled
+    return if post.blank? || post.raw.blank?
+    return unless translation_enabled_for_post?(post)
+
+    languages = auto_translate_languages
+    return if languages.empty?
+
+    languages.each { |language| PostTranslation.create_or_update_record(post.id, language) }
+    enqueue_translation_jobs(post, languages)
+  end
+
+  def self.trigger_retranslation(post)
+    return unless SiteSetting.babel_reunited_enabled
+    return if post.blank? || post.raw.blank?
+    return unless translation_enabled_for_post?(post)
+
+    languages = (post.post_translations.pluck(:language) + auto_translate_languages).uniq
+    return if languages.empty?
+
+    languages.each { |language| PostTranslation.create_or_update_record(post.id, language) }
+    enqueue_translation_jobs(post, languages, force_update: true)
+  end
 end
 
 require_relative "lib/babel_reunited/engine"
@@ -295,47 +325,12 @@ after_initialize do
   end
 
   # Event handlers for automatic translation
-  on(:post_created) do |post|
-    next unless SiteSetting.babel_reunited_enabled
-    next if post.raw.blank?
-    next unless BabelReunited.translation_enabled_for_post?(post)
+  on(:post_created) { |post| BabelReunited.trigger_auto_translation(post) }
 
-    auto_translate_languages = SiteSetting.babel_reunited_auto_translate_languages
-    if auto_translate_languages.present?
-      languages = auto_translate_languages.split(",").map(&:strip)
+  on(:post_edited) { |post| BabelReunited.trigger_retranslation(post) }
 
-      languages.each do |language|
-        BabelReunited::PostTranslation.create_or_update_record(post.id, language)
-      end
-
-      BabelReunited.enqueue_translation_jobs(post, languages)
-    end
-  end
-
-  on(:post_edited) do |post|
-    next unless SiteSetting.babel_reunited_enabled
-    next if post.raw.blank?
-    next unless BabelReunited.translation_enabled_for_post?(post)
-
-    existing_languages = post.post_translations.pluck(:language)
-
-    auto_translate_languages = SiteSetting.babel_reunited_auto_translate_languages
-    target_languages =
-      if auto_translate_languages.present?
-        auto_translate_languages.split(",").map(&:strip)
-      else
-        []
-      end
-
-    languages_to_translate = (existing_languages + target_languages).uniq
-
-    if languages_to_translate.any?
-      languages_to_translate.each do |language|
-        BabelReunited::PostTranslation.create_or_update_record(post.id, language)
-      end
-
-      BabelReunited.enqueue_translation_jobs(post, languages_to_translate, force_update: true)
-    end
+  on(:category_created) do |category|
+    BabelReunited.trigger_auto_translation(category.topic&.first_post)
   end
 
   # User login event handler for language preference prompt
