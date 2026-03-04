@@ -110,6 +110,10 @@ export default class LanguageTabsConnector extends Component {
       return;
     }
 
+    if (!this.translationEnabledForCategory) {
+      return;
+    }
+
     if (!this.currentUser?.preferred_language) {
       return;
     }
