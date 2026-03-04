@@ -15,7 +15,7 @@ en:
         start_translation: "Click to start translation for %{language}"
         languages:
           en: "English"
-          zh-cn: "中文"
+          zh-cn: "简体中文"
           es: "Español"
       preferences:
         ai_translation_language: "AI Translation Language"

@@ -31,7 +31,7 @@ babel_reunited:
     client: true
 
   babel_reunited_auto_translate_languages:
-    default: "zh-cn,en,es"
+    default: "en,zh-cn,es"
     client: true
 
   # API Keys for different providers
@@ -88,6 +88,10 @@ babel_reunited:
 
   babel_reunited_translate_title:
     default: true
+    client: true
+
+  babel_reunited_modal_description:
+    default: ""
     client: true
 
   babel_reunited_request_timeout_seconds:

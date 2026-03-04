@@ -8,6 +8,15 @@ zh_CN:
     title: "Babel Reunited"
   js:
     babel_reunited:
+      language_tabs:
+        disabled_by_user: "用户已禁用AI翻译"
+        original: "原文"
+        switch_to: "切换到 %{language}"
+        start_translation: "点击开始 %{language} 翻译"
+        languages:
+          en: "English"
+          zh-cn: "简体中文"
+          es: "Español"
       preferences:
         ai_translation_language: "AI翻译语言"
         ai_translation_language_description: "选择您偏好的AI翻译语言。当帖子有该语言的翻译时，将自动显示翻译版本。"

@@ -4,6 +4,7 @@ import { concat, fn } from "@ember/helper";
 import { on } from "@ember/modifier";
 import { action } from "@ember/object";
 import { service } from "@ember/service";
+import { htmlSafe } from "@ember/template";
 import DModal from "discourse/components/d-modal";
 import { ajax } from "discourse/lib/ajax";
 import { popupAjaxError } from "discourse/lib/ajax-error";
@@ -18,6 +19,13 @@ export default class LanguagePreferenceModal extends Component {
 
   get languages() {
     return getSupportedLanguages(this.siteSettings);
+  }
+
+  get modalDescription() {
+    return htmlSafe(
+      this.siteSettings.babel_reunited_modal_description ||
+        i18n("babel_reunited.language_preference_modal.description")
+    );
   }
 
   @action
@@ -61,21 +69,15 @@ export default class LanguagePreferenceModal extends Component {
     }
   }
 
-  @action
-  skip() {
-    localStorage.setItem("language_preference_modal_shown", "true");
-    this.args.closeModal();
-  }
-
   <template>
     <DModal
       @inline={{@inline}}
-      @closeModal={{this.skip}}
+      @closeModal={{@closeModal}}
       @title={{i18n "babel_reunited.language_preference_modal.title"}}
       class="language-preference-modal"
     >
       <:body>
-        <p>{{i18n "babel_reunited.language_preference_modal.description"}}</p>
+        <p>{{this.modalDescription}}</p>
 
         <div class="language-buttons">
           {{#each this.languages as |lang|}}

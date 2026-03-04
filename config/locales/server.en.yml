@@ -23,6 +23,7 @@ en:
     babel_reunited_custom_max_tokens: "Custom max input tokens"
     babel_reunited_custom_max_output_tokens: "Custom max output tokens"
     
+    babel_reunited_modal_description: "Custom description for the language preference modal. Supports HTML links. Leave empty to use the default."
     babel_reunited_rate_limit_per_minute: "Rate limit per minute"
     babel_reunited_max_content_length: "Maximum content length for translation"
     babel_reunited_preserve_formatting: "Preserve markdown/HTML formatting"
