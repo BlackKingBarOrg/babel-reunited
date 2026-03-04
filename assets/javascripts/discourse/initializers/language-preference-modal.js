@@ -11,11 +11,37 @@ export default {
 
       const modal = api.container.lookup("service:modal");
       const messageBus = api.container.lookup("service:message-bus");
-      if (!modal || !messageBus) {
+      const siteSettings = api.container.lookup("service:site-settings");
+      const router = api.container.lookup("service:router");
+      if (!modal || !messageBus || !siteSettings || !router) {
         return;
       }
 
       let pendingModalTimeoutId = null;
+
+      const isInEnabledCategory = () => {
+        const enabledCategories =
+          siteSettings.babel_reunited_enabled_categories;
+        if (!enabledCategories) {
+          return true;
+        }
+
+        const allowedIds = enabledCategories.split("|").map(Number);
+        let route = router.currentRoute;
+        while (route) {
+          const attrs = route.attributes;
+          if (attrs) {
+            if (attrs.category?.id !== undefined) {
+              return allowedIds.includes(attrs.category.id);
+            }
+            if (attrs.category_id !== undefined) {
+              return allowedIds.includes(attrs.category_id);
+            }
+          }
+          route = route.parent;
+        }
+        return false;
+      };
 
       const scheduleModalShow = () => {
         if (
@@ -26,6 +52,10 @@ export default {
         }
 
         if (localStorage.getItem("language_preference_modal_shown")) {
+          return;
+        }
+
+        if (!isInEnabledCategory()) {
           return;
         }
 
