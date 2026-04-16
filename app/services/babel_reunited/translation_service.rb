@@ -118,7 +118,8 @@ module BabelReunited
       <<~PROMPT.strip
         Translate the following text to #{target_language}.
         Preserve all \u27E6...\u27E7 placeholders exactly as they appear.
-        If the content contains multiple languages, translate all of them to #{target_language}.
+        Translate ALL text to #{target_language}, including quoted passages, link titles, headings, and embedded foreign language fragments. Do not leave any foreign language text untranslated.
+        Keep proper nouns, brand names, product names, and technical terms in their original form (e.g. Google Workspace, CKB Community Fund DAO, Nervos, GitHub, Telegram).
         If the text is already in #{target_language}, return it unchanged.
         Return ONLY the translated text, no explanations or wrapping.
 
@@ -156,6 +157,8 @@ module BabelReunited
         raise BabelReunited::RateLimitError, "Local rate limit exceeded"
       end
 
+      provider = provider_for(api_config)
+
       timeout = SiteSetting.babel_reunited_request_timeout_seconds
       conn =
         Faraday.new(
@@ -178,24 +181,25 @@ module BabelReunited
         max_tokens = [max_tokens_override, api_config[:max_tokens].to_i].min
       end
 
-      request_body = {
-        :model => api_config[:model],
-        :messages => [{ role: "user", content: prompt }],
-        token_param => max_tokens,
-      }
-      request_body[:temperature] = 0.3 if api_config[:supports_temperature] != false
+      request_body =
+        provider.build_request_body(
+          model: api_config[:model],
+          messages: [{ role: "user", content: prompt }],
+          max_tokens: max_tokens,
+          token_param: token_param,
+          supports_temperature: api_config[:supports_temperature],
+        )
 
       response =
-        conn.post("/v1/chat/completions") do |req|
-          req.headers["Authorization"] = "Bearer #{api_config[:api_key]}"
-          req.headers["Content-Type"] = "application/json"
+        conn.post(provider.endpoint_path) do |req|
+          provider.headers(api_config[:api_key]).each { |k, v| req.headers[k] = v }
           req.body = request_body.to_json
         end
 
       log_provider_response(response, api_config)
 
       if response.success?
-        parse_response(response.body)
+        provider.parse_response(response.body)
       else
         handle_api_error(response)
       end
@@ -203,29 +207,6 @@ module BabelReunited
       Rails.logger.error("Network error: #{e.message}")
       log_error(e, "network_error")
       { error: "Network error: #{e.message}" }
-    end
-
-    def parse_response(body)
-      choices = body.dig("choices")
-      return { error: "Invalid response format" } unless choices&.any?
-
-      first_choice = choices.first
-      finish_reason = first_choice.dig("finish_reason")
-
-      if finish_reason == "length"
-        return { error: "Translation truncated (output token limit reached)" }
-      end
-
-      text = first_choice.dig("message", "content")
-      return { error: "No translation in response" } if text.blank?
-
-      {
-        text: text.strip,
-        source_language: "auto",
-        confidence: 0.95,
-        model: body.dig("model"),
-        tokens_used: body.dig("usage", "total_tokens"),
-      }
     end
 
     def get_api_config
@@ -266,6 +247,15 @@ module BabelReunited
       max_output.present? ? max_output.to_i : 32_768
     end
 
+    def provider_for(api_config)
+      case api_config[:provider]
+      when "anthropic"
+        Providers::Anthropic.new
+      else
+        Providers::OpenAiCompatible.new
+      end
+    end
+
     def get_max_content_length(api_config)
       return SiteSetting.babel_reunited_max_content_length if api_config[:provider] == "custom"
 
@@ -303,7 +293,7 @@ module BabelReunited
       when 400
         { error: "Bad request: #{error_message}" }
       when 500..599
-        { error: "OpenAI service temporarily unavailable" }
+        { error: "Translation service temporarily unavailable" }
       else
         { error: "API error: #{error_message}" }
       end
