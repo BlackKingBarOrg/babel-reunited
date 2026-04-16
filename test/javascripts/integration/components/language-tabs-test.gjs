@@ -69,8 +69,8 @@ module(
         <template><LanguageTabsConnector @post={{this.post}} /></template>
       );
 
-      // Button order follows site setting default: zh-cn(2), en(3), es(4)
-      await click(".ai-language-tabs button:nth-child(3)");
+      // Button order follows site setting default: en(2), zh-cn(3), es(4)
+      await click(".ai-language-tabs button:nth-child(2)");
 
       assert.dom(".cooked").hasText("English translation");
     });
@@ -81,7 +81,7 @@ module(
         <template><LanguageTabsConnector @post={{this.post}} /></template>
       );
 
-      await click(".ai-language-tabs button:nth-child(3)");
+      await click(".ai-language-tabs button:nth-child(2)");
       assert.dom(".cooked").hasText("English translation");
 
       await click(".ai-language-tabs button:first-child");

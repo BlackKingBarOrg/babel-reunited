@@ -45,7 +45,7 @@ module(
 
       await click(".language-btn");
 
-      assert.verifySteps(["POST language=zh-cn"]);
+      assert.verifySteps(["POST language=en"]);
       assert.true(modalClosed, "closeModal was called");
     });
 
