@@ -176,6 +176,7 @@ after_initialize do
   require_relative "lib/babel_reunited/translation_logger"
   require_relative "lib/babel_reunited/message_bus_audience"
   require_relative "lib/babel_reunited/markdown_protector"
+  require_relative "lib/babel_reunited/content_splitter"
 
   # Mount the engine routes
   Discourse::Application.routes.append { mount ::BabelReunited::Engine, at: "/babel-reunited" }

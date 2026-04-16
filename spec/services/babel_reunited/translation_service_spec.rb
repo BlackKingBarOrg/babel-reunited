@@ -529,4 +529,213 @@ RSpec.describe BabelReunited::TranslationService do
       expect(result.error).to include("Invalid response format")
     end
   end
+
+  describe "chunked translation" do
+    it "splits long content into multiple chunks and joins results" do
+      long_raw = "Paragraph one.\n\n" + "Paragraph two.\n\n" + "Paragraph three."
+      long_post = Fabricate(:post, topic: topic, user: user, raw: long_raw, post_number: 10)
+
+      SiteSetting.babel_reunited_translate_title = false
+      call_count = 0
+      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return do |_request|
+        call_count += 1
+        {
+          status: 200,
+          body: {
+            choices: [
+              { message: { content: "Translated chunk #{call_count}" }, finish_reason: "stop" },
+            ],
+            model: "gpt-4o",
+            usage: {
+              total_tokens: 50,
+            },
+          }.to_json,
+          headers: {
+            "Content-Type" => "application/json",
+          },
+        }
+      end
+
+      BabelReunited::ContentSplitter.stubs(:split).returns(
+        ["Paragraph one.\n\n", "Paragraph two.\n\n", "Paragraph three."],
+      )
+
+      result = build_service(post: long_post).call
+      expect(result.success?).to be true
+      expect(call_count).to eq(3)
+    end
+
+    it "preserves paragraph boundaries via whitespace extraction" do
+      long_raw = "First para.\n\nSecond para."
+      long_post = Fabricate(:post, topic: topic, user: user, raw: long_raw, post_number: 11)
+
+      SiteSetting.babel_reunited_translate_title = false
+      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return do |request|
+        body = JSON.parse(request.body)
+        prompt = body["messages"].first["content"]
+
+        translated =
+          if prompt.include?("First")
+            "Primer parrafo."
+          else
+            "Segundo parrafo."
+          end
+
+        {
+          status: 200,
+          body: {
+            choices: [{ message: { content: translated }, finish_reason: "stop" }],
+            model: "gpt-4o",
+            usage: {
+              total_tokens: 50,
+            },
+          }.to_json,
+          headers: {
+            "Content-Type" => "application/json",
+          },
+        }
+      end
+
+      BabelReunited::ContentSplitter.stubs(:split).returns(["First para.\n\n", "Second para."])
+
+      result = build_service(post: long_post).call
+      expect(result.success?).to be true
+      expect(result.translated_raw).to eq("Primer parrafo.\n\nSegundo parrafo.")
+    end
+
+    it "rejects posts exceeding MAX_CHUNKS" do
+      long_post = Fabricate(:post, topic: topic, user: user, post_number: 12)
+      long_post.stubs(:raw).returns("text")
+
+      SiteSetting.babel_reunited_translate_title = false
+      chunks = (1..6).map { |i| "Chunk #{i}. " }
+      BabelReunited::ContentSplitter.stubs(:split).returns(chunks)
+
+      result = build_service(post: long_post).call
+      expect(result.failure?).to be true
+      expect(result.error).to include("6 chunks, max 5")
+    end
+
+    it "sums tokens_used across chunks" do
+      long_post = Fabricate(:post, topic: topic, user: user, post_number: 13)
+      long_post.stubs(:raw).returns("text")
+
+      SiteSetting.babel_reunited_translate_title = false
+      call_count = 0
+      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return do |_request|
+        call_count += 1
+        {
+          status: 200,
+          body: {
+            choices: [{ message: { content: "Translated #{call_count}" }, finish_reason: "stop" }],
+            model: "gpt-4o",
+            usage: {
+              total_tokens: 100,
+            },
+          }.to_json,
+          headers: {
+            "Content-Type" => "application/json",
+          },
+        }
+      end
+
+      BabelReunited::ContentSplitter.stubs(:split).returns(%w[chunk1 chunk2])
+
+      result = build_service(post: long_post).call
+      expect(result.success?).to be true
+      expect(result.ai_response[:provider_info][:tokens_used]).to eq(200)
+    end
+
+    it "fails entire translation when one chunk fails" do
+      long_post = Fabricate(:post, topic: topic, user: user, post_number: 14)
+      long_post.stubs(:raw).returns("text")
+
+      SiteSetting.babel_reunited_translate_title = false
+      call_count = 0
+      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return do |_request|
+        call_count += 1
+        if call_count == 2
+          {
+            status: 500,
+            body: { error: "Server error" }.to_json,
+            headers: {
+              "Content-Type" => "application/json",
+            },
+          }
+        else
+          {
+            status: 200,
+            body: {
+              choices: [{ message: { content: "OK" }, finish_reason: "stop" }],
+              model: "gpt-4o",
+              usage: {
+                total_tokens: 50,
+              },
+            }.to_json,
+            headers: {
+              "Content-Type" => "application/json",
+            },
+          }
+        end
+      end
+
+      BabelReunited::ContentSplitter.stubs(:split).returns(%w[chunk1 chunk2 chunk3])
+
+      result = build_service(post: long_post).call
+      expect(result.failure?).to be true
+    end
+
+    it "treats single-chunk content same as before" do
+      stub_llm_success(content: "Hola mundo")
+      SiteSetting.babel_reunited_translate_title = false
+
+      result = build_service.call
+      expect(result.success?).to be true
+      expect(result.translated_raw).to eq("Hola mundo")
+    end
+  end
+
+  describe "finish_reason truncation detection" do
+    it "returns error when finish_reason is length" do
+      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
+        status: 200,
+        body: {
+          choices: [{ message: { content: "Partial translation..." }, finish_reason: "length" }],
+          model: "gpt-4o",
+          usage: {
+            total_tokens: 16_000,
+          },
+        }.to_json,
+        headers: {
+          "Content-Type" => "application/json",
+        },
+      )
+
+      SiteSetting.babel_reunited_translate_title = false
+      result = build_service.call
+      expect(result.failure?).to be true
+      expect(result.error).to include("Translation truncated")
+    end
+
+    it "succeeds when finish_reason is stop" do
+      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
+        status: 200,
+        body: {
+          choices: [{ message: { content: "Complete translation" }, finish_reason: "stop" }],
+          model: "gpt-4o",
+          usage: {
+            total_tokens: 100,
+          },
+        }.to_json,
+        headers: {
+          "Content-Type" => "application/json",
+        },
+      )
+
+      SiteSetting.babel_reunited_translate_title = false
+      result = build_service.call
+      expect(result.success?).to be true
+      expect(result.translated_raw).to eq("Complete translation")
+    end
+  end
 end

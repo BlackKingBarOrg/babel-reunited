@@ -3,7 +3,7 @@
 require "digest/sha2"
 
 class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
-  LOCK_TTL = 300 # 5 minutes
+  LOCK_TTL = 1800 # 30 minutes — covers chunked translation (MAX_CHUNKS * request_timeout)
 
   sidekiq_options retry: 5
 

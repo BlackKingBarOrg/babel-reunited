@@ -5,6 +5,8 @@ require "json"
 
 module BabelReunited
   class TranslationService
+    MAX_CHUNKS = 5
+
     Result =
       Struct.new(
         :translated_raw,
@@ -39,27 +41,48 @@ module BabelReunited
       max_length = get_max_content_length(api_config)
       return Result.new(error: "Content too long for translation") if total_length > max_length
 
-      protector = MarkdownProtector.new(raw)
-      protected_text, tokens = protector.protect
+      chunks = ContentSplitter.split(content: raw, chunk_size: get_chunk_size(api_config))
+      if chunks.size > MAX_CHUNKS
+        return(
+          Result.new(
+            error: "Content too long for translation (#{chunks.size} chunks, max #{MAX_CHUNKS})",
+          )
+        )
+      end
 
-      prompt = build_prompt(protected_text, @target_language)
-      response = make_llm_request(prompt, api_config)
-      return Result.new(error: response[:error]) if response[:error]
+      translated_chunks = []
+      total_tokens_used = 0
 
-      translated_text = strip_llm_wrapper(response[:text])
-      translated_raw = MarkdownProtector.restore(translated_text, tokens)
+      chunks.each do |chunk|
+        trailing_ws = chunk[/\s+\z/] || ""
+        core_chunk = chunk.sub(/\s+\z/, "")
 
+        protector = MarkdownProtector.new(core_chunk)
+        protected_text, tokens = protector.protect
+
+        prompt = build_prompt(protected_text, @target_language)
+        response = make_llm_request(prompt, api_config)
+        return Result.new(error: response[:error]) if response[:error]
+
+        total_tokens_used += response[:tokens_used].to_i
+        translated_text = strip_llm_wrapper(response[:text])
+        restored = MarkdownProtector.restore(translated_text, tokens)
+
+        translated_chunks << (restored + trailing_ws)
+      end
+
+      translated_raw = translated_chunks.join("")
       translated_title = translate_title(title, @target_language, api_config) if title.present?
 
       Result.new(
         translated_raw: translated_raw,
         translated_title: translated_title,
-        source_language: response[:source_language] || "auto",
+        source_language: "auto",
         ai_response: {
-          confidence: response[:confidence] || 0.95,
+          confidence: 0.95,
           provider_info: {
-            model: response[:model] || api_config[:model],
-            tokens_used: response[:tokens_used],
+            model: api_config[:model],
+            tokens_used: total_tokens_used,
             provider: api_config[:provider],
           },
         },
@@ -186,7 +209,14 @@ module BabelReunited
       choices = body.dig("choices")
       return { error: "Invalid response format" } unless choices&.any?
 
-      text = choices.first.dig("message", "content")
+      first_choice = choices.first
+      finish_reason = first_choice.dig("finish_reason")
+
+      if finish_reason == "length"
+        return { error: "Translation truncated (output token limit reached)" }
+      end
+
+      text = first_choice.dig("message", "content")
       return { error: "No translation in response" } if text.blank?
 
       {
@@ -229,6 +259,11 @@ module BabelReunited
         output_token_param: config[:output_token_param] || :max_tokens,
         supports_temperature: config.fetch(:supports_temperature, true),
       }
+    end
+
+    def get_chunk_size(api_config)
+      max_output = api_config[:max_tokens]
+      max_output.present? ? max_output.to_i : 32_768
     end
 
     def get_max_content_length(api_config)
