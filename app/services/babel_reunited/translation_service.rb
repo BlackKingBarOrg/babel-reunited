@@ -147,6 +147,8 @@ module BabelReunited
       response = make_llm_request(prompt, api_config, max_tokens_override: 1024)
       return nil if response[:error]
       response[:text]&.strip
+    rescue BabelReunited::RateLimitError
+      raise
     rescue => e
       Rails.logger.warn("Title translation failed: #{e.message}")
       nil

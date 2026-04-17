@@ -133,6 +133,17 @@ RSpec.describe BabelReunited::TranslationService do
         "Local rate limit exceeded",
       )
     end
+
+    it "re-raises RateLimitError from title translation so Sidekiq can retry" do
+      # Body chunk passes, title request trips rate limit
+      BabelReunited::RateLimiter.stubs(:perform_request_if_allowed).returns(true, false)
+      stub_llm_success
+
+      expect { build_service.call }.to raise_error(
+        BabelReunited::RateLimitError,
+        "Local rate limit exceeded",
+      )
+    end
   end
 
   describe "content length check" do
