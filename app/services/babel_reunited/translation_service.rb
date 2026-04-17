@@ -118,7 +118,7 @@ module BabelReunited
       <<~PROMPT.strip
         Translate the following text to #{target_language}.
         Preserve all \u27E6...\u27E7 placeholders exactly as they appear.
-        Translate ALL text to #{target_language}, including quoted passages, link titles, headings, and embedded foreign language fragments. Do not leave any foreign language text untranslated.
+        Translate ALL natural-language text to #{target_language}, including link titles, headings, markdown-style blockquotes (lines starting with >), and embedded foreign language fragments. Do not leave any foreign language text untranslated.
         Keep proper nouns, brand names, product names, and technical terms in their original form (e.g. Google Workspace, CKB Community Fund DAO, Nervos, GitHub, Telegram).
         If the text is already in #{target_language}, return it unchanged.
         Return ONLY the translated text, no explanations or wrapping.
