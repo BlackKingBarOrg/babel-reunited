@@ -27,6 +27,9 @@ babel_reunited:
       - grok-2
       - deepseek-r1
       - deepseek-v3
+      - claude-opus-4-7
+      - claude-sonnet-4-6
+      - claude-haiku-4-5
       - custom
     client: true
 
@@ -44,6 +47,10 @@ babel_reunited:
     secret: true
 
   babel_reunited_deepseek_api_key:
+    default: ""
+    secret: true
+
+  babel_reunited_anthropic_api_key:
     default: ""
     secret: true
 

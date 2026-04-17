@@ -168,6 +168,38 @@ module BabelReunited
         description: "DeepSeek general conversation model, cost-effective",
         tier: "Medium",
       },
+      # Anthropic Models
+      "claude-opus-4-7" => {
+        provider: "anthropic",
+        model_name: "claude-opus-4-7",
+        base_url: "https://api.anthropic.com",
+        max_tokens: 1_000_000,
+        max_output_tokens: 32_000,
+        supports_temperature: false,
+        api_key_setting: :babel_reunited_anthropic_api_key,
+        description: "Anthropic Claude Opus 4.7, 1M context, strongest quality",
+        tier: "High",
+      },
+      "claude-sonnet-4-6" => {
+        provider: "anthropic",
+        model_name: "claude-sonnet-4-6",
+        base_url: "https://api.anthropic.com",
+        max_tokens: 200_000,
+        max_output_tokens: 16_000,
+        api_key_setting: :babel_reunited_anthropic_api_key,
+        description: "Anthropic Claude Sonnet 4.6, balanced performance and cost",
+        tier: "Medium",
+      },
+      "claude-haiku-4-5" => {
+        provider: "anthropic",
+        model_name: "claude-haiku-4-5-20251001",
+        base_url: "https://api.anthropic.com",
+        max_tokens: 200_000,
+        max_output_tokens: 8_192,
+        api_key_setting: :babel_reunited_anthropic_api_key,
+        description: "Anthropic Claude Haiku 4.5, fast and cost-effective",
+        tier: "Low",
+      },
     }.freeze
 
     def self.get_config

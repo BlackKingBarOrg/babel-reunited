@@ -738,4 +738,98 @@ RSpec.describe BabelReunited::TranslationService do
       expect(result.translated_raw).to eq("Complete translation")
     end
   end
+
+  describe "Anthropic provider integration" do
+    before do
+      SiteSetting.babel_reunited_anthropic_api_key = "sk-ant-test-key"
+      SiteSetting.babel_reunited_preset_model = "claude-sonnet-4-6"
+      SiteSetting.babel_reunited_translate_title = false
+    end
+
+    def stub_anthropic_success(content: "Hola mundo")
+      stub_request(:post, "https://api.anthropic.com/v1/messages").to_return(
+        status: 200,
+        body: {
+          content: [{ type: "text", text: content }],
+          model: "claude-sonnet-4-6",
+          stop_reason: "end_turn",
+          usage: {
+            input_tokens: 50,
+            output_tokens: 60,
+          },
+        }.to_json,
+        headers: {
+          "Content-Type" => "application/json",
+        },
+      )
+    end
+
+    it "sends request to /v1/messages with x-api-key header" do
+      request_headers = nil
+      stub_request(:post, "https://api.anthropic.com/v1/messages")
+        .with do |req|
+          request_headers = req.headers
+          true
+        end
+        .to_return(
+          status: 200,
+          body: {
+            content: [{ type: "text", text: "Hola" }],
+            model: "claude-sonnet-4-6",
+            stop_reason: "end_turn",
+            usage: {
+              input_tokens: 10,
+              output_tokens: 10,
+            },
+          }.to_json,
+          headers: {
+            "Content-Type" => "application/json",
+          },
+        )
+
+      result = build_service.call
+      expect(result.success?).to be true
+      expect(request_headers["X-Api-Key"]).to eq("sk-ant-test-key")
+      expect(request_headers["Anthropic-Version"]).to eq("2023-06-01")
+    end
+
+    it "parses Anthropic response format correctly" do
+      stub_anthropic_success(content: "Texto traducido")
+
+      result = build_service.call
+      expect(result.success?).to be true
+      expect(result.translated_raw).to eq("Texto traducido")
+      expect(result.ai_response[:provider_info][:model]).to eq("claude-sonnet-4-6")
+    end
+
+    it "sums input + output tokens" do
+      stub_anthropic_success
+
+      result = build_service.call
+      expect(result.success?).to be true
+      expect(result.ai_response[:provider_info][:tokens_used]).to eq(110)
+    end
+
+    it "detects max_tokens truncation" do
+      stub_request(:post, "https://api.anthropic.com/v1/messages").to_return(
+        status: 200,
+        body: {
+          content: [{ type: "text", text: "Partial..." }],
+          model: "claude-sonnet-4-6",
+          stop_reason: "max_tokens",
+          usage: {
+            input_tokens: 50,
+            output_tokens: 16_000,
+          },
+        }.to_json,
+        headers: {
+          "Content-Type" => "application/json",
+        },
+      )
+
+      result = build_service.call
+      expect(result.failure?).to be true
+      expect(result.error).to include("Translation truncated")
+    end
+  end
 end

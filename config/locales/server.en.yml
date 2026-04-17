@@ -16,7 +16,8 @@ en:
     babel_reunited_openai_api_key: "OpenAI API Key"
     babel_reunited_xai_api_key: "xAI (Grok) API Key"
     babel_reunited_deepseek_api_key: "DeepSeek API Key"
-    
+    babel_reunited_anthropic_api_key: "Anthropic (Claude) API Key"
+
     babel_reunited_custom_model_name: "Custom model name (only used when 'custom' is selected)"
     babel_reunited_custom_base_url: "Custom API base URL"
     babel_reunited_custom_api_key: "Custom API key"

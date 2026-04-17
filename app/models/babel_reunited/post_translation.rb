@@ -84,7 +84,9 @@ module BabelReunited
       record = find_or_initialize_by(post_id: post_id, language: target_language)
       attrs = {
         status: "translating",
-        translation_provider: record.translation_provider.presence || "openai",
+        translation_provider:
+          record.translation_provider.presence ||
+            BabelReunited::ModelConfig.get_config&.dig(:provider) || "unknown",
         metadata: (record.metadata || {}).merge(translating_started_at: Time.current),
       }
       if record.new_record?
