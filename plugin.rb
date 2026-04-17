@@ -80,7 +80,8 @@ module ::BabelReunited
         BabelReunited::PostTranslation.find_translation(post.id, language)
       end
 
-    return nil unless translation&.completed? && translation.translated_title.present?
+    return nil if translation.blank? || translation.failed?
+    return nil if translation.translated_title.blank?
 
     translation.translated_title
   end

@@ -574,7 +574,7 @@ RSpec.describe BabelReunited do
         expect(BabelReunited.translated_title_for(post_record, "es")).to eq("Titulo traducido")
       end
 
-      it "returns nil when translation is not completed" do
+      it "returns nil when translation is translating with no prior title" do
         Fabricate(
           :post_translation,
           post: post_record,
@@ -582,6 +582,32 @@ RSpec.describe BabelReunited do
           translated_title: "",
           translated_content: "",
           status: "translating",
+        )
+
+        expect(BabelReunited.translated_title_for(post_record, "es")).to be_nil
+      end
+
+      it "returns prior title when re-translating (status=translating with old title)" do
+        Fabricate(
+          :post_translation,
+          post: post_record,
+          language: "es",
+          translated_title: "Titulo antiguo",
+          translated_content: "<p>Old content</p>",
+          status: "translating",
+        )
+
+        expect(BabelReunited.translated_title_for(post_record, "es")).to eq("Titulo antiguo")
+      end
+
+      it "returns nil for failed translations even if an old title is present" do
+        Fabricate(
+          :post_translation,
+          post: post_record,
+          language: "es",
+          translated_title: "Titulo antiguo",
+          translated_content: "<p>Old content</p>",
+          status: "failed",
         )
 
         expect(BabelReunited.translated_title_for(post_record, "es")).to be_nil

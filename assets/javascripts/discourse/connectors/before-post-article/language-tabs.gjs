@@ -119,10 +119,18 @@ export default class LanguageTabsConnector extends Component {
     }
 
     const preferredLanguage = this.currentUser.preferred_language;
-    const translation = this.findTranslation(preferredLanguage);
-    if (translation?.post_translation?.status === "completed") {
+    if (this._hasDisplayableContent(preferredLanguage)) {
       this.currentLanguage = preferredLanguage;
     }
+  }
+
+  _hasDisplayableContent(languageCode) {
+    const translation = this.findTranslation(languageCode);
+    const pt = translation?.post_translation;
+    if (!pt || pt.status === "failed") {
+      return false;
+    }
+    return !!pt.translated_content;
   }
 
   get post() {
@@ -201,7 +209,7 @@ export default class LanguageTabsConnector extends Component {
     }
 
     const status = this.getTranslationStatus(languageCode);
-    if (status === "completed") {
+    if (this._hasDisplayableContent(languageCode)) {
       this.currentLanguage = languageCode;
     } else if (
       status !== "translating" &&

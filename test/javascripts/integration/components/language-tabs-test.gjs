@@ -152,6 +152,51 @@ module(
       assert.verifySteps([]);
     });
 
+    test("translating tab with old content switches and shows the old translation", async function (assert) {
+      pretender.post("/babel-reunited/posts/1/translations", () => {
+        assert.step("POST called");
+        return response({ status: "queued" });
+      });
+
+      this.set(
+        "post",
+        createPost({
+          post_translations: [
+            {
+              post_translation: {
+                language: "en",
+                status: "completed",
+                translated_content: "<p>English translation</p>",
+              },
+            },
+            {
+              post_translation: {
+                language: "zh-cn",
+                status: "translating",
+                translated_content: "<p>旧的中文翻译</p>",
+              },
+            },
+            {
+              post_translation: {
+                language: "es",
+                status: "completed",
+                translated_content: "<p>Traducción</p>",
+              },
+            },
+          ],
+        })
+      );
+      await render(
+        <template><LanguageTabsConnector @post={{this.post}} /></template>
+      );
+
+      // zh-cn is re-translating but has old content — clicking should show old content
+      await click(".ai-language-tabs button:nth-child(3)");
+
+      assert.dom(".cooked").hasText("旧的中文翻译");
+      assert.verifySteps([]);
+    });
+
     test("on-demand translation auto-switches on MessageBus completion", async function (assert) {
       let resolveRequest;
       pretender.post("/babel-reunited/posts/1/translations", () => {
