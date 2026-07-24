@@ -73,7 +73,22 @@ module BabelReunited
 
         total_tokens_used += response[:tokens_used].to_i
         translated_text = strip_llm_wrapper(response[:text])
-        restored = MarkdownProtector.restore(translated_text, tokens)
+        restored, missing_tokens = MarkdownProtector.restore_and_verify(translated_text, tokens)
+
+        if missing_tokens.any?
+          log_error(
+            StandardError.new(
+              "LLM response dropped #{missing_tokens.size} protected placeholder(s)",
+            ),
+            "token_restore",
+          )
+          return(
+            Result.new(
+              error:
+                "Translation dropped #{missing_tokens.size} protected placeholder(s) (links/code/mentions)",
+            )
+          )
+        end
 
         translated_chunks << (leading_ws + restored + trailing_ws)
       end

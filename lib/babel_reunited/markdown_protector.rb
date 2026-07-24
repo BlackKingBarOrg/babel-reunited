@@ -40,9 +40,20 @@ module BabelReunited
     end
 
     def self.restore(text, tokens)
+      restore_and_verify(text, tokens).first
+    end
+
+    # Returns [restored_text, missing_keys]. A missing key means the LLM
+    # dropped that placeholder and its original content (link/code/mention)
+    # is unrecoverable from this response — callers should treat the
+    # translation as failed rather than silently store it.
+    # Restoring in reverse insertion order keeps nested tokens working: a
+    # later token's value may contain an earlier token's key.
+    def self.restore_and_verify(text, tokens)
       result = text.dup
-      tokens.to_a.reverse.each { |key, value| result.gsub!(key) { value } }
-      result
+      missing = []
+      tokens.to_a.reverse.each { |key, value| missing << key unless result.gsub!(key) { value } }
+      [result, missing]
     end
 
     private

@@ -784,6 +784,41 @@ RSpec.describe BabelReunited::TranslationService do
     end
   end
 
+  describe "protected placeholder verification" do
+    it "fails the translation when the LLM drops a protected placeholder" do
+      post_with_code =
+        Fabricate(
+          :post,
+          topic: topic,
+          user: user,
+          raw: "Hello\n```ruby\ncode\n```\nWorld",
+          post_number: 16,
+        )
+      SiteSetting.babel_reunited_translate_title = false
+
+      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
+        status: 200,
+        body: {
+          choices: [
+            { message: { content: "Translation without any placeholder" }, finish_reason: "stop" },
+          ],
+          model: "gpt-4o",
+          usage: {
+            total_tokens: 50,
+          },
+        }.to_json,
+        headers: {
+          "Content-Type" => "application/json",
+        },
+      )
+
+      result = build_service(post: post_with_code).call
+
+      expect(result.failure?).to be true
+      expect(result.error).to include("placeholder")
+    end
+  end
+
   describe "finish_reason truncation detection" do
     it "returns error when finish_reason is length" do
       stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(

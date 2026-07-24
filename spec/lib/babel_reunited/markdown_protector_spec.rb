@@ -125,4 +125,34 @@ RSpec.describe BabelReunited::MarkdownProtector do
       expect(result).to include("@admin")
     end
   end
+
+  describe ".restore_and_verify" do
+    it "returns no missing keys when all tokens are present" do
+      protector = described_class.new("Hello `code` and @admin")
+      protected_text, tokens = protector.protect
+
+      restored, missing = described_class.restore_and_verify(protected_text, tokens)
+      expect(restored).to eq("Hello `code` and @admin")
+      expect(missing).to be_empty
+    end
+
+    it "reports tokens the translated text no longer contains" do
+      protector = described_class.new("Hello `code` and @admin")
+      _protected_text, tokens = protector.protect
+
+      restored, missing = described_class.restore_and_verify("text without any token", tokens)
+      expect(restored).to eq("text without any token")
+      expect(missing.size).to eq(2)
+      expect(missing).to match_array(tokens.keys)
+    end
+
+    it "resolves nested tokens without reporting them missing" do
+      tokens = { "\u27E6TK0\u27E7" => "inner", "\u27E6TK1\u27E7" => "outer/\u27E6TK0\u27E7" }
+      text = "see \u27E6TK1\u27E7"
+
+      restored, missing = described_class.restore_and_verify(text, tokens)
+      expect(restored).to eq("see outer/inner")
+      expect(missing).to be_empty
+    end
+  end
 end
