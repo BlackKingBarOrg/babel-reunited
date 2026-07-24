@@ -229,6 +229,56 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
     end
   end
 
+  describe "cooked post-processing" do
+    it "wraps translated images in lightboxes like regular posts" do
+      upload = Fabricate(:image_upload, width: 150, height: 150)
+      BabelReunited::TranslationService
+        .any_instance
+        .stubs(:call)
+        .returns(success_result(translated_raw: "<img src=\"#{upload.url}\">"))
+
+      BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
+      described_class.new.execute(post_id: post_record.id, target_language: "es")
+
+      translation = BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      expect(translation.status).to eq("completed")
+      expect(translation.translated_content).to include("lightbox-wrapper")
+    end
+
+    it "expands oneboxes in translated content" do
+      onebox_html =
+        "<aside class=\"onebox\"><article class=\"onebox-body\">Example page</article></aside>"
+      Oneboxer.stubs(:onebox).returns(onebox_html)
+
+      BabelReunited::TranslationService
+        .any_instance
+        .stubs(:call)
+        .returns(success_result(translated_raw: "https://example.com/interesting-article"))
+
+      BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
+      described_class.new.execute(post_id: post_record.id, target_language: "es")
+
+      translation = BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      expect(translation.status).to eq("completed")
+      expect(translation.translated_content).to include("onebox-body")
+    end
+
+    it "falls back to plain cooked HTML when post-processing fails" do
+      BabelReunited::TranslatedCookedPostProcessor
+        .any_instance
+        .stubs(:post_process)
+        .raises(StandardError.new("boom"))
+      BabelReunited::TranslationService.any_instance.stubs(:call).returns(success_result)
+
+      BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
+      described_class.new.execute(post_id: post_record.id, target_language: "es")
+
+      translation = BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      expect(translation.status).to eq("completed")
+      expect(translation.translated_content).to include("Hola mundo")
+    end
+  end
+
   describe "failed translation" do
     before { BabelReunited::TranslationService.any_instance.stubs(:call).returns(failure_result) }
 
@@ -283,7 +333,11 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
     it "does not mark translation as failed" do
       BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
 
-      described_class.new.execute(post_id: post_record.id, target_language: "es") rescue nil
+      begin
+        described_class.new.execute(post_id: post_record.id, target_language: "es")
+      rescue StandardError
+        nil
+      end
 
       translation = BabelReunited::PostTranslation.find_translation(post_record.id, "es")
       expect(translation.status).not_to eq("failed")

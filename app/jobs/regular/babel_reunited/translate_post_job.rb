@@ -160,6 +160,7 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
   )
     translated_cooked = PrettyText.cook(result.translated_raw, topic_id: post.topic_id)
     translated_cooked = Loofah.html5_fragment(translated_cooked).scrub!(:prune).to_s
+    translated_cooked = post_process_cooked(translated_cooked, post)
 
     translated_title = result.translated_title
     if translated_title.present? && translated_title.length > 255
@@ -193,6 +194,21 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
     )
 
     publish_status(post, target_language, "completed", translation: translation, result: result)
+  end
+
+  # Onebox expansion and image processing, mirroring what core runs on
+  # regular posts after cooking. Best-effort: a failure here should degrade
+  # to the plain-cooked translation, not fail the whole job.
+  def post_process_cooked(cooked, post)
+    processor = ::BabelReunited::TranslatedCookedPostProcessor.new(cooked, post)
+    processor.post_process
+    processed = processor.html
+    processed.presence || cooked
+  rescue => e
+    Rails.logger.warn(
+      "BabelReunited: cooked post-processing failed for post #{post.id}: #{e.message}",
+    )
+    cooked
   end
 
   def handle_failure(result, post_id, target_language, translation, processing_time)

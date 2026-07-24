@@ -178,6 +178,7 @@ after_initialize do
   require_relative "lib/babel_reunited/message_bus_audience"
   require_relative "lib/babel_reunited/markdown_protector"
   require_relative "lib/babel_reunited/content_splitter"
+  require_relative "lib/babel_reunited/translated_cooked_post_processor"
   require_relative "app/lib/babel_reunited/providers/base"
   require_relative "app/lib/babel_reunited/providers/open_ai_compatible"
   require_relative "app/lib/babel_reunited/providers/anthropic"
