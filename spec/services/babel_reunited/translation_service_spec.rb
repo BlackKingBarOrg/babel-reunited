@@ -706,6 +706,84 @@ RSpec.describe BabelReunited::TranslationService do
     end
   end
 
+  describe "chunk boundary whitespace preservation" do
+    # Echoes the payload back so translation acts as identity: any difference
+    # between raw and translated_raw is pipeline loss, not model behavior.
+    def stub_llm_echo
+      calls = 0
+      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return do |request|
+        calls += 1
+        body = JSON.parse(request.body)
+        prompt = body["messages"].first["content"]
+        echo = prompt.split("\n---\n", 2).last
+
+        {
+          status: 200,
+          body: {
+            choices: [{ message: { content: echo }, finish_reason: "stop" }],
+            model: "gpt-4o",
+            usage: {
+              total_tokens: 10,
+            },
+          }.to_json,
+          headers: {
+            "Content-Type" => "application/json",
+          },
+        }
+      end
+      -> { calls }
+    end
+
+    before { SiteSetting.babel_reunited_translate_title = false }
+
+    it "reassembles multi-chunk content losslessly around a code fence" do
+      para1 = "First paragraph with enough text to fill up most of the first chunk before code."
+      fence = "```ruby\ndef foo\n  bar\nend\n```"
+      para2 = "Second paragraph that must stay separated from the closing fence by a blank line."
+      raw = "#{para1}\n\n#{fence}\n\n#{para2}"
+
+      chunky_post = Fabricate(:post, topic: topic, user: user, raw: raw, post_number: 15)
+
+      BabelReunited::ModelConfig.stubs(:get_config).returns(
+        {
+          provider: "openai",
+          model_name: "gpt-4o",
+          base_url: "https://api.openai.com",
+          api_key: "sk-test-key",
+          max_tokens: 100_000,
+          max_output_tokens: 120,
+        },
+      )
+      stub_llm_echo
+
+      result = build_service(post: chunky_post).call
+
+      expect(result.success?).to be true
+      expect(result.translated_raw).to eq(raw)
+    end
+
+    it "preserves leading whitespace of chunks" do
+      BabelReunited::ContentSplitter.stubs(:split).returns(["First chunk.", "\n\nSecond chunk."])
+      stub_llm_echo
+
+      result = build_service.call
+
+      expect(result.success?).to be true
+      expect(result.translated_raw).to eq("First chunk.\n\nSecond chunk.")
+    end
+
+    it "passes whitespace-only chunks through without calling the LLM" do
+      BabelReunited::ContentSplitter.stubs(:split).returns(["First chunk.", "\n\n", "Second."])
+      call_counter = stub_llm_echo
+
+      result = build_service.call
+
+      expect(result.success?).to be true
+      expect(result.translated_raw).to eq("First chunk.\n\nSecond.")
+      expect(call_counter.call).to eq(2)
+    end
+  end
+
   describe "finish_reason truncation detection" do
     it "returns error when finish_reason is length" do
       stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(

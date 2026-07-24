@@ -111,6 +111,25 @@ RSpec.describe BabelReunited::ContentSplitter do
       expect(chunks.join("")).to eq(text)
     end
 
+    it "attaches inter-block whitespace to the previous chunk" do
+      code_block = "```ruby\ndef foo\n  bar\nend\n```"
+      text = "Before text that is long enough to matter.\n\n#{code_block}\n\nAfter text."
+      chunks = described_class.split(content: text, chunk_size: 80)
+
+      expect(chunks.size).to be > 1
+      expect(chunks.join("")).to eq(text)
+      chunks.each { |chunk| expect(chunk).not_to match(/\A\s/) }
+
+      fence_chunk = chunks.find { |c| c.include?("```ruby") }
+      expect(fence_chunk).to end_with("```\n\n")
+    end
+
+    it "keeps a trailing whitespace-only remainder attached (no data loss)" do
+      text = "Head para.\n\n```\ncode\n```\n\n"
+      chunks = described_class.split(content: text, chunk_size: 12)
+      expect(chunks.join("")).to eq(text)
+    end
+
     it "handles CJK content" do
       text = "first\n\n#{"a" * 50}\n\nsecond"
       chunks = described_class.split(content: text, chunk_size: 30)

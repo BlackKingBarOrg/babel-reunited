@@ -54,8 +54,15 @@ module BabelReunited
       total_tokens_used = 0
 
       chunks.each do |chunk|
+        # The LLM response is stripped, so any whitespace at either end of the
+        # chunk must be carried around the request or chunks glue together.
+        leading_ws = chunk[/\A\s+/] || ""
+        if leading_ws == chunk
+          translated_chunks << chunk
+          next
+        end
         trailing_ws = chunk[/\s+\z/] || ""
-        core_chunk = chunk.sub(/\s+\z/, "")
+        core_chunk = chunk[leading_ws.length...(chunk.length - trailing_ws.length)]
 
         protector = MarkdownProtector.new(core_chunk)
         protected_text, tokens = protector.protect
@@ -68,7 +75,7 @@ module BabelReunited
         translated_text = strip_llm_wrapper(response[:text])
         restored = MarkdownProtector.restore(translated_text, tokens)
 
-        translated_chunks << (restored + trailing_ws)
+        translated_chunks << (leading_ws + restored + trailing_ws)
       end
 
       translated_raw = translated_chunks.join("")

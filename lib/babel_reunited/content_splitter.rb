@@ -35,8 +35,18 @@ module BabelReunited
         return text if text.length <= size
 
         split_point = find_block_boundary(text, size) || find_text_boundary(text, size) || size
+        split_point = extend_through_whitespace(text, split_point)
 
         text[0...split_point]
+      end
+
+      # Inter-chunk whitespace must belong to the previous chunk: the translation
+      # step only preserves trailing whitespace, so a separator left at the head
+      # of the next chunk would be destroyed by the LLM response strip and glue
+      # the chunks together (e.g. a closing ``` fence onto the next paragraph).
+      def extend_through_whitespace(text, pos)
+        pos += 1 while pos < text.length && text[pos].match?(/\s/)
+        pos
       end
 
       def find_block_boundary(text, target_pos)
