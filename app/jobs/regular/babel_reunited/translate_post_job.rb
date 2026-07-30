@@ -26,11 +26,14 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
           target_language
         )
       if translation
+        meta = translation.metadata || {}
         translation.update!(
           status: "failed",
           metadata:
-            (translation.metadata || {}).merge(
+            meta.merge(
               error: "Translation failed after all retries",
+              error_kind: "transient",
+              failure_count: meta["failure_count"].to_i + 1,
               failed_at: Time.current
             )
         )
@@ -40,6 +43,22 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
     Rails.logger.error(
       "Translation job exhausted retries for post #{post_id} (#{target_language}): #{msg["error_message"]}"
     )
+  end
+
+  # Failures that retrying cannot fix; automated view-triggered retries skip
+  # these while manual retries stay allowed.
+  PERMANENT_ERROR_PATTERNS = [
+    /content too long/i,
+    /dropped \d+ protected placeholder/i,
+    /\Abad request/i,
+    /\Apost.not.found\z/i,
+    /\Apost_deleted_or_hidden\z/,
+    /\Acategory_not_enabled\z/,
+    /\ATarget language not specified\z/
+  ].freeze
+
+  def self.error_kind_for(message)
+    PERMANENT_ERROR_PATTERNS.any? { |p| message.to_s.match?(p) } ? "permanent" : "transient"
   end
 
   def execute(args)
@@ -60,6 +79,15 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
       if !force_update && translation.source_sha == source_sha &&
            translation.completed?
         log_skipped(post_id, target_language, "source_unchanged")
+        # Re-announce completion so a client that requested this translation
+        # without having it serialized (or raced the job) resolves instead of
+        # waiting forever.
+        publish_status(
+          post,
+          target_language,
+          "completed",
+          translation: translation
+        )
         return
       end
 
@@ -156,12 +184,18 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
 
     translation.update!(
       status: "failed",
-      metadata:
-        (translation.metadata || {}).merge(
-          error: reason,
-          failed_at: Time.current
-        )
+      metadata: failure_metadata(translation, reason)
     )
+  end
+
+  def failure_metadata(translation, message, **extra)
+    meta = translation.metadata || {}
+    meta.merge(
+      error: message,
+      error_kind: self.class.error_kind_for(message),
+      failure_count: meta["failure_count"].to_i + 1,
+      failed_at: Time.current
+    ).merge(extra)
   end
 
   def ensure_translation_record(post, target_language)
@@ -247,11 +281,7 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
   )
     translation.update!(
       status: "failed",
-      metadata:
-        (translation.metadata || {}).merge(
-          error: result.error,
-          failed_at: Time.current
-        )
+      metadata: failure_metadata(translation, result.error)
     )
 
     ::BabelReunited::TranslationLogger.log_translation_error(
@@ -282,10 +312,10 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
         translation.update!(
           status: "failed",
           metadata:
-            (translation.metadata || {}).merge(
-              error: error.message,
-              error_class: error.class.name,
-              failed_at: Time.current
+            failure_metadata(
+              translation,
+              error.message,
+              error_class: error.class.name
             )
         )
       end

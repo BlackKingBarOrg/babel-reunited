@@ -68,6 +68,7 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
       translation = BabelReunited::PostTranslation.find_translation(post_record.id, "es")
       expect(translation.status).to eq("failed")
       expect(translation.metadata["error"]).to eq("post_not_found")
+      expect(translation.metadata["error_kind"]).to eq("permanent")
     end
 
     it "skips hidden posts" do
@@ -132,6 +133,24 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
       BabelReunited::TranslationService.any_instance.expects(:call).never
 
       described_class.new.execute(post_id: post_record.id, target_language: "es")
+    end
+
+    it "re-announces completion when skipping an already completed translation" do
+      translation = BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
+      sha = Digest::SHA256.hexdigest(post_record.raw)
+      translation.update!(status: "completed", source_sha: sha, translated_content: "<p>old</p>")
+
+      BabelReunited::TranslationService.any_instance.expects(:call).never
+
+      messages =
+        MessageBus.track_publish("/post-translations/#{post_record.id}") do
+          described_class.new.execute(post_id: post_record.id, target_language: "es")
+        end
+
+      expect(messages.length).to eq(1)
+      data = messages.first.data
+      expect(data[:status]).to eq("completed")
+      expect(data[:translation][:translated_content]).to eq("<p>old</p>")
     end
 
     it "translates when force_update even if source unchanged" do
@@ -298,6 +317,40 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
 
       translation = BabelReunited::PostTranslation.find_translation(post_record.id, "es")
       expect(translation.metadata["error"]).to eq("API key not configured")
+    end
+
+    it "classifies configuration errors as transient and counts the failure" do
+      BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
+
+      described_class.new.execute(post_id: post_record.id, target_language: "es")
+
+      translation = BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      expect(translation.metadata["error_kind"]).to eq("transient")
+      expect(translation.metadata["failure_count"]).to eq(1)
+    end
+
+    it "classifies content-too-long errors as permanent" do
+      BabelReunited::TranslationService
+        .any_instance
+        .stubs(:call)
+        .returns(failure_result(error: "Content too long for translation"))
+
+      BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
+      described_class.new.execute(post_id: post_record.id, target_language: "es")
+
+      translation = BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      expect(translation.metadata["error_kind"]).to eq("permanent")
+    end
+
+    it "increments failure_count across repeated failures" do
+      BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
+      described_class.new.execute(post_id: post_record.id, target_language: "es")
+
+      BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
+      described_class.new.execute(post_id: post_record.id, target_language: "es")
+
+      translation = BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      expect(translation.metadata["failure_count"]).to eq(2)
     end
 
     it "publishes failure to MessageBus" do

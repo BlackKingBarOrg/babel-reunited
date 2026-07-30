@@ -45,7 +45,7 @@ module BabelReunited
     validates :post_id, uniqueness: { scope: :language }
     validates :language,
               format: {
-                with: /\A[a-z]{2}(-[a-z]{2})?\z/,
+                with: BabelReunited::Locales::LANGUAGE_CODE_FORMAT,
                 message: "must be a valid language code"
               }
 
@@ -87,6 +87,27 @@ module BabelReunited
 
     def failed?
       status == "failed"
+    end
+
+    AUTO_RETRY_COOLDOWN = 30.minutes
+    MAX_AUTO_RETRIES = 5
+
+    # Whether an automated (view-triggered) request may re-enqueue this failed
+    # translation. Manual retries are always allowed and bypass this check.
+    def auto_retryable?
+      return false unless failed?
+
+      meta = metadata || {}
+      return false if meta["error_kind"] == "permanent"
+      return false if meta["failure_count"].to_i >= MAX_AUTO_RETRIES
+
+      failed_at = meta["failed_at"]
+      return true if failed_at.blank?
+
+      parsed = Time.zone.parse(failed_at.to_s)
+      parsed.nil? || parsed <= AUTO_RETRY_COOLDOWN.ago
+    rescue ArgumentError
+      true
     end
 
     def provider_info

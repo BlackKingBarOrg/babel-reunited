@@ -31,6 +31,11 @@ RSpec.describe BabelReunited::PostTranslation do
       expect(translation.errors[:language]).to include("must be a valid language code")
     end
 
+    it "accepts three-letter language codes" do
+      translation = Fabricate.build(:post_translation, post: post, language: "yue")
+      expect(translation).to be_valid
+    end
+
     it "rejects language codes that are too long" do
       translation = Fabricate.build(:post_translation, post: post, language: "a" * 11)
       expect(translation).not_to be_valid
@@ -160,6 +165,69 @@ RSpec.describe BabelReunited::PostTranslation do
           translated_content: "",
         )
       expect(translation.failed?).to be true
+    end
+  end
+
+  describe "#auto_retryable?" do
+    def failed_translation(metadata)
+      Fabricate(
+        :post_translation,
+        post: post,
+        language: "de",
+        status: "failed",
+        translated_content: "",
+        metadata: metadata,
+      )
+    end
+
+    it "returns false for non-failed translations" do
+      translation = Fabricate(:post_translation, post: post, language: "de", status: "completed")
+      expect(translation.auto_retryable?).to be false
+    end
+
+    it "returns false for permanent failures" do
+      translation =
+        failed_translation(
+          "error_kind" => "permanent",
+          "failed_at" => 2.hours.ago.iso8601,
+          "failure_count" => 1,
+        )
+      expect(translation.auto_retryable?).to be false
+    end
+
+    it "returns false before the cooldown elapses" do
+      translation =
+        failed_translation(
+          "error_kind" => "transient",
+          "failed_at" => 5.minutes.ago.iso8601,
+          "failure_count" => 1,
+        )
+      expect(translation.auto_retryable?).to be false
+    end
+
+    it "returns true after the cooldown elapses" do
+      translation =
+        failed_translation(
+          "error_kind" => "transient",
+          "failed_at" => 31.minutes.ago.iso8601,
+          "failure_count" => 1,
+        )
+      expect(translation.auto_retryable?).to be true
+    end
+
+    it "returns false once failure_count reaches the cap" do
+      translation =
+        failed_translation(
+          "error_kind" => "transient",
+          "failed_at" => 2.hours.ago.iso8601,
+          "failure_count" => described_class::MAX_AUTO_RETRIES,
+        )
+      expect(translation.auto_retryable?).to be false
+    end
+
+    it "returns true for legacy failed rows without failure metadata" do
+      translation = failed_translation({})
+      expect(translation.auto_retryable?).to be true
     end
   end
 

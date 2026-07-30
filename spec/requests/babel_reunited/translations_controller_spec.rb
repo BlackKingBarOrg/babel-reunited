@@ -138,13 +138,31 @@ RSpec.describe BabelReunited::TranslationsController do
       expect(response.parsed_body["target_language"]).to eq("en")
     end
 
-    it "rejects three-letter language codes" do
+    it "rejects well-formed but unsupported language codes" do
       post "/babel-reunited/posts/#{post_record.id}/translations.json",
            params: {
              target_language: "eng",
            }
       expect(response.status).to eq(400)
-      expect(response.parsed_body["error"]).to include("Invalid language code format")
+      expect(response.parsed_body["error"]).to include("Unsupported language")
+    end
+
+    it "accepts supported three-letter language codes" do
+      post "/babel-reunited/posts/#{post_record.id}/translations.json",
+           params: {
+             target_language: "fil",
+           }
+
+      expect(response.status).to eq(200)
+      expect(
+        job_enqueued?(
+          job: Jobs::BabelReunited::TranslatePostJob,
+          args: {
+            post_id: post_record.id,
+            target_language: "fil",
+          },
+        ),
+      ).to be true
     end
 
     it "accepts language codes with region" do
@@ -166,7 +184,30 @@ RSpec.describe BabelReunited::TranslationsController do
       ).to be true
     end
 
-    it "passes through force_update" do
+    it "rejects force_update from non-staff and does not enqueue" do
+      post "/babel-reunited/posts/#{post_record.id}/translations.json",
+           params: {
+             target_language: "es",
+             force_update: "true",
+           }
+
+      expect(response.status).to eq(403)
+      expect(response.parsed_body["error"]).to include("force_update requires staff")
+      expect(
+        job_enqueued?(
+          job: Jobs::BabelReunited::TranslatePostJob,
+          args: {
+            post_id: post_record.id,
+            target_language: "es",
+            force_update: true,
+          },
+        ),
+      ).to be false
+    end
+
+    it "passes through force_update for staff" do
+      sign_in(admin)
+
       post "/babel-reunited/posts/#{post_record.id}/translations.json",
            params: {
              target_language: "es",
@@ -309,9 +350,16 @@ RSpec.describe BabelReunited::TranslationsController do
       expect(response.status).to eq(400)
     end
 
-    it "returns 400 for validation failure on save" do
+    it "returns 400 for well-formed but unsupported language" do
       post "/babel-reunited/user-preferred-language.json", params: { language: "eng" }
       expect(response.status).to eq(400)
+      expect(response.parsed_body["error"]).to include("Unsupported language")
+    end
+
+    it "sets a supported three-letter language preference" do
+      post "/babel-reunited/user-preferred-language.json", params: { language: "yue" }
+      expect(response.status).to eq(200)
+      expect(response.parsed_body["language"]).to eq("yue")
     end
 
     it "updates existing preference" do

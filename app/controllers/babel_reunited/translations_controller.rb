@@ -31,12 +31,20 @@ module BabelReunited
       target_language = params[:target_language]&.downcase
       force_update = ActiveModel::Type::Boolean.new.cast(params[:force_update]) || false
 
+      if force_update && !guardian.is_staff?
+        return render json: { error: "force_update requires staff" }, status: :forbidden
+      end
+
       if target_language.blank?
         return render json: { error: "Target language required" }, status: :bad_request
       end
 
-      unless target_language.match?(/\A[a-z]{2}(-[a-z]{2})?\z/)
+      unless BabelReunited::Locales.format_valid?(target_language)
         return render json: { error: "Invalid language code format" }, status: :bad_request
+      end
+
+      unless BabelReunited::Locales.valid?(target_language)
+        return render json: { error: "Unsupported language" }, status: :bad_request
       end
 
       ::RateLimiter.new(current_user, "babel-reunited-translate", 10, 1.minute).performed!
@@ -88,8 +96,11 @@ module BabelReunited
       cast = ActiveModel::Type::Boolean.new
 
       if language.present?
-        unless language.match?(/\A[a-z]{2}(-[a-z]{2})?\z/)
+        unless BabelReunited::Locales.format_valid?(language)
           return render json: { error: "Invalid language code format" }, status: :bad_request
+        end
+        unless BabelReunited::Locales.valid?(language)
+          return render json: { error: "Unsupported language" }, status: :bad_request
         end
         current_user.custom_fields[BabelReunited::PREFERRED_LANGUAGE_FIELD] = language
       end
