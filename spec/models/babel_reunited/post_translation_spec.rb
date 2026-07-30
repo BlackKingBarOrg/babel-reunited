@@ -168,6 +168,14 @@ RSpec.describe BabelReunited::PostTranslation do
     end
   end
 
+  describe "#stale?" do
+    it "returns true when status is stale" do
+      translation = Fabricate(:post_translation, post: post, language: "de", status: "stale")
+      expect(translation.stale?).to be true
+      expect(translation.completed?).to be false
+    end
+  end
+
   describe "#auto_retryable?" do
     def failed_translation(metadata)
       Fabricate(

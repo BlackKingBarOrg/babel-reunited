@@ -127,7 +127,7 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
   describe "source_sha check" do
     it "skips translation when source unchanged and not force_update" do
       translation = BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
-      sha = Digest::SHA256.hexdigest(post_record.raw)
+      sha = described_class.content_sha(post_record)
       translation.update!(status: "completed", source_sha: sha, translated_content: "<p>old</p>")
 
       BabelReunited::TranslationService.any_instance.expects(:call).never
@@ -137,7 +137,7 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
 
     it "re-announces completion when skipping an already completed translation" do
       translation = BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
-      sha = Digest::SHA256.hexdigest(post_record.raw)
+      sha = described_class.content_sha(post_record)
       translation.update!(status: "completed", source_sha: sha, translated_content: "<p>old</p>")
 
       BabelReunited::TranslationService.any_instance.expects(:call).never
@@ -155,7 +155,7 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
 
     it "translates when force_update even if source unchanged" do
       translation = BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
-      sha = Digest::SHA256.hexdigest(post_record.raw)
+      sha = described_class.content_sha(post_record)
       translation.update!(status: "completed", source_sha: sha, translated_content: "<p>old</p>")
 
       BabelReunited::TranslationService.any_instance.stubs(:call).returns(success_result)
@@ -168,6 +168,58 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
 
       translation.reload
       expect(translation.translated_content).to include("Hola mundo")
+    end
+
+    it "re-translates when the topic title changes on a first post" do
+      translation = BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
+      sha = described_class.content_sha(post_record)
+      translation.update!(status: "completed", source_sha: sha, translated_content: "<p>old</p>")
+
+      post_record.topic.update!(title: "A completely different topic title")
+
+      BabelReunited::TranslationService.any_instance.stubs(:call).returns(success_result)
+
+      described_class.new.execute(post_id: post_record.id, target_language: "es")
+
+      translation.reload
+      expect(translation.translated_content).to include("Hola mundo")
+    end
+  end
+
+  describe "stale fast-path" do
+    it "heals a stale translation for free when content is unchanged" do
+      translation = BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
+      sha = described_class.content_sha(post_record)
+      translation.update!(status: "stale", source_sha: sha, translated_content: "<p>old</p>")
+
+      BabelReunited::TranslationService.any_instance.expects(:call).never
+
+      messages =
+        MessageBus.track_publish("/post-translations/#{post_record.id}") do
+          described_class.new.execute(post_id: post_record.id, target_language: "es")
+        end
+
+      expect(translation.reload.status).to eq("completed")
+      expect(messages.length).to eq(1)
+      expect(messages.first.data[:status]).to eq("completed")
+    end
+
+    it "re-translates a stale translation when content changed" do
+      translation = BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
+      translation.update!(
+        status: "stale",
+        source_sha: "0" * 64,
+        translated_content: "<p>old</p>",
+      )
+
+      BabelReunited::TranslationService.any_instance.stubs(:call).returns(success_result)
+
+      described_class.new.execute(post_id: post_record.id, target_language: "es")
+
+      translation.reload
+      expect(translation.status).to eq("completed")
+      expect(translation.translated_content).to include("Hola mundo")
+      expect(translation.source_sha).to eq(described_class.content_sha(post_record))
     end
   end
 
@@ -228,7 +280,7 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
       described_class.new.execute(post_id: post_record.id, target_language: "es")
 
       translation = BabelReunited::PostTranslation.find_translation(post_record.id, "es")
-      expect(translation.source_sha).to eq(Digest::SHA256.hexdigest(post_record.raw))
+      expect(translation.source_sha).to eq(described_class.content_sha(post_record))
     end
 
     it "truncates translated title longer than 255 characters" do

@@ -85,6 +85,12 @@ module BabelReunited
       status == "completed"
     end
 
+    # Completed content whose source post changed after translation; still
+    # displayable, but eligible for re-translation on next view.
+    def stale?
+      status == "stale"
+    end
+
     def failed?
       status == "failed"
     end

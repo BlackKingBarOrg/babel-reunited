@@ -155,14 +155,23 @@ module ::BabelReunited
     return if post.blank? || post.raw.blank?
     return unless translation_enabled_for_post?(post)
 
-    languages =
-      (post.post_translations.pluck(:language) + auto_translate_languages).uniq
-    return if languages.empty?
+    eager = auto_translate_languages
 
-    languages.each do |language|
+    # Lazy-layer translations are not re-translated on every edit — that would
+    # re-pay one LLM call per accumulated language. They are marked stale (old
+    # content stays readable) and refresh on next view or manual request.
+    post
+      .post_translations
+      .where(status: "completed")
+      .where.not(language: eager)
+      .update_all(status: "stale", updated_at: Time.current)
+
+    return if eager.empty?
+
+    eager.each do |language|
       PostTranslation.create_or_update_record(post.id, language)
     end
-    enqueue_translation_jobs(post, languages, force_update: true)
+    enqueue_translation_jobs(post, eager, force_update: true)
   end
 end
 

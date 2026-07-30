@@ -61,6 +61,18 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
     PERMANENT_ERROR_PATTERNS.any? { |p| message.to_s.match?(p) } ? "permanent" : "transient"
   end
 
+  # Content fingerprint for change detection. Includes the topic title for
+  # first posts (mirroring TranslationService#prepare_title) so title edits
+  # invalidate translations that carry a translated_title.
+  def self.content_sha(post)
+    parts = [post.raw]
+    if post.post_number == 1 && SiteSetting.babel_reunited_translate_title &&
+         post.topic&.title.present?
+      parts << post.topic.title
+    end
+    Digest::SHA256.hexdigest(parts.join("\0"))
+  end
+
   def execute(args)
     post_id = args[:post_id]
     target_language = args[:target_language]
@@ -72,7 +84,7 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
       post = find_post(post_id, target_language)
       return unless post
 
-      source_sha = Digest::SHA256.hexdigest(post.raw)
+      source_sha = self.class.content_sha(post)
       translation = ensure_translation_record(post, target_language)
 
       # Skip if source unchanged and not force_update
@@ -82,6 +94,22 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
         # Re-announce completion so a client that requested this translation
         # without having it serialized (or raced the job) resolves instead of
         # waiting forever.
+        publish_status(
+          post,
+          target_language,
+          "completed",
+          translation: translation
+        )
+        return
+      end
+
+      # A stale translation whose content fingerprint still matches (e.g. a
+      # category-only edit marked it stale) heals for free instead of paying
+      # for a re-translation.
+      if !force_update && translation.stale? &&
+           translation.source_sha == source_sha
+        translation.update!(status: "completed")
+        log_skipped(post_id, target_language, "stale_content_unchanged")
         publish_status(
           post,
           target_language,

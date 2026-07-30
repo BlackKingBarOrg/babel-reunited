@@ -84,33 +84,15 @@ RSpec.describe BabelReunited do
       ).to be false
     end
 
-    it "only re-translates existing languages when no auto_translate_languages" do
+    it "marks all completed translations stale when no auto_translate_languages" do
       SiteSetting.babel_reunited_auto_translate_languages = ""
-      Fabricate(:post_translation, post: post_record, language: "de")
+      translation = Fabricate(:post_translation, post: post_record, language: "de")
 
       revisor = OpenStruct.new(topic_diff: {})
       DiscourseEvent.trigger(:post_edited, post_record, false, revisor)
 
-      expect(
-        job_enqueued?(
-          job: Jobs::BabelReunited::TranslatePostJob,
-          args: {
-            post_id: post_record.id,
-            target_language: "de",
-            force_update: true,
-          },
-        ),
-      ).to be true
-
-      expect(
-        job_enqueued?(
-          job: Jobs::BabelReunited::TranslatePostJob,
-          args: {
-            post_id: post_record.id,
-            target_language: "zh-cn",
-          },
-        ),
-      ).to be false
+      expect(translation.reload.status).to eq("stale")
+      expect(Jobs::BabelReunited::TranslatePostJob.jobs).to be_empty
     end
 
     it "deduplicates existing translations and auto_translate_languages" do
@@ -127,12 +109,13 @@ RSpec.describe BabelReunited do
       expect(jobs.length).to eq(1)
     end
 
-    it "re-translates existing languages with force_update" do
-      Fabricate(:post_translation, post: post_record, language: "de")
+    it "marks lazy-layer translations stale instead of re-translating" do
+      translation = Fabricate(:post_translation, post: post_record, language: "de")
 
       revisor = OpenStruct.new(topic_diff: {})
       DiscourseEvent.trigger(:post_edited, post_record, false, revisor)
 
+      expect(translation.reload.status).to eq("stale")
       expect(
         job_enqueued?(
           job: Jobs::BabelReunited::TranslatePostJob,
@@ -142,7 +125,47 @@ RSpec.describe BabelReunited do
             force_update: true,
           },
         ),
-      ).to be true
+      ).to be false
+    end
+
+    it "keeps lazy translated_content readable after being marked stale" do
+      translation =
+        Fabricate(
+          :post_translation,
+          post: post_record,
+          language: "de",
+          translated_content: "<p>Altes Inhalt</p>",
+        )
+
+      revisor = OpenStruct.new(topic_diff: {})
+      DiscourseEvent.trigger(:post_edited, post_record, false, revisor)
+
+      expect(translation.reload.translated_content).to eq("<p>Altes Inhalt</p>")
+    end
+
+    it "does not touch translating or failed lazy translations on edit" do
+      translating =
+        Fabricate(
+          :post_translation,
+          post: post_record,
+          language: "de",
+          status: "translating",
+          translated_content: "",
+        )
+      failed =
+        Fabricate(
+          :post_translation,
+          post: post_record,
+          language: "fr",
+          status: "failed",
+          translated_content: "",
+        )
+
+      revisor = OpenStruct.new(topic_diff: {})
+      DiscourseEvent.trigger(:post_edited, post_record, false, revisor)
+
+      expect(translating.reload.status).to eq("translating")
+      expect(failed.reload.status).to eq("failed")
     end
 
     it "includes auto_translate_languages in re-translation" do
