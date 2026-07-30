@@ -203,11 +203,13 @@ namespace :babel_reunited do
     puts ""
     puts "Matched:          #{stats.matched}"
     unless dry_run
+      puts "Handled:          #{stats.handled}"
       puts "#{validate ? "Would change:     " : "Processed:        "}#{stats.processed}"
       puts "Unchanged:        #{stats.unchanged}"
       puts "Skipped (deleted post): #{stats.skipped_deleted}"
       puts "Skipped (changed mid-run): #{stats.skipped_changed}"
       puts "Failed (content kept): #{stats.failed}"
+      puts "Last handled ID:  #{stats.last_id || "-"} (use START_ID=#{stats.last_id.to_i + 1} to resume)"
     end
   end
 

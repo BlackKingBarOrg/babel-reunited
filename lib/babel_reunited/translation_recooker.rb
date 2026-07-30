@@ -22,6 +22,8 @@ module BabelReunited
     Stats =
       Struct.new(
         :matched,
+        :handled,
+        :last_id,
         :processed,
         :unchanged,
         :skipped_deleted,
@@ -53,7 +55,9 @@ module BabelReunited
     def run
       stats =
         Stats.new(
-          matched: scope.count,
+          matched: effective_scope.count,
+          handled: 0,
+          last_id: nil,
           processed: 0,
           unchanged: 0,
           skipped_deleted: 0,
@@ -66,10 +70,9 @@ module BabelReunited
         return stats
       end
 
-      handled = 0
-      scope.find_each(batch_size: @batch_size) do |translation|
-        break if @limit && handled >= @limit
-        handled += 1
+      effective_scope.find_each(batch_size: @batch_size) do |translation|
+        stats.handled += 1
+        stats.last_id = translation.id
         recook(translation, stats)
       end
 
@@ -79,17 +82,26 @@ module BabelReunited
     private
 
     def scope
-      scope = PostTranslation.recookable.order(:id)
+      scope = PostTranslation.recookable
       scope = scope.where(post_id: @post_id) if @post_id
       scope = scope.where(language: @language) if @language
       scope = scope.where(id: @start_id..) if @start_id
       scope
     end
 
+    # Single source of truth for what a run touches: matched counts, dry-run
+    # samples, and the live iteration must all see the same record set, or
+    # canary runs with LIMIT report misleading numbers.
+    def effective_scope
+      @limit ? scope.limit(@limit) : scope
+    end
+
     def report_dry_run(stats)
       log("DRY RUN: no cooking, no network access, no writes.")
-      scope
-        .limit(10)
+      sample_size = [@limit, 10].compact.min
+      effective_scope
+        .order(:id)
+        .limit(sample_size)
         .each do |t|
           post_state =
             Post.find_by(id: t.post_id) ? "post present" : "post missing"
@@ -97,7 +109,9 @@ module BabelReunited
             "  would recook translation #{t.id} (post #{t.post_id}, #{t.language}, #{post_state})"
           )
         end
-      log("  ... and #{stats.matched - 10} more") if stats.matched > 10
+      if stats.matched > sample_size
+        log("  ... and #{stats.matched - sample_size} more")
+      end
       log(
         "Matched #{stats.matched} records. Use DRY_RUN=false to recook, VALIDATE=true to cook without writing."
       )

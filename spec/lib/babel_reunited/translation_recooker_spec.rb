@@ -171,5 +171,20 @@ RSpec.describe BabelReunited::TranslationRecooker do
       expect(stats.processed).to eq(1)
       expect(first.reload.translated_content).to include("<strong>")
     end
+
+    it "applies LIMIT to matched, samples, iteration, and reports resume position" do
+      first = create_translation
+      second_post = Fabricate(:post, topic: topic, user: user)
+      create_translation(post: second_post, language: "es")
+
+      dry_stats = described_class.new(dry_run: true, limit: 1).run
+      expect(dry_stats.matched).to eq(1)
+
+      stats = run(limit: 1)
+      expect(stats.matched).to eq(1)
+      expect(stats.handled).to eq(1)
+      expect(stats.processed).to eq(1)
+      expect(stats.last_id).to eq(first.id)
+    end
   end
 end
