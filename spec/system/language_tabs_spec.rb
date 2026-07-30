@@ -18,15 +18,19 @@ RSpec.describe "Language tabs" do
     # Tab list is driven by this setting. Fabricated posts skip PostCreator
     # events, so no auto-translation jobs are enqueued and specs stay offline.
     SiteSetting.babel_reunited_auto_translate_languages = "en,zh-cn,es"
+    # A user without a preference gets the language-preference modal after 1s,
+    # which overlays the page and intercepts clicks mid-test.
+    admin.custom_fields[BabelReunited::PREFERRED_LANGUAGE_FIELD] = "es"
+    admin.save_custom_fields
     sign_in(admin)
   end
 
-  it "shows the original tab and the language menu on a topic page" do
+  it "shows the original tab, the preferred tab, and the language menu" do
     visit "/t/#{topic.slug}/#{topic.id}"
 
     expect(page).to have_css("#post_1 .ai-language-tabs")
-    # original tab + overflow menu trigger (admin has no preferred language)
-    expect(page).to have_css("#post_1 .babel-reunited-language-tab", count: 2)
+    # original tab + preferred (es) tab + overflow menu trigger
+    expect(page).to have_css("#post_1 .babel-reunited-language-tab", count: 3)
     expect(page).to have_css("#post_1 .babel-reunited-language-tab.--menu")
   end
 
