@@ -28,7 +28,12 @@ RSpec.describe BabelReunited::TranslationsController do
 
     it "denies anonymous reads of restricted posts" do
       private_category =
-        Fabricate(:private_category, group: Fabricate(:group), topic_count: 0, post_count: 0)
+        Fabricate(
+          :private_category,
+          group: Fabricate(:group),
+          topic_count: 0,
+          post_count: 0
+        )
       private_topic = Fabricate(:topic, category: private_category)
       private_post = Fabricate(:post, topic: private_topic)
 
@@ -39,7 +44,7 @@ RSpec.describe BabelReunited::TranslationsController do
     it "requires login for create" do
       post "/babel-reunited/posts/#{post_record.id}/translations.json",
            params: {
-             target_language: "es",
+             target_language: "es"
            }
       expect(response.status).to eq(403)
     end
@@ -55,13 +60,18 @@ RSpec.describe BabelReunited::TranslationsController do
     end
 
     it "requires login for set_user_preferred_language" do
-      post "/babel-reunited/user-preferred-language.json", params: { language: "es" }
+      post "/babel-reunited/user-preferred-language.json",
+           params: {
+             language: "es"
+           }
       expect(response.status).to eq(403)
     end
   end
 
   describe "GET /babel-reunited/posts/:post_id/translations" do
-    fab!(:translation) { Fabricate(:post_translation, post: post_record, language: "es") }
+    fab!(:translation) do
+      Fabricate(:post_translation, post: post_record, language: "es")
+    end
 
     before { sign_in(user) }
 
@@ -78,7 +88,9 @@ RSpec.describe BabelReunited::TranslationsController do
   end
 
   describe "GET /babel-reunited/posts/:post_id/translations/:language" do
-    fab!(:translation) { Fabricate(:post_translation, post: post_record, language: "es") }
+    fab!(:translation) do
+      Fabricate(:post_translation, post: post_record, language: "es")
+    end
 
     before { sign_in(user) }
 
@@ -103,7 +115,7 @@ RSpec.describe BabelReunited::TranslationsController do
     it "enqueues a translation job and returns queued status" do
       post "/babel-reunited/posts/#{post_record.id}/translations.json",
            params: {
-             target_language: "es",
+             target_language: "es"
            }
 
       expect(response.status).to eq(200)
@@ -118,34 +130,38 @@ RSpec.describe BabelReunited::TranslationsController do
           job: Jobs::BabelReunited::TranslatePostJob,
           args: {
             post_id: post_record.id,
-            target_language: "es",
-          },
-        ),
+            target_language: "es"
+          }
+        )
       ).to be true
     end
 
     it "returns 400 when target_language is blank" do
       post "/babel-reunited/posts/#{post_record.id}/translations.json",
            params: {
-             target_language: "",
+             target_language: ""
            }
       expect(response.status).to eq(400)
-      expect(response.parsed_body["error"]).to include("Target language required")
+      expect(response.parsed_body["error"]).to include(
+        "Target language required"
+      )
     end
 
     it "returns 400 for invalid language format" do
       post "/babel-reunited/posts/#{post_record.id}/translations.json",
            params: {
-             target_language: "INVALID",
+             target_language: "INVALID"
            }
       expect(response.status).to eq(400)
-      expect(response.parsed_body["error"]).to include("Invalid language code format")
+      expect(response.parsed_body["error"]).to include(
+        "Invalid language code format"
+      )
     end
 
     it "normalizes uppercase language codes" do
       post "/babel-reunited/posts/#{post_record.id}/translations.json",
            params: {
-             target_language: "EN",
+             target_language: "EN"
            }
       expect(response.status).to eq(200)
       expect(response.parsed_body["target_language"]).to eq("en")
@@ -154,7 +170,7 @@ RSpec.describe BabelReunited::TranslationsController do
     it "rejects well-formed but unsupported language codes" do
       post "/babel-reunited/posts/#{post_record.id}/translations.json",
            params: {
-             target_language: "eng",
+             target_language: "eng"
            }
       expect(response.status).to eq(400)
       expect(response.parsed_body["error"]).to include("Unsupported language")
@@ -163,7 +179,7 @@ RSpec.describe BabelReunited::TranslationsController do
     it "accepts supported three-letter language codes" do
       post "/babel-reunited/posts/#{post_record.id}/translations.json",
            params: {
-             target_language: "fil",
+             target_language: "fil"
            }
 
       expect(response.status).to eq(200)
@@ -172,16 +188,16 @@ RSpec.describe BabelReunited::TranslationsController do
           job: Jobs::BabelReunited::TranslatePostJob,
           args: {
             post_id: post_record.id,
-            target_language: "fil",
-          },
-        ),
+            target_language: "fil"
+          }
+        )
       ).to be true
     end
 
     it "accepts language codes with region" do
       post "/babel-reunited/posts/#{post_record.id}/translations.json",
            params: {
-             target_language: "zh-cn",
+             target_language: "zh-cn"
            }
 
       expect(response.status).to eq(200)
@@ -191,9 +207,9 @@ RSpec.describe BabelReunited::TranslationsController do
           job: Jobs::BabelReunited::TranslatePostJob,
           args: {
             post_id: post_record.id,
-            target_language: "zh-cn",
-          },
-        ),
+            target_language: "zh-cn"
+          }
+        )
       ).to be true
     end
 
@@ -201,20 +217,22 @@ RSpec.describe BabelReunited::TranslationsController do
       post "/babel-reunited/posts/#{post_record.id}/translations.json",
            params: {
              target_language: "es",
-             force_update: "true",
+             force_update: "true"
            }
 
       expect(response.status).to eq(403)
-      expect(response.parsed_body["error"]).to include("force_update requires staff")
+      expect(response.parsed_body["error"]).to include(
+        "force_update requires staff"
+      )
       expect(
         job_enqueued?(
           job: Jobs::BabelReunited::TranslatePostJob,
           args: {
             post_id: post_record.id,
             target_language: "es",
-            force_update: true,
-          },
-        ),
+            force_update: true
+          }
+        )
       ).to be false
     end
 
@@ -224,7 +242,7 @@ RSpec.describe BabelReunited::TranslationsController do
       post "/babel-reunited/posts/#{post_record.id}/translations.json",
            params: {
              target_language: "es",
-             force_update: "true",
+             force_update: "true"
            }
 
       expect(response.status).to eq(200)
@@ -235,15 +253,16 @@ RSpec.describe BabelReunited::TranslationsController do
           args: {
             post_id: post_record.id,
             target_language: "es",
-            force_update: true,
-          },
-        ),
+            force_update: true
+          }
+        )
       ).to be true
     end
 
     it "returns 403 for non-whitelisted category and does not enqueue job" do
       blocked_category = Fabricate(:category)
-      topic_in_blocked = Fabricate(:topic, user: user, category: blocked_category)
+      topic_in_blocked =
+        Fabricate(:topic, user: user, category: blocked_category)
       blocked_post = Fabricate(:post, topic: topic_in_blocked, user: user)
 
       allowed_category = Fabricate(:category)
@@ -251,7 +270,7 @@ RSpec.describe BabelReunited::TranslationsController do
 
       post "/babel-reunited/posts/#{blocked_post.id}/translations.json",
            params: {
-             target_language: "es",
+             target_language: "es"
            }
 
       expect(response.status).to eq(403)
@@ -260,22 +279,23 @@ RSpec.describe BabelReunited::TranslationsController do
           job: Jobs::BabelReunited::TranslatePostJob,
           args: {
             post_id: blocked_post.id,
-            target_language: "es",
-          },
-        ),
+            target_language: "es"
+          }
+        )
       ).to be false
     end
 
     it "succeeds for whitelisted category" do
       allowed_category = Fabricate(:category)
-      topic_in_allowed = Fabricate(:topic, user: user, category: allowed_category)
+      topic_in_allowed =
+        Fabricate(:topic, user: user, category: allowed_category)
       allowed_post = Fabricate(:post, topic: topic_in_allowed, user: user)
 
       SiteSetting.babel_reunited_enabled_categories = allowed_category.id.to_s
 
       post "/babel-reunited/posts/#{allowed_post.id}/translations.json",
            params: {
-             target_language: "es",
+             target_language: "es"
            }
 
       expect(response.status).to eq(200)
@@ -285,11 +305,13 @@ RSpec.describe BabelReunited::TranslationsController do
       RateLimiter
         .any_instance
         .stubs(:performed!)
-        .raises(RateLimiter::LimitExceeded.new(1, "babel-reunited-translate", nil))
+        .raises(
+          RateLimiter::LimitExceeded.new(1, "babel-reunited-translate", nil)
+        )
 
       post "/babel-reunited/posts/#{post_record.id}/translations.json",
            params: {
-             target_language: "es",
+             target_language: "es"
            }
 
       expect(response.status).to eq(429)
@@ -298,7 +320,7 @@ RSpec.describe BabelReunited::TranslationsController do
     it "records manual requests against the daily fuse" do
       post "/babel-reunited/posts/#{post_record.id}/translations.json",
            params: {
-             target_language: "es",
+             target_language: "es"
            }
 
       expect(response.status).to eq(200)
@@ -312,11 +334,13 @@ RSpec.describe BabelReunited::TranslationsController do
 
       post "/babel-reunited/posts/#{post_record.id}/translations.json",
            params: {
-             target_language: "es",
+             target_language: "es"
            }
 
       expect(response.status).to eq(429)
-      expect(response.parsed_body["error"]).to include("Daily translation limit")
+      expect(response.parsed_body["error"]).to include(
+        "Daily translation limit"
+      )
       expect(Jobs::BabelReunited::TranslatePostJob.jobs).to be_empty
     end
 
@@ -326,7 +350,7 @@ RSpec.describe BabelReunited::TranslationsController do
 
       post "/babel-reunited/posts/#{post_record.id}/translations.json",
            params: {
-             target_language: "es",
+             target_language: "es"
            }
 
       expect(response.status).to eq(429)
@@ -340,7 +364,7 @@ RSpec.describe BabelReunited::TranslationsController do
 
       post "/babel-reunited/posts/#{post_record.id}/translations.json",
            params: {
-             target_language: "es",
+             target_language: "es"
            }
 
       expect(response.status).to eq(200)
@@ -360,7 +384,7 @@ RSpec.describe BabelReunited::TranslationsController do
       post "/babel-reunited/posts/#{target.id}/translations.json",
            params: {
              target_language: language,
-             trigger: "view",
+             trigger: "view"
            }
     end
 
@@ -381,9 +405,9 @@ RSpec.describe BabelReunited::TranslationsController do
           job: Jobs::BabelReunited::TranslatePostJob,
           args: {
             post_id: post_record.id,
-            target_language: "es",
-          },
-        ),
+            target_language: "es"
+          }
+        )
       ).to be true
       expect(BabelReunited::UsageFuse.site_count).to eq(1)
     end
@@ -408,7 +432,10 @@ RSpec.describe BabelReunited::TranslationsController do
     end
 
     it "noops while a translation is in flight" do
-      BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
+      BabelReunited::PostTranslation.create_or_update_record(
+        post_record.id,
+        "es"
+      )
       view_trigger
       expect_noop("already_translating")
     end
@@ -422,8 +449,8 @@ RSpec.describe BabelReunited::TranslationsController do
         translated_content: "",
         metadata: {
           "error_kind" => "permanent",
-          "failed_at" => 2.hours.ago.iso8601,
-        },
+          "failed_at" => 2.hours.ago.iso8601
+        }
       )
       view_trigger
       expect_noop("failed_not_retryable")
@@ -439,8 +466,8 @@ RSpec.describe BabelReunited::TranslationsController do
         metadata: {
           "error_kind" => "transient",
           "failed_at" => 5.minutes.ago.iso8601,
-          "failure_count" => 1,
-        },
+          "failure_count" => 1
+        }
       )
       view_trigger
       expect_noop("failed_not_retryable")
@@ -456,19 +483,83 @@ RSpec.describe BabelReunited::TranslationsController do
         metadata: {
           "error_kind" => "transient",
           "failed_at" => 31.minutes.ago.iso8601,
-          "failure_count" => 1,
-        },
+          "failure_count" => 1
+        }
       )
       view_trigger
 
       expect(response.parsed_body["status"]).to eq("queued")
     end
 
-    it "re-enqueues stale translations" do
-      Fabricate(:post_translation, post: post_record, language: "es", status: "stale")
+    it "claims stale translations atomically and re-enqueues once" do
+      translation =
+        Fabricate(
+          :post_translation,
+          post: post_record,
+          language: "es",
+          status: "stale"
+        )
+
+      view_trigger
+      expect(response.parsed_body["status"]).to eq("queued")
+      expect(translation.reload.status).to eq("translating")
+      expect(translation.translated_content).to be_present
+      expect(BabelReunited::UsageFuse.site_count).to eq(1)
+
+      # A second viewer during the same run noops instead of stacking work.
+      view_trigger
+      expect(response.parsed_body["status"]).to eq("noop")
+      expect(response.parsed_body["reason"]).to eq("already_translating")
+      expect(BabelReunited::UsageFuse.site_count).to eq(1)
+      expect(Jobs::BabelReunited::TranslatePostJob.jobs.length).to eq(1)
+    end
+
+    it "creates a translating claim for missing translations before the job runs" do
+      view_trigger
+
+      translation =
+        BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      expect(translation.status).to eq("translating")
+    end
+
+    it "does not consume the fuse for completed self-heal requests" do
+      Fabricate(
+        :post_translation,
+        post: post_record,
+        language: "es",
+        status: "completed"
+      )
+
       view_trigger
 
       expect(response.parsed_body["status"]).to eq("queued")
+      expect(BabelReunited::UsageFuse.site_count).to eq(0)
+      expect(
+        job_enqueued?(
+          job: Jobs::BabelReunited::TranslatePostJob,
+          args: {
+            post_id: post_record.id,
+            target_language: "es"
+          }
+        )
+      ).to be true
+    end
+
+    it "leaves stale records unclaimed when the fuse rejects the request" do
+      SiteSetting.babel_reunited_daily_translation_limit = 1
+      BabelReunited::UsageFuse.record!(Fabricate(:user))
+      translation =
+        Fabricate(
+          :post_translation,
+          post: post_record,
+          language: "es",
+          status: "stale"
+        )
+
+      view_trigger
+
+      expect(response.parsed_body["reason"]).to eq("site_daily_limit")
+      expect(translation.reload.status).to eq("stale")
     end
 
     it "noops when the user daily fuse trips" do
@@ -500,7 +591,13 @@ RSpec.describe BabelReunited::TranslationsController do
       RateLimiter
         .any_instance
         .stubs(:performed!)
-        .raises(RateLimiter::LimitExceeded.new(1, "babel-reunited-view-translate", nil))
+        .raises(
+          RateLimiter::LimitExceeded.new(
+            1,
+            "babel-reunited-view-translate",
+            nil
+          )
+        )
 
       view_trigger
 
@@ -517,7 +614,9 @@ RSpec.describe BabelReunited::TranslationsController do
       delete "/babel-reunited/posts/#{post_record.id}/translations/es.json"
       expect(response.status).to eq(200)
       expect(response.parsed_body["message"]).to eq("Translation deleted")
-      expect(BabelReunited::PostTranslation.find_translation(post_record.id, "es")).to be_nil
+      expect(
+        BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      ).to be_nil
     end
 
     it "returns 404 when translation not found" do
@@ -530,7 +629,12 @@ RSpec.describe BabelReunited::TranslationsController do
     before { sign_in(user) }
 
     it "returns preference when set" do
-      Fabricate(:user_preferred_language, user: user, language: "es", enabled: true)
+      Fabricate(
+        :user_preferred_language,
+        user: user,
+        language: "es",
+        enabled: true
+      )
 
       get "/babel-reunited/user-preferred-language.json"
       expect(response.status).to eq(200)
@@ -554,7 +658,10 @@ RSpec.describe BabelReunited::TranslationsController do
     before { sign_in(user) }
 
     it "sets a valid language preference" do
-      post "/babel-reunited/user-preferred-language.json", params: { language: "es" }
+      post "/babel-reunited/user-preferred-language.json",
+           params: {
+             language: "es"
+           }
       expect(response.status).to eq(200)
 
       json = response.parsed_body
@@ -563,7 +670,10 @@ RSpec.describe BabelReunited::TranslationsController do
     end
 
     it "sets a language preference with region code" do
-      post "/babel-reunited/user-preferred-language.json", params: { language: "zh-cn" }
+      post "/babel-reunited/user-preferred-language.json",
+           params: {
+             language: "zh-cn"
+           }
       expect(response.status).to eq(200)
 
       json = response.parsed_body
@@ -571,18 +681,27 @@ RSpec.describe BabelReunited::TranslationsController do
     end
 
     it "returns 400 for invalid language format" do
-      post "/babel-reunited/user-preferred-language.json", params: { language: "INVALID" }
+      post "/babel-reunited/user-preferred-language.json",
+           params: {
+             language: "INVALID"
+           }
       expect(response.status).to eq(400)
     end
 
     it "returns 400 for well-formed but unsupported language" do
-      post "/babel-reunited/user-preferred-language.json", params: { language: "eng" }
+      post "/babel-reunited/user-preferred-language.json",
+           params: {
+             language: "eng"
+           }
       expect(response.status).to eq(400)
       expect(response.parsed_body["error"]).to include("Unsupported language")
     end
 
     it "sets a supported three-letter language preference" do
-      post "/babel-reunited/user-preferred-language.json", params: { language: "yue" }
+      post "/babel-reunited/user-preferred-language.json",
+           params: {
+             language: "yue"
+           }
       expect(response.status).to eq(200)
       expect(response.parsed_body["language"]).to eq("yue")
     end
@@ -590,15 +709,26 @@ RSpec.describe BabelReunited::TranslationsController do
     it "updates existing preference" do
       Fabricate(:user_preferred_language, user: user, language: "es")
 
-      post "/babel-reunited/user-preferred-language.json", params: { language: "fr" }
+      post "/babel-reunited/user-preferred-language.json",
+           params: {
+             language: "fr"
+           }
       expect(response.status).to eq(200)
       expect(response.parsed_body["language"]).to eq("fr")
     end
 
     it "updates enabled without changing language" do
-      Fabricate(:user_preferred_language, user: user, language: "es", enabled: true)
+      Fabricate(
+        :user_preferred_language,
+        user: user,
+        language: "es",
+        enabled: true
+      )
 
-      post "/babel-reunited/user-preferred-language.json", params: { enabled: "false" }
+      post "/babel-reunited/user-preferred-language.json",
+           params: {
+             enabled: "false"
+           }
 
       expect(response.status).to eq(200)
       expect(response.parsed_body["language"]).to eq("es")
@@ -610,13 +740,18 @@ RSpec.describe BabelReunited::TranslationsController do
     before { sign_in(user) }
 
     it "returns translation status" do
-      Fabricate(:post_translation, post: post_record, language: "es", status: "completed")
+      Fabricate(
+        :post_translation,
+        post: post_record,
+        language: "es",
+        status: "completed"
+      )
       Fabricate(
         :post_translation,
         post: post_record,
         language: "fr",
         status: "translating",
-        translated_content: "",
+        translated_content: ""
       )
 
       get "/babel-reunited/posts/#{post_record.id}/translations/translation_status.json"
@@ -646,7 +781,12 @@ RSpec.describe BabelReunited::TranslationsController do
   describe "permission checks" do
     it "returns 403 when user cannot see post" do
       private_category =
-        Fabricate(:private_category, group: Fabricate(:group), topic_count: 0, post_count: 0)
+        Fabricate(
+          :private_category,
+          group: Fabricate(:group),
+          topic_count: 0,
+          post_count: 0
+        )
       private_topic = Fabricate(:topic, category: private_category)
       private_post = Fabricate(:post, topic: private_topic)
 

@@ -49,9 +49,11 @@ export default class LanguageTabsConnector extends Component {
     this._messageBusChannel = `/post-translations/${this.post.id}`;
     this._onTranslationUpdate = (data) => {
       if (data.status === "completed" && data.translation) {
+        // The payload status can be "stale" when the post changed while the
+        // translation ran; the content is readable and a refresh follows.
         this.mergeState(data.language, {
           ...data.translation,
-          status: "completed",
+          status: data.translation.status || "completed",
         });
         if (this._pendingLanguage === data.language) {
           this.currentLanguage = data.language;
@@ -225,13 +227,12 @@ export default class LanguageTabsConnector extends Component {
     return DISPLAYABLE_STATUSES.includes(status);
   }
 
+  // Anything with a body that is not failed is readable — including a record
+  // currently re-translating, whose old body stays on screen until the fresh
+  // one swaps in.
   _hasDisplayableContent(languageCode) {
     const state = this.states[languageCode];
-    return !!(
-      state &&
-      this.isDisplayableStatus(state.status) &&
-      state.translated_content
-    );
+    return !!(state && state.status !== "failed" && state.translated_content);
   }
 
   get post() {
@@ -392,13 +393,12 @@ export default class LanguageTabsConnector extends Component {
     }
 
     const status = this.getTranslationStatus(languageCode);
-    if (this.isDisplayableStatus(status)) {
-      // The body exists server-side but was not serialized; fetch it.
+    if (status && status !== "failed") {
+      // A record exists server-side (completed, stale, or re-translating with
+      // an old body) but the body is not local; fetch it. Fresh translating
+      // rows come back empty and simply keep their spinner.
       this._fetchTranslation(languageCode);
-    } else if (
-      status !== "translating" &&
-      this._pendingLanguage !== languageCode
-    ) {
+    } else if (this._pendingLanguage !== languageCode) {
       this._requestTranslation(languageCode);
     }
   }
@@ -413,9 +413,11 @@ export default class LanguageTabsConnector extends Component {
       const data = json?.post_translation || json;
       if (data?.language) {
         this.mergeState(languageCode, data);
-        this.currentLanguage = languageCode;
-        if (data.status === "stale") {
-          this._refreshStaleTranslation(languageCode);
+        if (data.translated_content) {
+          this.currentLanguage = languageCode;
+          if (data.status === "stale") {
+            this._refreshStaleTranslation(languageCode);
+          }
         }
       }
     } catch (error) {

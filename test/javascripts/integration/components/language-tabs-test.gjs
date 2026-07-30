@@ -188,12 +188,25 @@ module(
         .doesNotExist("the original tab already covers the post's language");
     });
 
-    test("picking an in-flight language does not re-request", async function (assert) {
+    test("picking an in-flight language fetches but never re-requests", async function (assert) {
       this.set("post", createPost());
       pretender.post(`/babel-reunited/posts/${this.post.id}/translations`, () => {
         assert.step("POST called");
         return response({ status: "queued" });
       });
+      pretender.get(
+        `/babel-reunited/posts/${this.post.id}/translations/es.json`,
+        () => {
+          assert.step("GET body");
+          return response({
+            post_translation: {
+              language: "es",
+              status: "translating",
+              translated_content: "",
+            },
+          });
+        }
+      );
 
       await render(
         <template>
@@ -207,7 +220,56 @@ module(
       await fillIn(".babel-language-picker__filter", "spanish");
       await click(".babel-language-picker__item");
 
-      assert.verifySteps([], "es is already translating");
+      // A fresh in-flight record has no body yet: one read, no new job.
+      assert.verifySteps(["GET body"]);
+      assert.dom(".cooked").hasText("Original cooked content");
+    });
+
+    test("a re-translating record with an old body stays readable", async function (assert) {
+      const currentUser = getOwner(this).lookup("service:current-user");
+      currentUser.set("preferred_language", "zh-cn");
+      currentUser.set("preferred_language_enabled", true);
+
+      this.set(
+        "post",
+        createPost({
+          babel_translations_meta: [
+            { language: "zh-cn", status: "translating", source_language: "en" },
+          ],
+          babel_preferred_translation: {
+            language: "zh-cn",
+            status: "translating",
+            translated_content: "<p>旧的中文翻译</p>",
+          },
+        })
+      );
+      pretender.post(`/babel-reunited/posts/${this.post.id}/translations`, () => {
+        assert.step("POST called");
+        return response({ status: "queued" });
+      });
+
+      await render(
+        <template>
+          <LanguageTabsConnector @post={{this.post}}>
+            <div class="cooked">{{trustHTML this.post.cooked}}</div>
+          </LanguageTabsConnector>
+        </template>
+      );
+
+      assert.dom(".cooked").hasText("旧的中文翻译", "old body auto-selected");
+      assert.verifySteps([], "no request while the run is in flight");
+
+      await publishToMessageBus(`/post-translations/${this.post.id}`, {
+        status: "completed",
+        language: "zh-cn",
+        translation: {
+          language: "zh-cn",
+          status: "completed",
+          translated_content: "<p>新的中文翻译</p>",
+        },
+      });
+
+      assert.dom(".cooked").hasText("新的中文翻译", "fresh body swaps in");
     });
 
     test("preferred language with preloaded body auto-selects and shows its own tab", async function (assert) {

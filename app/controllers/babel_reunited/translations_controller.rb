@@ -253,16 +253,12 @@ module BabelReunited
           @post.id,
           target_language
         )
-      if translation
-        if translation.translating?
-          return render_view_noop("already_translating")
-        end
-        if translation.failed? && !translation.auto_retryable?
-          return render_view_noop("failed_not_retryable")
-        end
-        # completed: enqueue anyway — the job's sha guard makes it free and
-        # republishes, self-healing clients that missed the body.
-        # stale: enqueue re-translation while old content stays readable.
+
+      if translation&.translating?
+        return render_view_noop("already_translating")
+      end
+      if translation&.failed? && !translation.auto_retryable?
+        return render_view_noop("failed_not_retryable")
       end
 
       unless guardian.is_staff?
@@ -281,10 +277,35 @@ module BabelReunited
         1.minute
       ).performed!
 
+      if translation&.completed?
+        # Client missed the body or raced the job; the job republishes for
+        # free (fingerprint skip), so no claim and no fuse count.
+        BabelReunited.enqueue_translation_jobs(@post, [target_language])
+        return render_view_queued(target_language)
+      end
+
+      # Atomic claim: the first viewer moves the record into "translating"
+      # (old content stays readable); everyone else noops instead of stacking
+      # duplicate jobs and fuse counts for the same run.
+      claimed =
+        if translation
+          BabelReunited::PostTranslation.claim_existing(
+            translation.id,
+            from: translation.status
+          )
+        else
+          BabelReunited::PostTranslation.claim_new(@post.id, target_language)
+        end
+      return render_view_noop("already_translating") unless claimed
+
       BabelReunited::UsageFuse.record!(current_user) unless guardian.is_staff?
 
       BabelReunited.enqueue_translation_jobs(@post, [target_language])
 
+      render_view_queued(target_language)
+    end
+
+    def render_view_queued(target_language)
       render json: {
                status: "queued",
                post_id: @post.id,

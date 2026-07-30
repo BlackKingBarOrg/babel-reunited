@@ -124,6 +124,36 @@ module BabelReunited
       (metadata || {})["confidence"] || 0.0
     end
 
+    # Atomic in-flight claims for the automated view lane: only one caller can
+    # move a record into "translating" (or create it), so concurrent viewers
+    # cannot stack duplicate jobs and fuse counts while a translation runs.
+    def self.claim_existing(id, from:)
+      where(id: id, status: from).update_all(
+        status: "translating",
+        updated_at: Time.current
+      ) == 1
+    end
+
+    def self.claim_new(post_id, target_language)
+      create!(
+        post_id: post_id,
+        language: target_language,
+        status: "translating",
+        translated_content: "",
+        translated_title: "",
+        translation_provider:
+          BabelReunited::ModelConfig.get_config&.dig(:provider) || "unknown",
+        metadata: {
+          translating_started_at: Time.current
+        }
+      ).present?
+    rescue ActiveRecord::RecordNotUnique
+      false
+    rescue ActiveRecord::RecordInvalid => e
+      raise unless e.record.errors.of_kind?(:post_id, :taken)
+      false
+    end
+
     def self.create_or_update_record(post_id, target_language)
       record =
         find_or_initialize_by(post_id: post_id, language: target_language)

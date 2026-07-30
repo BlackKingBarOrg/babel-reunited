@@ -111,13 +111,16 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
         return
       end
 
-      # A stale translation whose content fingerprint still matches (e.g. a
-      # category-only edit marked it stale) heals for free instead of paying
-      # for a re-translation.
-      if !force_update && translation.stale? &&
-           translation.source_sha == source_sha
+      # Any non-completed record whose stored fingerprint still matches the
+      # current content and which already carries a body needs no LLM call:
+      # heal it back to completed. Covers stale rows from metadata-only edits,
+      # records the view lane claimed into "translating", and failed rows
+      # whose content never actually changed.
+      if !force_update && !translation.completed? &&
+           translation.source_sha == source_sha &&
+           translation.translated_content.present?
         translation.update!(status: "completed")
-        log_skipped(post_id, target_language, "stale_content_unchanged")
+        log_skipped(post_id, target_language, "content_unchanged_heal")
         publish_status(
           post,
           target_language,
@@ -273,8 +276,16 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
       translated_title = translated_title[0...252] + "..."
     end
 
+    # The LLM call runs long enough for the post to change underneath us.
+    # Re-fingerprint before the final write: on a mismatch the result is still
+    # readable but recorded as stale (it translates an older revision), and
+    # one follow-up job chases the current content once the lock is released.
+    post.reload
+    final_status =
+      self.class.content_sha(post) == source_sha ? "completed" : "stale"
+
     translation.update!(
-      status: "completed",
+      status: final_status,
       translated_raw: result.translated_raw,
       translated_content: translated_cooked,
       translated_title: translated_title,
@@ -307,6 +318,16 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
       translation: translation,
       result: result
     )
+
+    if final_status == "stale"
+      log_skipped(post.id, target_language, "content_changed_midflight")
+      Jobs.enqueue_in(
+        5.seconds,
+        Jobs::BabelReunited::TranslatePostJob,
+        post_id: post.id,
+        target_language: target_language
+      )
+    end
   end
 
   def handle_failure(
@@ -392,7 +413,9 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
         translated_content: translation.translated_content,
         translated_title: translation.translated_title,
         source_language: translation.source_language,
-        status: "completed",
+        # The record can be "stale" when the post changed mid-translation;
+        # clients keep it readable and expect the follow-up refresh.
+        status: translation.status,
         metadata: {
           confidence: result&.ai_response&.dig(:confidence),
           provider_info: result&.ai_response&.dig(:provider_info),
