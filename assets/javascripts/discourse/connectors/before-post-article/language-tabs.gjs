@@ -15,6 +15,8 @@ import { eq } from "discourse/truth-helpers";
 import { i18n } from "discourse-i18n";
 import { getSupportedLanguages } from "../../lib/supported-languages";
 
+const DISPLAYABLE_STATUSES = ["completed", "stale"];
+
 export default class LanguageTabsConnector extends Component {
   static getLanguageDisplayName(code) {
     return i18n(`babel_reunited.language_tabs.languages.${code}`, {
@@ -27,27 +29,35 @@ export default class LanguageTabsConnector extends Component {
   @service siteSettings;
 
   @tracked currentLanguage = "original";
-  @tracked _localTranslations = null;
+  @tracked _states = null;
   @tracked _pendingLanguage = null;
 
   constructor() {
     super(...arguments);
+
+    this._staleRefreshRequested = new Set();
 
     this.initializePreferredLanguage();
 
     this._messageBusChannel = `/post-translations/${this.post.id}`;
     this._onTranslationUpdate = (data) => {
       if (data.status === "completed" && data.translation) {
-        this.updatePostTranslation(data.language, data.translation);
+        this.mergeState(data.language, {
+          ...data.translation,
+          status: "completed",
+        });
         if (this._pendingLanguage === data.language) {
           this.currentLanguage = data.language;
           this._pendingLanguage = null;
         }
       }
       if (data.status === "failed") {
-        this.handleTranslationFailure(data.language);
+        this.mergeState(data.language, { status: "failed" });
         if (this._pendingLanguage === data.language) {
           this._pendingLanguage = null;
+        }
+        if (this.currentLanguage === data.language) {
+          this.currentLanguage = "original";
         }
       }
     };
@@ -66,31 +76,40 @@ export default class LanguageTabsConnector extends Component {
     );
   }
 
-  get translations() {
-    return this._localTranslations ?? this.post?.post_translations ?? [];
-  }
-
-  updatePostTranslation(language, translationData) {
-    const existing = this.translations.filter(
-      (t) => t.post_translation?.language !== language
-    );
-    this._localTranslations = [
-      ...existing,
-      { post_translation: translationData },
-    ];
-  }
-
-  handleTranslationFailure(language) {
-    const existing = this.translations.filter(
-      (t) => t.post_translation?.language !== language
-    );
-    this._localTranslations = [
-      ...existing,
-      { post_translation: { language, status: "failed" } },
-    ];
-    if (this.currentLanguage === language) {
-      this.currentLanguage = "original";
+  // language -> { language, status, source_language, translated_content?, ... }
+  // Metadata for every translation comes from babel_translations_meta; the
+  // body is serialized only for the viewer's preferred language and merged in
+  // lazily for other languages (show endpoint or MessageBus payloads).
+  get states() {
+    if (this._states) {
+      return this._states;
     }
+
+    const map = {};
+    for (const meta of this.post?.babel_translations_meta || []) {
+      if (meta?.language) {
+        map[meta.language] = { ...meta };
+      }
+    }
+
+    const preferred = this.post?.babel_preferred_translation;
+    if (preferred?.language) {
+      map[preferred.language] = { ...map[preferred.language], ...preferred };
+    }
+
+    return map;
+  }
+
+  mergeState(language, attrs) {
+    const next = { ...this.states };
+    next[language] = { ...next[language], language, ...attrs };
+    this._states = next;
+  }
+
+  removeState(language) {
+    const next = { ...this.states };
+    delete next[language];
+    this._states = next;
   }
 
   get isAiTranslationDisabled() {
@@ -127,27 +146,25 @@ export default class LanguageTabsConnector extends Component {
     }
   }
 
+  isDisplayableStatus(status) {
+    return DISPLAYABLE_STATUSES.includes(status);
+  }
+
   _hasDisplayableContent(languageCode) {
-    const translation = this.findTranslation(languageCode);
-    const pt = translation?.post_translation;
-    if (!pt || pt.status === "failed") {
-      return false;
-    }
-    return !!pt.translated_content;
+    const state = this.states[languageCode];
+    return !!(
+      state &&
+      this.isDisplayableStatus(state.status) &&
+      state.translated_content
+    );
   }
 
   get post() {
     return this.args.post;
   }
 
-  findTranslation(languageCode) {
-    return this.translations.find(
-      (t) => t.post_translation?.language === languageCode
-    );
-  }
-
   getTranslationStatus(languageCode) {
-    return this.findTranslation(languageCode)?.post_translation?.status || "";
+    return this.states[languageCode]?.status || "";
   }
 
   tabClass(languageCode) {
@@ -155,16 +172,14 @@ export default class LanguageTabsConnector extends Component {
       return "--active";
     }
     const status = this.getTranslationStatus(languageCode);
-    if (status === "completed") {
+    if (this.isDisplayableStatus(status)) {
       return "--completed";
     }
     return "--pending";
   }
 
   get availableLanguages() {
-    return this.translations
-      .map((t) => t.post_translation?.language)
-      .filter(Boolean);
+    return Object.keys(this.states);
   }
 
   get languageNames() {
@@ -182,7 +197,9 @@ export default class LanguageTabsConnector extends Component {
         status,
         tabClass: this.tabClass(code),
         displayText:
-          status && status !== "completed" ? `${name} (${status})` : name,
+          status && !this.isDisplayableStatus(status)
+            ? `${name} (${status})`
+            : name,
       };
     });
   }
@@ -192,8 +209,7 @@ export default class LanguageTabsConnector extends Component {
       return this.post?.cooked || this.post?.raw || "";
     }
 
-    const translation = this.findTranslation(this.currentLanguage);
-    const content = translation?.post_translation?.translated_content;
+    const content = this.states[this.currentLanguage]?.translated_content;
     return content || this.post?.cooked || "";
   }
 
@@ -211,9 +227,18 @@ export default class LanguageTabsConnector extends Component {
       return;
     }
 
-    const status = this.getTranslationStatus(languageCode);
     if (this._hasDisplayableContent(languageCode)) {
       this.currentLanguage = languageCode;
+      if (this.getTranslationStatus(languageCode) === "stale") {
+        this._refreshStaleTranslation(languageCode);
+      }
+      return;
+    }
+
+    const status = this.getTranslationStatus(languageCode);
+    if (this.isDisplayableStatus(status)) {
+      // The body exists server-side but was not serialized; fetch it.
+      this._fetchTranslation(languageCode);
     } else if (
       status !== "translating" &&
       this._pendingLanguage !== languageCode
@@ -222,16 +247,50 @@ export default class LanguageTabsConnector extends Component {
     }
   }
 
+  async _fetchTranslation(languageCode) {
+    try {
+      const json = await ajax(
+        `/babel-reunited/posts/${this.post.id}/translations/${encodeURIComponent(
+          languageCode
+        )}.json`
+      );
+      const data = json?.post_translation || json;
+      if (data?.language) {
+        this.mergeState(languageCode, data);
+        this.currentLanguage = languageCode;
+        if (data.status === "stale") {
+          this._refreshStaleTranslation(languageCode);
+        }
+      }
+    } catch (error) {
+      popupAjaxError(error);
+    }
+  }
+
+  // Stale content stays on screen; the fresh translation swaps in through the
+  // regular MessageBus completion. Errors stay silent because the reader
+  // already has readable (old) content.
+  async _refreshStaleTranslation(languageCode) {
+    if (this._staleRefreshRequested.has(languageCode)) {
+      return;
+    }
+    this._staleRefreshRequested.add(languageCode);
+
+    try {
+      await ajax(`/babel-reunited/posts/${this.post.id}/translations`, {
+        type: "POST",
+        data: { target_language: languageCode },
+      });
+    } catch {
+      // best-effort refresh
+    }
+  }
+
   async _requestTranslation(languageCode) {
     this._pendingLanguage = languageCode;
 
-    const existing = this.translations.filter(
-      (t) => t.post_translation?.language !== languageCode
-    );
-    this._localTranslations = [
-      ...existing,
-      { post_translation: { language: languageCode, status: "translating" } },
-    ];
+    const previous = this.states[languageCode];
+    this.mergeState(languageCode, { status: "translating" });
 
     try {
       await ajax(`/babel-reunited/posts/${this.post.id}/translations`, {
@@ -240,10 +299,11 @@ export default class LanguageTabsConnector extends Component {
       });
     } catch (error) {
       this._pendingLanguage = null;
-      const reverted = this.translations.filter(
-        (t) => t.post_translation?.language !== languageCode
-      );
-      this._localTranslations = [...reverted];
+      if (previous) {
+        this.mergeState(languageCode, previous);
+      } else {
+        this.removeState(languageCode);
+      }
       popupAjaxError(error);
     }
   }

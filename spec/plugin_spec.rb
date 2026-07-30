@@ -308,16 +308,52 @@ RSpec.describe BabelReunited do
       PostSerializer.new(a_post, scope: guardian, root: false).as_json
     end
 
-    it "includes available_translations" do
+    it "includes lightweight babel_translations_meta without bodies" do
       Fabricate(:post_translation, post: post_record, language: "es")
       json = serialize_post(post_record)
-      expect(json[:available_translations]).to include("es")
+
+      meta = json[:babel_translations_meta]
+      expect(meta.length).to eq(1)
+      expect(meta.first[:language]).to eq("es")
+      expect(meta.first[:status]).to eq("completed")
+      expect(meta.first[:source_language]).to eq("en")
+      expect(meta.first).not_to have_key(:translated_content)
     end
 
-    it "includes post_translations" do
+    it "does not serialize legacy post_translations and available_translations" do
       Fabricate(:post_translation, post: post_record, language: "es")
       json = serialize_post(post_record)
-      expect(json[:post_translations]).to be_present
+
+      expect(json).not_to have_key(:post_translations)
+      expect(json).not_to have_key(:available_translations)
+    end
+
+    it "includes the full body only for the viewer's preferred language" do
+      Fabricate(:user_preferred_language, user: user, language: "es", enabled: true)
+      Fabricate(:post_translation, post: post_record, language: "es")
+      Fabricate(:post_translation, post: post_record, language: "de")
+
+      json = serialize_post(post_record)
+
+      preferred = json[:babel_preferred_translation]
+      expect(preferred[:language]).to eq("es")
+      expect(preferred[:translated_content]).to include("Hola mundo")
+      expect(json[:babel_translations_meta].map { |t| t[:language] }).to contain_exactly(
+        "es",
+        "de",
+      )
+    end
+
+    it "omits babel_preferred_translation without a preference" do
+      Fabricate(:post_translation, post: post_record, language: "es")
+      json = serialize_post(post_record)
+      expect(json).not_to have_key(:babel_preferred_translation)
+    end
+
+    it "includes babel_detected_locale when detected" do
+      BabelReunited.store_detected_locale(post_record, "en")
+      json = serialize_post(post_record.reload)
+      expect(json[:babel_detected_locale]).to eq("en")
     end
 
     it "includes show_translation_widget" do
@@ -434,6 +470,27 @@ RSpec.describe BabelReunited do
       first_post = topics.first.first_post
       preloaded = BabelReunited.preloaded_post_translation(first_post, "es")
       expect(preloaded).to eq(translation)
+    end
+
+    it "preloads meta rows without translation bodies" do
+      Fabricate(:post_translation, post: post_record, language: "de")
+
+      topic_view = TopicView.new(topic.id, user)
+      preloaded = BabelReunited.preloaded_all_translations(topic_view.posts.first)
+
+      expect(preloaded.length).to eq(1)
+      expect(preloaded.first.has_attribute?(:translated_content)).to be false
+      expect(preloaded.first.language).to eq("de")
+    end
+
+    it "preloads preferred-language bodies for every stream post" do
+      second_post = Fabricate(:post, topic: topic, user: user)
+      translation = Fabricate(:post_translation, post: second_post, language: "es")
+
+      topic_view = TopicView.new(topic.id, user)
+      stream_post = topic_view.posts.find { |p| p.id == second_post.id }
+
+      expect(BabelReunited.preloaded_post_translation(stream_post, "es")).to eq(translation)
     end
   end
 

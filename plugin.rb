@@ -71,16 +71,19 @@ module ::BabelReunited
       user.user_preferred_language.present?
   end
 
-  def self.translated_title_for(post, language)
+  # Full translation row for one language, honoring the per-language preload
+  # (a preloaded miss is authoritative — no fallback query).
+  def self.stream_translation_for(post, language)
     return nil if post.blank? || language.blank?
 
     preloaded = post.instance_variable_get(:@babel_reunited_translations)
-    translation =
-      if preloaded&.key?(language)
-        preloaded[language]
-      else
-        BabelReunited::PostTranslation.find_translation(post.id, language)
-      end
+    return preloaded[language] if preloaded&.key?(language)
+
+    BabelReunited::PostTranslation.find_translation(post.id, language)
+  end
+
+  def self.translated_title_for(post, language)
+    translation = stream_translation_for(post, language)
 
     return nil if translation.blank? || translation.failed?
     return nil if translation.translated_title.blank?
@@ -109,14 +112,25 @@ module ::BabelReunited
     post.instance_variable_get(:@babel_reunited_translations)&.[](language)
   end
 
+  # Lightweight metadata preload: never loads translation bodies. Bodies are
+  # serialized only for the viewer's preferred language (see
+  # preload_post_translations) and fetched on demand for other languages.
   def self.preload_all_post_translations(posts)
     return if posts.blank?
 
     post_ids = posts.map(&:id)
     translations =
-      BabelReunited::PostTranslation.where(post_id: post_ids).order(
-        created_at: :desc
-      )
+      BabelReunited::PostTranslation
+        .where(post_id: post_ids)
+        .select(
+          :id,
+          :post_id,
+          :language,
+          :status,
+          :source_language,
+          :created_at
+        )
+        .order(created_at: :desc)
     grouped = translations.group_by(&:post_id)
 
     posts.each do |post|
@@ -298,31 +312,22 @@ after_initialize do
 
   add_to_serializer(
     :post,
-    :available_translations,
+    :babel_translations_meta,
     include_condition: plugin_enabled_condition
   ) do
     preloaded = BabelReunited.preloaded_all_translations(object)
-    if preloaded
-      preloaded.map(&:language)
-    else
-      object.post_translations.pluck(:language)
-    end
-  end
-
-  add_to_serializer(
-    :post,
-    :post_translations,
-    include_condition: plugin_enabled_condition
-  ) do
-    preloaded = BabelReunited.preloaded_all_translations(object)
-    translations =
-      if preloaded
-        preloaded.first(5)
-      else
-        object.post_translations.recent.limit(5).to_a
-      end
-    translations.map do |t|
-      BabelReunited::PostTranslationSerializer.new(t).as_json
+    rows =
+      preloaded ||
+        object
+          .post_translations
+          .select(:id, :post_id, :language, :status, :source_language)
+          .to_a
+    rows.map do |t|
+      {
+        language: t.language,
+        status: t.status,
+        source_language: t.source_language
+      }
     end
   end
 
@@ -373,6 +378,23 @@ after_initialize do
   translated_title_condition = -> do
     SiteSetting.babel_reunited_enabled &&
       BabelReunited.preferred_language_for(scope&.user).present?
+  end
+
+  # Full body for exactly one language per post: the viewer's preference.
+  # Everything else ships as babel_translations_meta and is fetched on demand.
+  add_to_serializer(
+    :post,
+    :babel_preferred_translation,
+    include_condition: translated_title_condition
+  ) do
+    language = BabelReunited.preferred_language_for(scope&.user)
+    translation = BabelReunited.stream_translation_for(object, language)
+    if translation
+      BabelReunited::PostTranslationSerializer.new(
+        translation,
+        root: false
+      ).as_json
+    end
   end
 
   # NOTE: Field is named `babel_translated_title` (not `translated_title`) to avoid
@@ -434,8 +456,12 @@ after_initialize do
     language = BabelReunited.preferred_language_for(topic_view.guardian&.user)
     next if language.blank?
 
-    first_post = topic_view.topic&.first_post
-    BabelReunited.preload_post_translations([first_post].compact, language)
+    # Full rows (with bodies) for the preferred language: every stream post
+    # feeds babel_preferred_translation, the first post also feeds the
+    # topic-level translated title. No uniq: the first_post association object
+    # is distinct from its stream copy and needs its own preload ivar.
+    targets = (posts.to_a + [topic_view.topic&.first_post]).compact
+    BabelReunited.preload_post_translations(targets, language)
   end
 
   TopicList.on_preload do |topics, topic_list|

@@ -4,8 +4,14 @@ module BabelReunited
   class TranslationsController < ::ApplicationController
     requires_plugin PLUGIN_NAME
 
-    before_action :ensure_logged_in
-    before_action :find_post, except: %i[set_user_preferred_language get_user_preferred_language]
+    # Read endpoints are open to anonymous users: visibility is enforced by
+    # guardian.can_see? in find_post, and reads can never trigger LLM calls.
+    before_action :ensure_logged_in, except: %i[index show translation_status]
+    before_action :find_post,
+                  except: %i[
+                    set_user_preferred_language
+                    get_user_preferred_language
+                  ]
 
     def index
       translations = @post.post_translations.recent
@@ -13,8 +19,16 @@ module BabelReunited
     end
 
     def show
-      translation = BabelReunited::PostTranslation.find_translation(@post.id, params[:language])
-      return render json: { error: "Translation not found" }, status: :not_found unless translation
+      translation =
+        BabelReunited::PostTranslation.find_translation(
+          @post.id,
+          params[:language]
+        )
+      unless translation
+        return(
+          render json: { error: "Translation not found" }, status: :not_found
+        )
+      end
 
       render_serialized(translation, PostTranslationSerializer)
     end
@@ -24,49 +38,81 @@ module BabelReunited
         raise Discourse::InvalidAccess.new(
                 nil,
                 nil,
-                custom_message: "babel_reunited.errors.category_not_enabled",
+                custom_message: "babel_reunited.errors.category_not_enabled"
               )
       end
 
       target_language = params[:target_language]&.downcase
-      force_update = ActiveModel::Type::Boolean.new.cast(params[:force_update]) || false
+      force_update =
+        ActiveModel::Type::Boolean.new.cast(params[:force_update]) || false
 
       if force_update && !guardian.is_staff?
-        return render json: { error: "force_update requires staff" }, status: :forbidden
+        return(
+          render json: {
+                   error: "force_update requires staff"
+                 },
+                 status: :forbidden
+        )
       end
 
       if target_language.blank?
-        return render json: { error: "Target language required" }, status: :bad_request
+        return(
+          render json: {
+                   error: "Target language required"
+                 },
+                 status: :bad_request
+        )
       end
 
       unless BabelReunited::Locales.format_valid?(target_language)
-        return render json: { error: "Invalid language code format" }, status: :bad_request
+        return(
+          render json: {
+                   error: "Invalid language code format"
+                 },
+                 status: :bad_request
+        )
       end
 
       unless BabelReunited::Locales.valid?(target_language)
-        return render json: { error: "Unsupported language" }, status: :bad_request
+        return(
+          render json: { error: "Unsupported language" }, status: :bad_request
+        )
       end
 
-      ::RateLimiter.new(current_user, "babel-reunited-translate", 10, 1.minute).performed!
+      ::RateLimiter.new(
+        current_user,
+        "babel-reunited-translate",
+        10,
+        1.minute
+      ).performed!
 
-      BabelReunited.enqueue_translation_jobs(@post, [target_language], force_update: force_update)
+      BabelReunited.enqueue_translation_jobs(
+        @post,
+        [target_language],
+        force_update: force_update
+      )
 
       render json: {
                message: "Translation job enqueued",
                post_id: @post.id,
                target_language: target_language,
                force_update: force_update,
-               status: "queued",
+               status: "queued"
              }
     end
 
     def destroy
-      unless guardian.is_admin? || guardian.is_moderator? || (@post.user_id == current_user.id)
+      unless guardian.is_admin? || guardian.is_moderator? ||
+               (@post.user_id == current_user.id)
         return render json: { error: "Not authorized" }, status: :forbidden
       end
 
       translation = @post.post_translations.find_by(language: params[:language])
-      return render json: { error: "Translation not found" }, status: :not_found unless translation
+      unless translation
+        return(
+          render json: { error: "Translation not found" }, status: :not_found
+        )
+      end
 
       translation.destroy!
       render json: { message: "Translation deleted" }
@@ -76,8 +122,10 @@ module BabelReunited
       cast = ActiveModel::Type::Boolean.new
 
       # Return language independently of enabled status so frontend preserves selection
-      language = current_user.custom_fields[BabelReunited::PREFERRED_LANGUAGE_FIELD]
-      enabled_val = current_user.custom_fields[BabelReunited::PREFERRED_ENABLED_FIELD]
+      language =
+        current_user.custom_fields[BabelReunited::PREFERRED_LANGUAGE_FIELD]
+      enabled_val =
+        current_user.custom_fields[BabelReunited::PREFERRED_ENABLED_FIELD]
 
       if language.blank? || enabled_val.nil?
         legacy = current_user.user_preferred_language
@@ -97,36 +145,56 @@ module BabelReunited
 
       if language.present?
         unless BabelReunited::Locales.format_valid?(language)
-          return render json: { error: "Invalid language code format" }, status: :bad_request
+          return(
+            render json: {
+                     error: "Invalid language code format"
+                   },
+                   status: :bad_request
+          )
         end
         unless BabelReunited::Locales.valid?(language)
-          return render json: { error: "Unsupported language" }, status: :bad_request
+          return(
+            render json: { error: "Unsupported language" }, status: :bad_request
+          )
         end
-        current_user.custom_fields[BabelReunited::PREFERRED_LANGUAGE_FIELD] = language
+        current_user.custom_fields[
+          BabelReunited::PREFERRED_LANGUAGE_FIELD
+        ] = language
       end
 
       unless enabled.nil?
-        current_user.custom_fields[BabelReunited::PREFERRED_ENABLED_FIELD] = cast.cast(enabled)
+        current_user.custom_fields[
+          BabelReunited::PREFERRED_ENABLED_FIELD
+        ] = cast.cast(enabled)
       end
 
       current_user.save_custom_fields
 
       # Dual-write to legacy table for rollback safety
-      legacy = current_user.user_preferred_language || current_user.build_user_preferred_language
+      legacy =
+        current_user.user_preferred_language ||
+          current_user.build_user_preferred_language
       legacy.language = language if language.present?
       legacy.enabled = cast.cast(enabled) unless enabled.nil?
       legacy.save
 
       final_language =
-        current_user.custom_fields[BabelReunited::PREFERRED_LANGUAGE_FIELD] || legacy.language
-      final_enabled = current_user.custom_fields[BabelReunited::PREFERRED_ENABLED_FIELD]
+        current_user.custom_fields[BabelReunited::PREFERRED_LANGUAGE_FIELD] ||
+          legacy.language
+      final_enabled =
+        current_user.custom_fields[BabelReunited::PREFERRED_ENABLED_FIELD]
       final_enabled = legacy.enabled if final_enabled.nil?
 
-      render json: { success: true, language: final_language, enabled: cast.cast(final_enabled) }
+      render json: {
+               success: true,
+               language: final_language,
+               enabled: cast.cast(final_enabled)
+             }
     end
 
     def translation_status
-      rows = @post.post_translations.select(:language, :status, :updated_at).to_a
+      rows =
+        @post.post_translations.select(:language, :status, :updated_at).to_a
       pending = rows.select { |r| r.status == "translating" }.map(&:language)
       last_updated = rows.map(&:updated_at).compact.max
 
@@ -134,7 +202,7 @@ module BabelReunited
                post_id: @post.id,
                pending_translations: pending,
                available_translations: rows.map(&:language),
-               last_updated: last_updated,
+               last_updated: last_updated
              }
     end
 
@@ -142,9 +210,13 @@ module BabelReunited
 
     def find_post
       @post = Post.find_by(id: params[:post_id])
-      return render json: { error: "Post not found" }, status: :not_found unless @post
+      unless @post
+        return render json: { error: "Post not found" }, status: :not_found
+      end
 
-      render json: { error: "Access denied" }, status: :forbidden unless guardian.can_see?(@post)
+      unless guardian.can_see?(@post)
+        render json: { error: "Access denied" }, status: :forbidden
+      end
     end
   end
 end

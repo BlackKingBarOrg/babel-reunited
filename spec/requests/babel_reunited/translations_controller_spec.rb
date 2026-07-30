@@ -9,13 +9,30 @@ RSpec.describe BabelReunited::TranslationsController do
   before { enable_current_plugin }
 
   describe "authentication" do
-    it "requires login for index" do
+    it "allows anonymous index" do
+      Fabricate(:post_translation, post: post_record, language: "es")
       get "/babel-reunited/posts/#{post_record.id}/translations.json"
-      expect(response.status).to eq(403)
+      expect(response.status).to eq(200)
     end
 
-    it "requires login for show" do
+    it "allows anonymous show" do
+      Fabricate(:post_translation, post: post_record, language: "es")
       get "/babel-reunited/posts/#{post_record.id}/translations/es.json"
+      expect(response.status).to eq(200)
+    end
+
+    it "allows anonymous translation_status" do
+      get "/babel-reunited/posts/#{post_record.id}/translations/translation_status.json"
+      expect(response.status).to eq(200)
+    end
+
+    it "denies anonymous reads of restricted posts" do
+      private_category =
+        Fabricate(:private_category, group: Fabricate(:group), topic_count: 0, post_count: 0)
+      private_topic = Fabricate(:topic, category: private_category)
+      private_post = Fabricate(:post, topic: private_topic)
+
+      get "/babel-reunited/posts/#{private_post.id}/translations.json"
       expect(response.status).to eq(403)
     end
 
@@ -39,11 +56,6 @@ RSpec.describe BabelReunited::TranslationsController do
 
     it "requires login for set_user_preferred_language" do
       post "/babel-reunited/user-preferred-language.json", params: { language: "es" }
-      expect(response.status).to eq(403)
-    end
-
-    it "requires login for translation_status" do
-      get "/babel-reunited/posts/#{post_record.id}/translations/translation_status.json"
       expect(response.status).to eq(403)
     end
   end
