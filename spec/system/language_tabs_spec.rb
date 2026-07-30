@@ -21,11 +21,13 @@ RSpec.describe "Language tabs" do
     sign_in(admin)
   end
 
-  it "shows the language tabs on a topic page" do
+  it "shows the original tab and the language menu on a topic page" do
     visit "/t/#{topic.slug}/#{topic.id}"
 
     expect(page).to have_css("#post_1 .ai-language-tabs")
-    expect(page).to have_css("#post_1 .babel-reunited-language-tab", count: 4)
+    # original tab + overflow menu trigger (admin has no preferred language)
+    expect(page).to have_css("#post_1 .babel-reunited-language-tab", count: 2)
+    expect(page).to have_css("#post_1 .babel-reunited-language-tab.--menu")
   end
 
   describe "cooked decoration pipeline" do
@@ -51,12 +53,17 @@ RSpec.describe "Language tabs" do
       expect(page).to have_css("#post_1 .cooked", count: 1)
     end
 
+    def switch_to_translated
+      find("#post_1 .babel-reunited-language-tab.--menu").click
+      find(".babel-language-picker__item.--translated").click
+    end
+
     it "decorates the translated view and never duplicates the post body" do
       visit "/t/#{topic.slug}/#{topic.id}"
       expect(page).to have_css("#post_1 .codeblock-button-wrapper", count: 1)
 
-      # Switch to zh-cn (button order: Original, en, zh-cn, es)
-      find("#post_1 .ai-language-tabs button:nth-child(3)").click
+      # Switch to zh-cn via the overflow menu (fetches the body on demand)
+      switch_to_translated
       expect(page).to have_css("#post_1 .cooked", text: "介绍段落")
       expect(page).to have_css("#post_1 .codeblock-button-wrapper", count: 1)
       expect(page).to have_css("#post_1 .cooked", count: 1)
@@ -66,7 +73,7 @@ RSpec.describe "Language tabs" do
       expect(page).to have_css("#post_1 .cooked", text: "Outro paragraph")
       expect(page).to have_css("#post_1 .codeblock-button-wrapper", count: 1)
 
-      find("#post_1 .ai-language-tabs button:nth-child(3)").click
+      switch_to_translated
       expect(page).to have_css("#post_1 .cooked", text: "介绍段落")
       expect(page).to have_css("#post_1 .codeblock-button-wrapper", count: 1)
       expect(page).to have_css("#post_1 .cooked", count: 1)

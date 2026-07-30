@@ -1,14 +1,16 @@
 import Component from "@glimmer/component";
 import { tracked } from "@glimmer/tracking";
-import { fn } from "@ember/helper";
 import { on } from "@ember/modifier";
 import { action } from "@ember/object";
 import { service } from "@ember/service";
+// The ui-kit module path suggested by the lint rule is not resolvable in the
+// plugin runtime yet; the legacy path works through core's compatibility shim.
+// eslint-disable-next-line discourse/ui-kit-imports
 import concatClass from "discourse/helpers/concat-class";
 import { ajax } from "discourse/lib/ajax";
 import { popupAjaxError } from "discourse/lib/ajax-error";
-import { eq } from "discourse/truth-helpers";
 import { i18n } from "discourse-i18n";
+import BabelLanguagePicker from "../../components/babel-language-picker";
 import { getSupportedLanguages } from "../../lib/supported-languages";
 
 export default class AiTranslationLanguage extends Component {
@@ -63,13 +65,8 @@ export default class AiTranslationLanguage extends Component {
     }, 2000);
   }
 
-  get languageOptions() {
-    return getSupportedLanguages(this.siteSettings).map((code) => ({
-      value: code,
-      label: i18n(`babel_reunited.language_tabs.languages.${code}`, {
-        defaultValue: code,
-      }),
-    }));
+  get instantCodes() {
+    return getSupportedLanguages(this.siteSettings);
   }
 
   @action
@@ -156,27 +153,12 @@ export default class AiTranslationLanguage extends Component {
       {{#if this.enabled}}
         <div class="controls">
           <div class="language-selection">
-            {{#each this.languageOptions as |option|}}
-              <button
-                type="button"
-                class={{concatClass
-                  "language-option btn btn-small"
-                  (if
-                    (eq option.value this.currentLanguage)
-                    "btn-primary --selected"
-                  )
-                }}
-                disabled={{this.saving}}
-                {{on "click" (fn this.changeLanguage option.value)}}
-                aria-pressed={{if
-                  (eq option.value this.currentLanguage)
-                  "true"
-                  "false"
-                }}
-              >
-                {{option.label}}
-              </button>
-            {{/each}}
+            <BabelLanguagePicker
+              @selectedCode={{this.currentLanguage}}
+              @instantCodes={{this.instantCodes}}
+              @showHints={{true}}
+              @onSelect={{this.changeLanguage}}
+            />
           </div>
         </div>
       {{/if}}

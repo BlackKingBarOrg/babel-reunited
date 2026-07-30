@@ -11,12 +11,17 @@ zh_CN:
       language_tabs:
         disabled_by_user: "用户已禁用AI翻译"
         original: "原文"
+        original_with_language: "原文 · %{language}"
+        more_languages: "更多语言"
+        translated_group: "已翻译"
+        all_group: "全部语言"
+        search_placeholder: "搜索语言..."
+        instant_hint: "即时"
+        on_demand_hint: "首次查看需数秒"
+        failed_retry: "翻译失败，点击重试"
+        retry: "重试"
         switch_to: "切换到 %{language}"
         start_translation: "点击开始 %{language} 翻译"
-        languages:
-          en: "English"
-          zh-cn: "简体中文"
-          es: "Español"
       preferences:
         ai_translation_language: "AI翻译语言"
         ai_translation_language_description: "选择您偏好的AI翻译语言。当帖子有该语言的翻译时，将自动显示翻译版本。"

@@ -8,6 +8,20 @@ es:
     title: "Babel Reunited"
   js:
     babel_reunited:
+      language_tabs:
+        disabled_by_user: "El usuario ha desactivado la traducción IA"
+        original: "Original"
+        original_with_language: "Original · %{language}"
+        more_languages: "Más idiomas"
+        translated_group: "Traducido"
+        all_group: "Todos los idiomas"
+        search_placeholder: "Buscar idiomas..."
+        instant_hint: "Instantáneo"
+        on_demand_hint: "La primera vista tarda unos segundos"
+        failed_retry: "La traducción falló, haz clic para reintentar"
+        retry: "Reintentar"
+        switch_to: "Cambiar a %{language}"
+        start_translation: "Haz clic para iniciar la traducción a %{language}"
       preferences:
         ai_translation_language: "Idioma de Traducción IA"
         ai_translation_language_description: "Elige tu idioma preferido para las traducciones automáticas de publicaciones. Las publicaciones se mostrarán automáticamente en este idioma cuando esté disponible."

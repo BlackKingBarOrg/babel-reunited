@@ -1,15 +1,18 @@
 import Component from "@glimmer/component";
 import { tracked } from "@glimmer/tracking";
-import { concat, fn } from "@ember/helper";
 import { on } from "@ember/modifier";
 import { action } from "@ember/object";
 import { service } from "@ember/service";
-import { htmlSafe } from "@ember/template";
+import { trustHTML } from "@ember/template";
+// The ui-kit module path suggested by the lint rule is not resolvable in the
+// plugin runtime yet; the legacy path works through core's compatibility shim.
+// eslint-disable-next-line discourse/ui-kit-imports
 import DModal from "discourse/components/d-modal";
 import { ajax } from "discourse/lib/ajax";
 import { popupAjaxError } from "discourse/lib/ajax-error";
 import { i18n } from "discourse-i18n";
 import { getSupportedLanguages } from "../../lib/supported-languages";
+import BabelLanguagePicker from "../babel-language-picker";
 
 export default class LanguagePreferenceModal extends Component {
   @service currentUser;
@@ -17,12 +20,12 @@ export default class LanguagePreferenceModal extends Component {
 
   @tracked saving = false;
 
-  get languages() {
+  get instantCodes() {
     return getSupportedLanguages(this.siteSettings);
   }
 
   get modalDescription() {
-    return htmlSafe(
+    return trustHTML(
       this.siteSettings.babel_reunited_modal_description ||
         i18n("babel_reunited.language_preference_modal.description")
     );
@@ -79,20 +82,11 @@ export default class LanguagePreferenceModal extends Component {
       <:body>
         <p>{{this.modalDescription}}</p>
 
-        <div class="language-buttons">
-          {{#each this.languages as |lang|}}
-            <button
-              class="language-btn"
-              disabled={{this.saving}}
-              {{on "click" (fn this.selectLanguage lang)}}
-            >
-              <span class="language-name">{{i18n
-                  (concat "babel_reunited.language_tabs.languages." lang)
-                  defaultValue=lang
-                }}</span>
-            </button>
-          {{/each}}
-        </div>
+        <BabelLanguagePicker
+          @instantCodes={{this.instantCodes}}
+          @showHints={{true}}
+          @onSelect={{this.selectLanguage}}
+        />
 
         <div class="disable-section">
           <div class="disable-text">

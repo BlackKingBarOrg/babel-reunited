@@ -8,6 +8,20 @@ de:
     title: "Babel Reunited"
   js:
     babel_reunited:
+      language_tabs:
+        disabled_by_user: "KI-Übersetzung wurde vom Nutzer deaktiviert"
+        original: "Original"
+        original_with_language: "Original · %{language}"
+        more_languages: "Weitere Sprachen"
+        translated_group: "Übersetzt"
+        all_group: "Alle Sprachen"
+        search_placeholder: "Sprachen suchen..."
+        instant_hint: "Sofort"
+        on_demand_hint: "Erste Ansicht dauert einige Sekunden"
+        failed_retry: "Übersetzung fehlgeschlagen, zum Wiederholen klicken"
+        retry: "Erneut versuchen"
+        switch_to: "Zu %{language} wechseln"
+        start_translation: "Klicken, um die Übersetzung nach %{language} zu starten"
       preferences:
         ai_translation_language: "KI-Übersetzungssprache"
         ai_translation_language_description: "Wählen Sie Ihre bevorzugte Sprache für KI-gestützte Übersetzungen. Beiträge werden automatisch in dieser Sprache angezeigt, wenn verfügbar."

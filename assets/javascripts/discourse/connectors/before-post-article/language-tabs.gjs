@@ -6,15 +6,18 @@ import { action } from "@ember/object";
 import { cancel } from "@ember/runloop";
 import { service } from "@ember/service";
 import PostCookedHtml from "discourse/components/post/cooked-html";
+import DMenu from "discourse/float-kit/components/d-menu";
 // The ui-kit module path suggested by the lint rule is not resolvable in the
 // plugin runtime yet; the legacy path works through core's compatibility shim.
-// eslint-disable-next-line simple-import-sort/imports, discourse/ui-kit-imports
+// eslint-disable-next-line discourse/ui-kit-imports
 import concatClass from "discourse/helpers/concat-class";
 import { ajax } from "discourse/lib/ajax";
 import { popupAjaxError } from "discourse/lib/ajax-error";
 import discourseLater from "discourse/lib/later";
 import { eq } from "discourse/truth-helpers";
 import { i18n } from "discourse-i18n";
+import BabelLanguagePicker from "../../components/babel-language-picker";
+import { languageDisplayName } from "../../lib/language-display-name";
 import { getSupportedLanguages } from "../../lib/supported-languages";
 
 const DISPLAYABLE_STATUSES = ["completed", "stale"];
@@ -28,12 +31,6 @@ const VIEW_TRIGGER_DWELL_MS = 500;
 const viewTriggerAttempted = new Set();
 
 export default class LanguageTabsConnector extends Component {
-  static getLanguageDisplayName(code) {
-    return i18n(`babel_reunited.language_tabs.languages.${code}`, {
-      defaultValue: code,
-    });
-  }
-
   @service currentUser;
   @service messageBus;
   @service siteSettings;
@@ -260,26 +257,107 @@ export default class LanguageTabsConnector extends Component {
     return Object.keys(this.states);
   }
 
-  get languageNames() {
-    const supportedLanguages = getSupportedLanguages(this.siteSettings);
+  get detectedLocale() {
+    return this.post?.babel_detected_locale || null;
+  }
 
-    return supportedLanguages.map((code) => {
-      const name = LanguageTabsConnector.getLanguageDisplayName(code);
-      const available = this.availableLanguages.includes(code);
-      const status = this.getTranslationStatus(code);
+  get originalTabLabel() {
+    if (this.detectedLocale) {
+      return i18n("babel_reunited.language_tabs.original_with_language", {
+        language: languageDisplayName(this.detectedLocale),
+      });
+    }
+    return i18n("babel_reunited.language_tabs.original");
+  }
 
-      return {
-        code,
-        name,
-        available,
-        status,
-        tabClass: this.tabClass(code),
-        displayText:
-          status && !this.isDisplayableStatus(status)
-            ? `${name} (${status})`
-            : name,
-      };
-    });
+  // The preferred language gets its own fixed tab — unless it IS the post's
+  // language, in which case the original tab covers it.
+  get preferredCode() {
+    const code = this.currentUser?.preferred_language;
+    if (!code || code === this.detectedLocale) {
+      return null;
+    }
+    return code;
+  }
+
+  get preferredTab() {
+    const code = this.preferredCode;
+    if (!code) {
+      return null;
+    }
+
+    const status = this.getTranslationStatus(code);
+    const name = languageDisplayName(code);
+    let title;
+    if (status === "failed") {
+      title = i18n("babel_reunited.language_tabs.failed_retry");
+    } else if (this._hasDisplayableContent(code)) {
+      title = i18n("babel_reunited.language_tabs.switch_to", {
+        language: name,
+      });
+    } else {
+      title = i18n("babel_reunited.language_tabs.start_translation", {
+        language: name,
+      });
+    }
+
+    return {
+      code,
+      name,
+      status,
+      failed: status === "failed",
+      translating: status === "translating",
+      tabClass: this.tabClass(code),
+      title,
+    };
+  }
+
+  // A language picked from the overflow menu shows as a transient tab so the
+  // reader can see what they are looking at and switch back.
+  get ephemeralTab() {
+    let code = null;
+    if (
+      this.currentLanguage !== "original" &&
+      this.currentLanguage !== this.preferredCode
+    ) {
+      code = this.currentLanguage;
+    } else if (
+      this._pendingLanguage &&
+      this._pendingLanguage !== this.preferredCode
+    ) {
+      code = this._pendingLanguage;
+    }
+
+    if (!code) {
+      return null;
+    }
+
+    return {
+      code,
+      name: languageDisplayName(code),
+      status: this.getTranslationStatus(code),
+      tabClass: this.tabClass(code),
+    };
+  }
+
+  get translatedCodes() {
+    return this.availableLanguages.filter((code) =>
+      this.isDisplayableStatus(this.states[code]?.status)
+    );
+  }
+
+  get pickerExcludeCodes() {
+    return [this.detectedLocale, this.preferredCode];
+  }
+
+  get instantCodes() {
+    return getSupportedLanguages(this.siteSettings);
+  }
+
+  @action
+  pickLanguage(closeFn, code) {
+    closeFn?.();
+    this.switchLanguage(code);
   }
 
   get currentContent() {
@@ -295,7 +373,7 @@ export default class LanguageTabsConnector extends Component {
     if (this.currentLanguage === "original") {
       return i18n("babel_reunited.language_tabs.original");
     }
-    return LanguageTabsConnector.getLanguageDisplayName(this.currentLanguage);
+    return languageDisplayName(this.currentLanguage);
   }
 
   @action
@@ -400,33 +478,62 @@ export default class LanguageTabsConnector extends Component {
           }}
           {{on "click" (fn this.switchLanguage "original")}}
         >
-          {{i18n "babel_reunited.language_tabs.original"}}
+          {{this.originalTabLabel}}
         </button>
 
-        {{#each this.languageNames as |langInfo|}}
+        {{#if this.preferredTab}}
           <button
             class={{concatClass
               "babel-reunited-language-tab"
-              langInfo.tabClass
+              this.preferredTab.tabClass
+              (if this.preferredTab.failed "--failed")
             }}
-            {{on "click" (fn this.switchLanguage langInfo.code)}}
-            title={{if
-              langInfo.available
-              (i18n
-                "babel_reunited.language_tabs.switch_to" language=langInfo.name
-              )
-              (i18n
-                "babel_reunited.language_tabs.start_translation"
-                language=langInfo.name
-              )
-            }}
+            title={{this.preferredTab.title}}
+            {{on "click" (fn this.switchLanguage this.preferredTab.code)}}
           >
-            {{langInfo.name}}
-            {{#if (eq langInfo.status "translating")}}
+            {{this.preferredTab.name}}
+            {{#if this.preferredTab.translating}}
+              <div class="spinner small"></div>
+            {{/if}}
+            {{#if this.preferredTab.failed}}
+              <span class="babel-reunited-retry-hint">
+                {{i18n "babel_reunited.language_tabs.retry"}}
+              </span>
+            {{/if}}
+          </button>
+        {{/if}}
+
+        {{#if this.ephemeralTab}}
+          <button
+            class={{concatClass
+              "babel-reunited-language-tab"
+              this.ephemeralTab.tabClass
+            }}
+            {{on "click" (fn this.switchLanguage this.ephemeralTab.code)}}
+          >
+            {{this.ephemeralTab.name}}
+            {{#if (eq this.ephemeralTab.status "translating")}}
               <div class="spinner small"></div>
             {{/if}}
           </button>
-        {{/each}}
+        {{/if}}
+
+        <DMenu
+          class="babel-reunited-language-tab --menu btn-flat"
+          @identifier="babel-language-menu"
+          @icon="globe"
+          @title={{i18n "babel_reunited.language_tabs.more_languages"}}
+          @modalForMobile={{true}}
+          as |menu|
+        >
+          <BabelLanguagePicker
+            @translatedCodes={{this.translatedCodes}}
+            @excludeCodes={{this.pickerExcludeCodes}}
+            @instantCodes={{this.instantCodes}}
+            @showHints={{true}}
+            @onSelect={{fn this.pickLanguage menu.close}}
+          />
+        </DMenu>
       </div>
     {{/if}}
 
