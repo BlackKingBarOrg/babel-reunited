@@ -5,7 +5,9 @@ require "webmock/rspec"
 RSpec.describe BabelReunited::TranslationService do
   fab!(:user)
   fab!(:topic) { Fabricate(:topic, user: user, title: "Original Topic Title") }
-  fab!(:post_record) { Fabricate(:post, topic: topic, user: user, post_number: 1) }
+  fab!(:post_record) do
+    Fabricate(:post, topic: topic, user: user, post_number: 1)
+  end
 
   before do
     enable_current_plugin
@@ -19,18 +21,31 @@ RSpec.describe BabelReunited::TranslationService do
     Discourse.redis.flushdb
   end
 
-  def build_service(post: post_record, target_language: "es", force_update: false)
-    described_class.new(post: post, target_language: target_language, force_update: force_update)
+  def build_service(
+    post: post_record,
+    target_language: "es",
+    force_update: false
+  )
+    described_class.new(
+      post: post,
+      target_language: target_language,
+      force_update: force_update
+    )
   end
 
   def stub_llm_success(content: "Hola mundo", title_content: "Titulo traducido")
     # Main translation request
-    stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return do |request|
+    stub_request(
+      :post,
+      "https://api.openai.com/v1/chat/completions"
+    ).to_return do |request|
       body = JSON.parse(request.body)
       prompt = body["messages"].first["content"]
 
       response_text =
-        if prompt.include?("Return ONLY the translated text, no quotes, no extra words")
+        if prompt.include?(
+             "Return ONLY the translated text, no quotes, no extra words"
+           )
           title_content
         else
           content
@@ -42,12 +57,12 @@ RSpec.describe BabelReunited::TranslationService do
           choices: [{ message: { content: response_text } }],
           model: "gpt-4o",
           usage: {
-            total_tokens: 100,
-          },
+            total_tokens: 100
+          }
         }.to_json,
         headers: {
-          "Content-Type" => "application/json",
-        },
+          "Content-Type" => "application/json"
+        }
       }
     end
   end
@@ -99,7 +114,12 @@ RSpec.describe BabelReunited::TranslationService do
 
     it "returns error when base_url is missing" do
       BabelReunited::ModelConfig.stubs(:get_config).returns(
-        { provider: "openai", model_name: "gpt-4o", base_url: nil, api_key: "sk-test-key" },
+        {
+          provider: "openai",
+          model_name: "gpt-4o",
+          base_url: nil,
+          api_key: "sk-test-key"
+        }
       )
 
       result = build_service.call
@@ -113,8 +133,8 @@ RSpec.describe BabelReunited::TranslationService do
           provider: "openai",
           model_name: nil,
           base_url: "https://api.openai.com",
-          api_key: "sk-test-key",
-        },
+          api_key: "sk-test-key"
+        }
       )
 
       result = build_service.call
@@ -125,23 +145,28 @@ RSpec.describe BabelReunited::TranslationService do
 
   describe "rate limiting" do
     it "raises RateLimitError when rate limit exceeded" do
-      BabelReunited::RateLimiter.stubs(:perform_request_if_allowed).returns(false)
+      BabelReunited::RateLimiter.stubs(:perform_request_if_allowed).returns(
+        false
+      )
       stub_llm_success
 
       expect { build_service.call }.to raise_error(
         BabelReunited::RateLimitError,
-        "Local rate limit exceeded",
+        "Local rate limit exceeded"
       )
     end
 
     it "re-raises RateLimitError from title translation so Sidekiq can retry" do
       # Body chunk passes, title request trips rate limit
-      BabelReunited::RateLimiter.stubs(:perform_request_if_allowed).returns(true, false)
+      BabelReunited::RateLimiter.stubs(:perform_request_if_allowed).returns(
+        true,
+        false
+      )
       stub_llm_success
 
       expect { build_service.call }.to raise_error(
         BabelReunited::RateLimitError,
-        "Local rate limit exceeded",
+        "Local rate limit exceeded"
       )
     end
   end
@@ -195,7 +220,8 @@ RSpec.describe BabelReunited::TranslationService do
     end
 
     it "does not translate title for non-first posts" do
-      non_first_post = Fabricate(:post, topic: topic, user: user, post_number: 2)
+      non_first_post =
+        Fabricate(:post, topic: topic, user: user, post_number: 2)
       stub_llm_success
 
       result = build_service(post: non_first_post).call
@@ -216,7 +242,13 @@ RSpec.describe BabelReunited::TranslationService do
   describe "markdown protection" do
     it "sends post.raw (not cooked) to the LLM" do
       post_with_raw =
-        Fabricate(:post, topic: topic, user: user, raw: "Hello **bold** world", post_number: 3)
+        Fabricate(
+          :post,
+          topic: topic,
+          user: user,
+          raw: "Hello **bold** world",
+          post_number: 3
+        )
 
       request_body = nil
       stub_request(:post, "https://api.openai.com/v1/chat/completions")
@@ -230,12 +262,12 @@ RSpec.describe BabelReunited::TranslationService do
             choices: [{ message: { content: "Hola **negrita** mundo" } }],
             model: "gpt-4o",
             usage: {
-              total_tokens: 50,
-            },
+              total_tokens: 50
+            }
           }.to_json,
           headers: {
-            "Content-Type" => "application/json",
-          },
+            "Content-Type" => "application/json"
+          }
         )
 
       result = build_service(post: post_with_raw).call
@@ -254,7 +286,7 @@ RSpec.describe BabelReunited::TranslationService do
           topic: topic,
           user: user,
           raw: "Hello\n```ruby\ndef foo\nend\n```\nWorld",
-          post_number: 4,
+          post_number: 4
         )
 
       # Pre-compute the token so the stub can echo it back
@@ -274,12 +306,12 @@ RSpec.describe BabelReunited::TranslationService do
             choices: [{ message: { content: "Hola\n#{token_key}\nMundo" } }],
             model: "gpt-4o",
             usage: {
-              total_tokens: 50,
-            },
+              total_tokens: 50
+            }
           }.to_json,
           headers: {
-            "Content-Type" => "application/json",
-          },
+            "Content-Type" => "application/json"
+          }
         )
 
       # Stub MarkdownProtector.new to return the same instance with same salt
@@ -302,18 +334,23 @@ RSpec.describe BabelReunited::TranslationService do
 
   describe "strip_llm_wrapper" do
     it "strips 'Here is the translation:' preamble" do
-      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
+      stub_request(
+        :post,
+        "https://api.openai.com/v1/chat/completions"
+      ).to_return(
         status: 200,
         body: {
-          choices: [{ message: { content: "Here is the translation:\nHola mundo" } }],
+          choices: [
+            { message: { content: "Here is the translation:\nHola mundo" } }
+          ],
           model: "gpt-4o",
           usage: {
-            total_tokens: 50,
-          },
+            total_tokens: 50
+          }
         }.to_json,
         headers: {
-          "Content-Type" => "application/json",
-        },
+          "Content-Type" => "application/json"
+        }
       )
 
       SiteSetting.babel_reunited_translate_title = false
@@ -322,18 +359,21 @@ RSpec.describe BabelReunited::TranslationService do
     end
 
     it "strips markdown code block wrapping" do
-      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
+      stub_request(
+        :post,
+        "https://api.openai.com/v1/chat/completions"
+      ).to_return(
         status: 200,
         body: {
           choices: [{ message: { content: "```\nHola mundo\n```" } }],
           model: "gpt-4o",
           usage: {
-            total_tokens: 50,
-          },
+            total_tokens: 50
+          }
         }.to_json,
         headers: {
-          "Content-Type" => "application/json",
-        },
+          "Content-Type" => "application/json"
+        }
       )
 
       SiteSetting.babel_reunited_translate_title = false
@@ -351,8 +391,8 @@ RSpec.describe BabelReunited::TranslationService do
           model_name: "my-model",
           base_url: "https://example.com",
           api_key: "sk-test-key",
-          max_tokens: nil,
-        },
+          max_tokens: nil
+        }
       )
 
       long_post = Fabricate(:post, topic: topic, user: user, post_number: 5)
@@ -372,8 +412,8 @@ RSpec.describe BabelReunited::TranslationService do
           base_url: "https://api.openai.com",
           api_key: "sk-test-key",
           max_tokens: 1000,
-          max_output_tokens: 500,
-        },
+          max_output_tokens: 500
+        }
       )
 
       long_post = Fabricate(:post, topic: topic, user: user, post_number: 6)
@@ -394,8 +434,8 @@ RSpec.describe BabelReunited::TranslationService do
           base_url: "https://api.openai.com",
           api_key: "sk-test-key",
           max_tokens: nil,
-          max_output_tokens: nil,
-        },
+          max_output_tokens: nil
+        }
       )
 
       long_post = Fabricate(:post, topic: topic, user: user, post_number: 7)
@@ -410,12 +450,15 @@ RSpec.describe BabelReunited::TranslationService do
 
   describe "API error handling" do
     it "handles 400 bad request" do
-      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
+      stub_request(
+        :post,
+        "https://api.openai.com/v1/chat/completions"
+      ).to_return(
         status: 400,
         body: { error: { message: "Invalid model specified" } }.to_json,
         headers: {
-          "Content-Type" => "application/json",
-        },
+          "Content-Type" => "application/json"
+        }
       )
 
       result = build_service.call
@@ -425,12 +468,15 @@ RSpec.describe BabelReunited::TranslationService do
     end
 
     it "handles 401 unauthorized" do
-      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
+      stub_request(
+        :post,
+        "https://api.openai.com/v1/chat/completions"
+      ).to_return(
         status: 401,
         body: { error: { message: "Invalid API key" } }.to_json,
         headers: {
-          "Content-Type" => "application/json",
-        },
+          "Content-Type" => "application/json"
+        }
       )
 
       result = build_service.call
@@ -439,12 +485,15 @@ RSpec.describe BabelReunited::TranslationService do
     end
 
     it "handles 429 rate limit" do
-      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
+      stub_request(
+        :post,
+        "https://api.openai.com/v1/chat/completions"
+      ).to_return(
         status: 429,
         body: { error: { message: "Rate limit exceeded" } }.to_json,
         headers: {
-          "Content-Type" => "application/json",
-        },
+          "Content-Type" => "application/json"
+        }
       )
 
       result = build_service.call
@@ -453,12 +502,15 @@ RSpec.describe BabelReunited::TranslationService do
     end
 
     it "handles 500 server error" do
-      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
+      stub_request(
+        :post,
+        "https://api.openai.com/v1/chat/completions"
+      ).to_return(
         status: 500,
         body: { error: { message: "Internal server error" } }.to_json,
         headers: {
-          "Content-Type" => "application/json",
-        },
+          "Content-Type" => "application/json"
+        }
       )
 
       result = build_service.call
@@ -467,9 +519,10 @@ RSpec.describe BabelReunited::TranslationService do
     end
 
     it "handles network errors" do
-      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_raise(
-        Faraday::ConnectionFailed.new("connection refused"),
-      )
+      stub_request(
+        :post,
+        "https://api.openai.com/v1/chat/completions"
+      ).to_raise(Faraday::ConnectionFailed.new("connection refused"))
 
       result = build_service.call
       expect(result.failure?).to be true
@@ -477,12 +530,15 @@ RSpec.describe BabelReunited::TranslationService do
     end
 
     it "handles unknown status codes" do
-      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
+      stub_request(
+        :post,
+        "https://api.openai.com/v1/chat/completions"
+      ).to_return(
         status: 403,
         body: { error: "Forbidden" }.to_json,
         headers: {
-          "Content-Type" => "application/json",
-        },
+          "Content-Type" => "application/json"
+        }
       )
 
       result = build_service.call
@@ -491,12 +547,15 @@ RSpec.describe BabelReunited::TranslationService do
     end
 
     it "handles non-JSON error body" do
-      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
+      stub_request(
+        :post,
+        "https://api.openai.com/v1/chat/completions"
+      ).to_return(
         status: 502,
         body: "Bad Gateway",
         headers: {
-          "Content-Type" => "text/plain",
-        },
+          "Content-Type" => "text/plain"
+        }
       )
 
       result = build_service.call
@@ -507,18 +566,21 @@ RSpec.describe BabelReunited::TranslationService do
 
   describe "response parsing edge cases" do
     it "handles empty response content" do
-      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
+      stub_request(
+        :post,
+        "https://api.openai.com/v1/chat/completions"
+      ).to_return(
         status: 200,
         body: {
           choices: [{ message: { content: "" } }],
           model: "gpt-4o",
           usage: {
-            total_tokens: 50,
-          },
+            total_tokens: 50
+          }
         }.to_json,
         headers: {
-          "Content-Type" => "application/json",
-        },
+          "Content-Type" => "application/json"
+        }
       )
 
       result = build_service.call
@@ -527,12 +589,15 @@ RSpec.describe BabelReunited::TranslationService do
     end
 
     it "handles missing choices in response" do
-      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
+      stub_request(
+        :post,
+        "https://api.openai.com/v1/chat/completions"
+      ).to_return(
         status: 200,
         body: { model: "gpt-4o" }.to_json,
         headers: {
-          "Content-Type" => "application/json",
-        },
+          "Content-Type" => "application/json"
+        }
       )
 
       result = build_service.call
@@ -543,32 +608,48 @@ RSpec.describe BabelReunited::TranslationService do
 
   describe "chunked translation" do
     it "splits long content into multiple chunks and joins results" do
-      long_raw = "Paragraph one.\n\n" + "Paragraph two.\n\n" + "Paragraph three."
-      long_post = Fabricate(:post, topic: topic, user: user, raw: long_raw, post_number: 10)
+      long_raw =
+        "Paragraph one.\n\n" + "Paragraph two.\n\n" + "Paragraph three."
+      long_post =
+        Fabricate(
+          :post,
+          topic: topic,
+          user: user,
+          raw: long_raw,
+          post_number: 10
+        )
 
       SiteSetting.babel_reunited_translate_title = false
       call_count = 0
-      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return do |_request|
+      stub_request(
+        :post,
+        "https://api.openai.com/v1/chat/completions"
+      ).to_return do |_request|
         call_count += 1
         {
           status: 200,
           body: {
             choices: [
-              { message: { content: "Translated chunk #{call_count}" }, finish_reason: "stop" },
+              {
+                message: {
+                  content: "Translated chunk #{call_count}"
+                },
+                finish_reason: "stop"
+              }
             ],
             model: "gpt-4o",
             usage: {
-              total_tokens: 50,
-            },
+              total_tokens: 50
+            }
           }.to_json,
           headers: {
-            "Content-Type" => "application/json",
-          },
+            "Content-Type" => "application/json"
+          }
         }
       end
 
       BabelReunited::ContentSplitter.stubs(:split).returns(
-        ["Paragraph one.\n\n", "Paragraph two.\n\n", "Paragraph three."],
+        ["Paragraph one.\n\n", "Paragraph two.\n\n", "Paragraph three."]
       )
 
       result = build_service(post: long_post).call
@@ -578,36 +659,46 @@ RSpec.describe BabelReunited::TranslationService do
 
     it "preserves paragraph boundaries via whitespace extraction" do
       long_raw = "First para.\n\nSecond para."
-      long_post = Fabricate(:post, topic: topic, user: user, raw: long_raw, post_number: 11)
+      long_post =
+        Fabricate(
+          :post,
+          topic: topic,
+          user: user,
+          raw: long_raw,
+          post_number: 11
+        )
 
       SiteSetting.babel_reunited_translate_title = false
-      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return do |request|
+      stub_request(
+        :post,
+        "https://api.openai.com/v1/chat/completions"
+      ).to_return do |request|
         body = JSON.parse(request.body)
         prompt = body["messages"].first["content"]
 
         translated =
-          if prompt.include?("First")
-            "Primer parrafo."
-          else
-            "Segundo parrafo."
-          end
+          (prompt.include?("First") ? "Primer parrafo." : "Segundo parrafo.")
 
         {
           status: 200,
           body: {
-            choices: [{ message: { content: translated }, finish_reason: "stop" }],
+            choices: [
+              { message: { content: translated }, finish_reason: "stop" }
+            ],
             model: "gpt-4o",
             usage: {
-              total_tokens: 50,
-            },
+              total_tokens: 50
+            }
           }.to_json,
           headers: {
-            "Content-Type" => "application/json",
-          },
+            "Content-Type" => "application/json"
+          }
         }
       end
 
-      BabelReunited::ContentSplitter.stubs(:split).returns(["First para.\n\n", "Second para."])
+      BabelReunited::ContentSplitter.stubs(:split).returns(
+        ["First para.\n\n", "Second para."]
+      )
 
       result = build_service(post: long_post).call
       expect(result.success?).to be true
@@ -633,20 +724,30 @@ RSpec.describe BabelReunited::TranslationService do
 
       SiteSetting.babel_reunited_translate_title = false
       call_count = 0
-      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return do |_request|
+      stub_request(
+        :post,
+        "https://api.openai.com/v1/chat/completions"
+      ).to_return do |_request|
         call_count += 1
         {
           status: 200,
           body: {
-            choices: [{ message: { content: "Translated #{call_count}" }, finish_reason: "stop" }],
+            choices: [
+              {
+                message: {
+                  content: "Translated #{call_count}"
+                },
+                finish_reason: "stop"
+              }
+            ],
             model: "gpt-4o",
             usage: {
-              total_tokens: 100,
-            },
+              total_tokens: 100
+            }
           }.to_json,
           headers: {
-            "Content-Type" => "application/json",
-          },
+            "Content-Type" => "application/json"
+          }
         }
       end
 
@@ -663,15 +764,18 @@ RSpec.describe BabelReunited::TranslationService do
 
       SiteSetting.babel_reunited_translate_title = false
       call_count = 0
-      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return do |_request|
+      stub_request(
+        :post,
+        "https://api.openai.com/v1/chat/completions"
+      ).to_return do |_request|
         call_count += 1
         if call_count == 2
           {
             status: 500,
             body: { error: "Server error" }.to_json,
             headers: {
-              "Content-Type" => "application/json",
-            },
+              "Content-Type" => "application/json"
+            }
           }
         else
           {
@@ -680,17 +784,19 @@ RSpec.describe BabelReunited::TranslationService do
               choices: [{ message: { content: "OK" }, finish_reason: "stop" }],
               model: "gpt-4o",
               usage: {
-                total_tokens: 50,
-              },
+                total_tokens: 50
+              }
             }.to_json,
             headers: {
-              "Content-Type" => "application/json",
-            },
+              "Content-Type" => "application/json"
+            }
           }
         end
       end
 
-      BabelReunited::ContentSplitter.stubs(:split).returns(%w[chunk1 chunk2 chunk3])
+      BabelReunited::ContentSplitter.stubs(:split).returns(
+        %w[chunk1 chunk2 chunk3]
+      )
 
       result = build_service(post: long_post).call
       expect(result.failure?).to be true
@@ -711,7 +817,10 @@ RSpec.describe BabelReunited::TranslationService do
     # between raw and translated_raw is pipeline loss, not model behavior.
     def stub_llm_echo
       calls = 0
-      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return do |request|
+      stub_request(
+        :post,
+        "https://api.openai.com/v1/chat/completions"
+      ).to_return do |request|
         calls += 1
         body = JSON.parse(request.body)
         prompt = body["messages"].first["content"]
@@ -723,12 +832,12 @@ RSpec.describe BabelReunited::TranslationService do
             choices: [{ message: { content: echo }, finish_reason: "stop" }],
             model: "gpt-4o",
             usage: {
-              total_tokens: 10,
-            },
+              total_tokens: 10
+            }
           }.to_json,
           headers: {
-            "Content-Type" => "application/json",
-          },
+            "Content-Type" => "application/json"
+          }
         }
       end
       -> { calls }
@@ -737,12 +846,15 @@ RSpec.describe BabelReunited::TranslationService do
     before { SiteSetting.babel_reunited_translate_title = false }
 
     it "reassembles multi-chunk content losslessly around a code fence" do
-      para1 = "First paragraph with enough text to fill up most of the first chunk before code."
+      para1 =
+        "First paragraph with enough text to fill up most of the first chunk before code."
       fence = "```ruby\ndef foo\n  bar\nend\n```"
-      para2 = "Second paragraph that must stay separated from the closing fence by a blank line."
+      para2 =
+        "Second paragraph that must stay separated from the closing fence by a blank line."
       raw = "#{para1}\n\n#{fence}\n\n#{para2}"
 
-      chunky_post = Fabricate(:post, topic: topic, user: user, raw: raw, post_number: 15)
+      chunky_post =
+        Fabricate(:post, topic: topic, user: user, raw: raw, post_number: 15)
 
       BabelReunited::ModelConfig.stubs(:get_config).returns(
         {
@@ -751,8 +863,8 @@ RSpec.describe BabelReunited::TranslationService do
           base_url: "https://api.openai.com",
           api_key: "sk-test-key",
           max_tokens: 100_000,
-          max_output_tokens: 120,
-        },
+          max_output_tokens: 120
+        }
       )
       stub_llm_echo
 
@@ -763,7 +875,9 @@ RSpec.describe BabelReunited::TranslationService do
     end
 
     it "preserves leading whitespace of chunks" do
-      BabelReunited::ContentSplitter.stubs(:split).returns(["First chunk.", "\n\nSecond chunk."])
+      BabelReunited::ContentSplitter.stubs(:split).returns(
+        ["First chunk.", "\n\nSecond chunk."]
+      )
       stub_llm_echo
 
       result = build_service.call
@@ -773,7 +887,9 @@ RSpec.describe BabelReunited::TranslationService do
     end
 
     it "passes whitespace-only chunks through without calling the LLM" do
-      BabelReunited::ContentSplitter.stubs(:split).returns(["First chunk.", "\n\n", "Second."])
+      BabelReunited::ContentSplitter.stubs(:split).returns(
+        ["First chunk.", "\n\n", "Second."]
+      )
       call_counter = stub_llm_echo
 
       result = build_service.call
@@ -792,24 +908,32 @@ RSpec.describe BabelReunited::TranslationService do
           topic: topic,
           user: user,
           raw: "Hello\n```ruby\ncode\n```\nWorld",
-          post_number: 16,
+          post_number: 16
         )
       SiteSetting.babel_reunited_translate_title = false
 
-      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
+      stub_request(
+        :post,
+        "https://api.openai.com/v1/chat/completions"
+      ).to_return(
         status: 200,
         body: {
           choices: [
-            { message: { content: "Translation without any placeholder" }, finish_reason: "stop" },
+            {
+              message: {
+                content: "Translation without any placeholder"
+              },
+              finish_reason: "stop"
+            }
           ],
           model: "gpt-4o",
           usage: {
-            total_tokens: 50,
-          },
+            total_tokens: 50
+          }
         }.to_json,
         headers: {
-          "Content-Type" => "application/json",
-        },
+          "Content-Type" => "application/json"
+        }
       )
 
       result = build_service(post: post_with_code).call
@@ -819,20 +943,82 @@ RSpec.describe BabelReunited::TranslationService do
     end
   end
 
+  describe "mermaid fence protection" do
+    it "passes mermaid blocks through translation byte-for-byte, labels untranslated" do
+      mermaid_block = "```mermaid\nflowchart TD\n    A[Start] --> B[End]\n```"
+      raw = "Intro paragraph.\n\n#{mermaid_block}\n\nOutro paragraph."
+      mermaid_post =
+        Fabricate(:post, topic: topic, user: user, raw: raw, post_number: 17)
+      SiteSetting.babel_reunited_translate_title = false
+
+      prompt = nil
+      stub_request(
+        :post,
+        "https://api.openai.com/v1/chat/completions"
+      ).to_return do |request|
+        prompt = JSON.parse(request.body)["messages"].first["content"]
+        token = prompt[/⟦[0-9a-f]+:\d+⟧/]
+
+        # A translation that rewrites every visible word but keeps the
+        # placeholder, mimicking an aggressive model
+        {
+          status: 200,
+          body: {
+            choices: [
+              {
+                message: {
+                  content: "介绍段落。\n\n#{token}\n\n结尾段落。"
+                },
+                finish_reason: "stop"
+              }
+            ],
+            model: "gpt-4o",
+            usage: {
+              total_tokens: 50
+            }
+          }.to_json,
+          headers: {
+            "Content-Type" => "application/json"
+          }
+        }
+      end
+
+      result = build_service(post: mermaid_post).call
+
+      expect(result.success?).to be true
+      # The model never even sees the diagram source...
+      expect(prompt).not_to include("flowchart")
+      expect(prompt).not_to include("A[Start]")
+      # ...so the stored translation keeps it byte-for-byte
+      expect(result.translated_raw).to include(mermaid_block)
+      expect(result.translated_raw).to include("介绍段落")
+    end
+  end
+
   describe "finish_reason truncation detection" do
     it "returns error when finish_reason is length" do
-      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
+      stub_request(
+        :post,
+        "https://api.openai.com/v1/chat/completions"
+      ).to_return(
         status: 200,
         body: {
-          choices: [{ message: { content: "Partial translation..." }, finish_reason: "length" }],
+          choices: [
+            {
+              message: {
+                content: "Partial translation..."
+              },
+              finish_reason: "length"
+            }
+          ],
           model: "gpt-4o",
           usage: {
-            total_tokens: 16_000,
-          },
+            total_tokens: 16_000
+          }
         }.to_json,
         headers: {
-          "Content-Type" => "application/json",
-        },
+          "Content-Type" => "application/json"
+        }
       )
 
       SiteSetting.babel_reunited_translate_title = false
@@ -842,18 +1028,28 @@ RSpec.describe BabelReunited::TranslationService do
     end
 
     it "succeeds when finish_reason is stop" do
-      stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
+      stub_request(
+        :post,
+        "https://api.openai.com/v1/chat/completions"
+      ).to_return(
         status: 200,
         body: {
-          choices: [{ message: { content: "Complete translation" }, finish_reason: "stop" }],
+          choices: [
+            {
+              message: {
+                content: "Complete translation"
+              },
+              finish_reason: "stop"
+            }
+          ],
           model: "gpt-4o",
           usage: {
-            total_tokens: 100,
-          },
+            total_tokens: 100
+          }
         }.to_json,
         headers: {
-          "Content-Type" => "application/json",
-        },
+          "Content-Type" => "application/json"
+        }
       )
 
       SiteSetting.babel_reunited_translate_title = false
@@ -879,12 +1075,12 @@ RSpec.describe BabelReunited::TranslationService do
           stop_reason: "end_turn",
           usage: {
             input_tokens: 50,
-            output_tokens: 60,
-          },
+            output_tokens: 60
+          }
         }.to_json,
         headers: {
-          "Content-Type" => "application/json",
-        },
+          "Content-Type" => "application/json"
+        }
       )
     end
 
@@ -903,12 +1099,12 @@ RSpec.describe BabelReunited::TranslationService do
             stop_reason: "end_turn",
             usage: {
               input_tokens: 10,
-              output_tokens: 10,
-            },
+              output_tokens: 10
+            }
           }.to_json,
           headers: {
-            "Content-Type" => "application/json",
-          },
+            "Content-Type" => "application/json"
+          }
         )
 
       result = build_service.call
@@ -923,7 +1119,9 @@ RSpec.describe BabelReunited::TranslationService do
       result = build_service.call
       expect(result.success?).to be true
       expect(result.translated_raw).to eq("Texto traducido")
-      expect(result.ai_response[:provider_info][:model]).to eq("claude-sonnet-4-6")
+      expect(result.ai_response[:provider_info][:model]).to eq(
+        "claude-sonnet-4-6"
+      )
     end
 
     it "sums input + output tokens" do
@@ -943,12 +1141,12 @@ RSpec.describe BabelReunited::TranslationService do
           stop_reason: "max_tokens",
           usage: {
             input_tokens: 50,
-            output_tokens: 16_000,
-          },
+            output_tokens: 16_000
+          }
         }.to_json,
         headers: {
-          "Content-Type" => "application/json",
-        },
+          "Content-Type" => "application/json"
+        }
       )
 
       result = build_service.call
