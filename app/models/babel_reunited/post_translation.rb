@@ -54,18 +54,19 @@ module BabelReunited
 
     # These two scopes must stay complementary: every completed record belongs
     # to exactly one of them, so no record can fall between the retranslation
-    # and recook maintenance tasks (blank includes whitespace-only).
+    # and recook maintenance tasks. Blank means no non-whitespace character at
+    # all — PostgreSQL's BTRIM would only strip plain spaces, letting a
+    # "\n\t"-only raw slip into recookable where it can never cook to valid
+    # content, hence the [[:space:]] regex.
     scope :needs_retranslation,
           -> do
             where(status: "completed").where(
-              "translated_raw IS NULL OR BTRIM(translated_raw) = ''"
+              "translated_raw IS NULL OR translated_raw !~ '[^[:space:]]'"
             )
           end
     scope :recookable,
           -> do
-            where(status: "completed").where(
-              "translated_raw IS NOT NULL AND BTRIM(translated_raw) <> ''"
-            )
+            where(status: "completed").where("translated_raw ~ '[^[:space:]]'")
           end
 
     def self.find_translation(post_id, language)

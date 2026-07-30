@@ -135,13 +135,15 @@ RSpec.describe BabelReunited::TranslationRecooker do
       recookable = create_translation
       blank_raw = create_translation(language: "es", raw: "   ")
       nil_raw = create_translation(language: "en", raw: nil)
+      # BTRIM would miss these: only [[:space:]] classifies them correctly
+      whitespace_raw = create_translation(language: "de", raw: " \n\t\r")
 
       expect(BabelReunited::PostTranslation.recookable).to contain_exactly(
         recookable
       )
       expect(
         BabelReunited::PostTranslation.needs_retranslation
-      ).to contain_exactly(blank_raw, nil_raw)
+      ).to contain_exactly(blank_raw, nil_raw, whitespace_raw)
 
       stats = run
 
@@ -149,6 +151,7 @@ RSpec.describe BabelReunited::TranslationRecooker do
       expect(stats.processed).to eq(1)
       expect(blank_raw.reload.translated_content).to eq("<p>stale</p>")
       expect(nil_raw.reload.translated_content).to eq("<p>stale</p>")
+      expect(whitespace_raw.reload.translated_content).to eq("<p>stale</p>")
     end
 
     it "honors language, post_id, and limit filters" do
