@@ -20,21 +20,25 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
     target_language = args["target_language"]
 
     if post_id && target_language
-      translation = ::BabelReunited::PostTranslation.find_translation(post_id, target_language)
+      translation =
+        ::BabelReunited::PostTranslation.find_translation(
+          post_id,
+          target_language
+        )
       if translation
         translation.update!(
           status: "failed",
           metadata:
             (translation.metadata || {}).merge(
               error: "Translation failed after all retries",
-              failed_at: Time.current,
-            ),
+              failed_at: Time.current
+            )
         )
       end
     end
 
     Rails.logger.error(
-      "Translation job exhausted retries for post #{post_id} (#{target_language}): #{msg["error_message"]}",
+      "Translation job exhausted retries for post #{post_id} (#{target_language}): #{msg["error_message"]}"
     )
   end
 
@@ -53,7 +57,8 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
       translation = ensure_translation_record(post, target_language)
 
       # Skip if source unchanged and not force_update
-      if !force_update && translation.source_sha == source_sha && translation.completed?
+      if !force_update && translation.source_sha == source_sha &&
+           translation.completed?
         log_skipped(post_id, target_language, "source_unchanged")
         return
       end
@@ -65,7 +70,7 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
         ::BabelReunited::TranslationService.new(
           post: post,
           target_language: target_language,
-          force_update: force_update,
+          force_update: force_update
         ).call
 
       processing_time = ((Time.current - start_time) * 1000).round(2)
@@ -78,10 +83,16 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
           source_sha,
           translation,
           processing_time,
-          force_update,
+          force_update
         )
       else
-        handle_failure(result, post_id, target_language, translation, processing_time)
+        handle_failure(
+          result,
+          post_id,
+          target_language,
+          translation,
+          processing_time
+        )
       end
     end
   rescue BabelReunited::RateLimitError
@@ -109,7 +120,7 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
       Discourse.redis.eval(
         "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
         keys: [namespaced_key],
-        argv: [lock_token],
+        argv: [lock_token]
       )
     end
   end
@@ -122,7 +133,11 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
       return nil
     end
     if post.deleted_at.present? || post.hidden?
-      mark_translation_failed(post_id, target_language, "post_deleted_or_hidden")
+      mark_translation_failed(
+        post_id,
+        target_language,
+        "post_deleted_or_hidden"
+      )
       log_skipped(post_id, target_language, "post_deleted_or_hidden")
       return nil
     end
@@ -135,18 +150,28 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
   end
 
   def mark_translation_failed(post_id, target_language, reason)
-    translation = BabelReunited::PostTranslation.find_translation(post_id, target_language)
+    translation =
+      BabelReunited::PostTranslation.find_translation(post_id, target_language)
     return unless translation && !translation.failed?
 
     translation.update!(
       status: "failed",
-      metadata: (translation.metadata || {}).merge(error: reason, failed_at: Time.current),
+      metadata:
+        (translation.metadata || {}).merge(
+          error: reason,
+          failed_at: Time.current
+        )
     )
   end
 
   def ensure_translation_record(post, target_language)
-    translation = BabelReunited::PostTranslation.find_translation(post.id, target_language)
-    translation || BabelReunited::PostTranslation.create_or_update_record(post.id, target_language)
+    translation =
+      BabelReunited::PostTranslation.find_translation(post.id, target_language)
+    translation ||
+      BabelReunited::PostTranslation.create_or_update_record(
+        post.id,
+        target_language
+      )
   end
 
   def handle_success(
@@ -158,9 +183,20 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
     processing_time,
     force_update
   )
-    translated_cooked = PrettyText.cook(result.translated_raw, topic_id: post.topic_id)
-    translated_cooked = Loofah.html5_fragment(translated_cooked).scrub!(:prune).to_s
-    translated_cooked = post_process_cooked(translated_cooked, post)
+    # Post-processing failures degrade to plain-cooked HTML: for a brand-new
+    # translation there is no better content to fall back to.
+    cook_result =
+      ::BabelReunited::TranslatedCooker.call(
+        raw: result.translated_raw,
+        post: post
+      )
+    unless cook_result.post_processed?
+      Rails.logger.warn(
+        "BabelReunited: cooked post-processing failed for post #{post.id}: " \
+          "#{cook_result.post_processing_error.message}"
+      )
+    end
+    translated_cooked = cook_result.html
 
     translated_title = result.translated_title
     if translated_title.present? && translated_title.length > 255
@@ -179,8 +215,8 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
           confidence: result.ai_response[:confidence],
           provider_info: result.ai_response[:provider_info],
           translated_at: Time.current,
-          completed_at: Time.current,
-        ),
+          completed_at: Time.current
+        )
     )
 
     ::BabelReunited::TranslationLogger.log_translation_success(
@@ -190,31 +226,32 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
       ai_response: result.ai_response,
       processing_time: processing_time,
       force_update: force_update,
-      translated_length: result.translated_raw&.length || 0,
+      translated_length: result.translated_raw&.length || 0
     )
 
-    publish_status(post, target_language, "completed", translation: translation, result: result)
-  end
-
-  # Onebox expansion and image processing, mirroring what core runs on
-  # regular posts after cooking. Best-effort: a failure here should degrade
-  # to the plain-cooked translation, not fail the whole job.
-  def post_process_cooked(cooked, post)
-    processor = ::BabelReunited::TranslatedCookedPostProcessor.new(cooked, post)
-    processor.post_process
-    processed = processor.html
-    processed.presence || cooked
-  rescue => e
-    Rails.logger.warn(
-      "BabelReunited: cooked post-processing failed for post #{post.id}: #{e.message}",
+    publish_status(
+      post,
+      target_language,
+      "completed",
+      translation: translation,
+      result: result
     )
-    cooked
   end
 
-  def handle_failure(result, post_id, target_language, translation, processing_time)
+  def handle_failure(
+    result,
+    post_id,
+    target_language,
+    translation,
+    processing_time
+  )
     translation.update!(
       status: "failed",
-      metadata: (translation.metadata || {}).merge(error: result.error, failed_at: Time.current),
+      metadata:
+        (translation.metadata || {}).merge(
+          error: result.error,
+          failed_at: Time.current
+        )
     )
 
     ::BabelReunited::TranslationLogger.log_translation_error(
@@ -223,10 +260,12 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
       error: StandardError.new(result.error),
       processing_time: processing_time,
       context: {
-        phase: "service_failure",
-      },
+        phase: "service_failure"
+      }
     )
-    Rails.logger.error("Translation failed for post #{post_id}: #{result.error}")
+    Rails.logger.error(
+      "Translation failed for post #{post_id}: #{result.error}"
+    )
 
     post = Post.find_by(id: post_id)
     publish_status(post, target_language, "failed", error: result.error) if post
@@ -234,7 +273,11 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
 
   def handle_unexpected_error(error, post_id, target_language)
     if post_id && target_language
-      translation = ::BabelReunited::PostTranslation.find_translation(post_id, target_language)
+      translation =
+        ::BabelReunited::PostTranslation.find_translation(
+          post_id,
+          target_language
+        )
       if translation
         translation.update!(
           status: "failed",
@@ -242,8 +285,8 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
             (translation.metadata || {}).merge(
               error: error.message,
               error_class: error.class.name,
-              failed_at: Time.current,
-            ),
+              failed_at: Time.current
+            )
         )
       end
     end
@@ -254,14 +297,23 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
       error: error,
       processing_time: 0,
       context: {
-        phase: "unexpected_exception",
-      },
+        phase: "unexpected_exception"
+      }
     )
-    Rails.logger.error("Unexpected error in translation job for post #{post_id}: #{error.message}")
+    Rails.logger.error(
+      "Unexpected error in translation job for post #{post_id}: #{error.message}"
+    )
     Rails.logger.error(error.backtrace.join("\n")) if error.backtrace
   end
 
-  def publish_status(post, language, status, translation: nil, result: nil, error: nil)
+  def publish_status(
+    post,
+    language,
+    status,
+    translation: nil,
+    result: nil,
+    error: nil
+  )
     return unless post
 
     audience = ::BabelReunited::MessageBusAudience.options_for(post)
@@ -278,8 +330,8 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
           confidence: result&.ai_response&.dig(:confidence),
           provider_info: result&.ai_response&.dig(:provider_info),
           translated_at: Time.current,
-          completed_at: Time.current,
-        },
+          completed_at: Time.current
+        }
       }
     end
 
@@ -292,7 +344,7 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
     ::BabelReunited::TranslationLogger.log_translation_skipped(
       post_id: post_id,
       target_language: target_language,
-      reason: reason,
+      reason: reason
     )
   end
 
@@ -301,7 +353,7 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
       post_id: post_id,
       target_language: target_language,
       content_length: post.raw&.length || 0,
-      force_update: force_update,
+      force_update: force_update
     )
   end
 end

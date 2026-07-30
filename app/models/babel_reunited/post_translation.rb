@@ -46,11 +46,27 @@ module BabelReunited
     validates :language,
               format: {
                 with: /\A[a-z]{2}(-[a-z]{2})?\z/,
-                message: "must be a valid language code",
+                message: "must be a valid language code"
               }
 
     scope :by_language, ->(lang) { where(language: lang) }
     scope :recent, -> { order(created_at: :desc) }
+
+    # These two scopes must stay complementary: every completed record belongs
+    # to exactly one of them, so no record can fall between the retranslation
+    # and recook maintenance tasks (blank includes whitespace-only).
+    scope :needs_retranslation,
+          -> do
+            where(status: "completed").where(
+              "translated_raw IS NULL OR BTRIM(translated_raw) = ''"
+            )
+          end
+    scope :recookable,
+          -> do
+            where(status: "completed").where(
+              "translated_raw IS NOT NULL AND BTRIM(translated_raw) <> ''"
+            )
+          end
 
     def self.find_translation(post_id, language)
       find_by(post_id: post_id, language: language)
@@ -81,13 +97,15 @@ module BabelReunited
     end
 
     def self.create_or_update_record(post_id, target_language)
-      record = find_or_initialize_by(post_id: post_id, language: target_language)
+      record =
+        find_or_initialize_by(post_id: post_id, language: target_language)
       attrs = {
         status: "translating",
         translation_provider:
           record.translation_provider.presence ||
             BabelReunited::ModelConfig.get_config&.dig(:provider) || "unknown",
-        metadata: (record.metadata || {}).merge(translating_started_at: Time.current),
+        metadata:
+          (record.metadata || {}).merge(translating_started_at: Time.current)
       }
       if record.new_record?
         attrs[:translated_content] = ""
@@ -100,7 +118,8 @@ module BabelReunited
       record = find_translation(post_id, target_language)
       record.update!(
         status: "translating",
-        metadata: (record.metadata || {}).merge(translating_started_at: Time.current),
+        metadata:
+          (record.metadata || {}).merge(translating_started_at: Time.current)
       )
       record
     end
@@ -118,7 +137,8 @@ module BabelReunited
     # Central sanitization — runs on every save regardless of write path
     def sanitize_translation_fields
       if translated_content.present?
-        self.translated_content = Loofah.html5_fragment(translated_content).scrub!(:prune).to_s
+        self.translated_content =
+          Loofah.html5_fragment(translated_content).scrub!(:prune).to_s
       end
 
       # Titles must be plain text; Loofah.text strips all tags and is idempotent

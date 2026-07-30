@@ -15,7 +15,8 @@ namespace :babel_reunited do
       exit 1
     end
 
-    auto_translate_languages = SiteSetting.babel_reunited_auto_translate_languages
+    auto_translate_languages =
+      SiteSetting.babel_reunited_auto_translate_languages
     if auto_translate_languages.blank?
       puts "ERROR: No auto-translate languages configured"
       puts "Please set babel_reunited_auto_translate_languages in Site Settings"
@@ -28,7 +29,8 @@ namespace :babel_reunited do
 
     # Find all posts that have no translations at all
     # Using subquery to find posts without any translation records
-    posts_with_translations = BabelReunited::PostTranslation.select(:post_id).distinct
+    posts_with_translations =
+      BabelReunited::PostTranslation.select(:post_id).distinct
     posts_without_translations =
       Post
         .joins(:topic)
@@ -77,12 +79,17 @@ namespace :babel_reunited do
       posts_without_translations.find_each do |post|
         begin
           languages.each do |language|
-            BabelReunited::PostTranslation.create_or_update_record(post.id, language)
+            BabelReunited::PostTranslation.create_or_update_record(
+              post.id,
+              language
+            )
           end
           BabelReunited.enqueue_translation_jobs(post, languages)
           processed += 1
 
-          puts "Processed #{processed}/#{total_count} posts..." if processed % 100 == 0
+          if processed % 100 == 0
+            puts "Processed #{processed}/#{total_count} posts..."
+          end
         rescue => e
           puts "Error processing post #{post.id}: #{e.message}"
           failed += 1
@@ -109,11 +116,12 @@ namespace :babel_reunited do
       exit 1
     end
 
-    legacy_records =
-      BabelReunited::PostTranslation.where(translated_raw: nil).where(status: "completed")
+    # Complementary to recook_translations: blank (including whitespace-only)
+    # translated_raw cannot be recooked and needs a real re-translation.
+    legacy_records = BabelReunited::PostTranslation.needs_retranslation
 
     total = legacy_records.count
-    puts "Found #{total} legacy translation records without translated_raw"
+    puts "Found #{total} legacy translation records without usable translated_raw"
 
     if total == 0
       puts "Nothing to do"
@@ -149,7 +157,7 @@ namespace :babel_reunited do
           Jobs::BabelReunited::TranslatePostJob,
           post_id: t.post_id,
           target_language: t.language,
-          force_update: true,
+          force_update: true
         )
         queued += 1
         puts "Queued #{queued}/#{total}..." if queued % 100 == 0
@@ -158,6 +166,48 @@ namespace :babel_reunited do
       puts ""
       puts "Queued: #{queued} re-translation jobs"
       puts "Skipped: #{skipped} (deleted/missing posts)"
+    end
+  end
+
+  desc "Recook completed translations from stored translated_raw (no LLM calls)"
+  task recook_translations: :environment do
+    unless SiteSetting.babel_reunited_enabled
+      puts "ERROR: Babel Reunited plugin is not enabled"
+      exit 1
+    end
+
+    dry_run = ENV["DRY_RUN"] != "false"
+    validate = ENV["VALIDATE"] == "true"
+    dry_run = false if validate
+
+    if validate
+      puts "VALIDATE mode: cooking runs (may access the network for oneboxes/images) but nothing is written"
+    elsif !dry_run
+      puts "LIVE mode: recooked translated_content will be written"
+    end
+
+    recooker =
+      BabelReunited::TranslationRecooker.new(
+        dry_run: dry_run,
+        validate: validate,
+        limit: ENV["LIMIT"]&.to_i,
+        start_id: ENV["START_ID"]&.to_i,
+        batch_size: (ENV["BATCH_SIZE"] || 500).to_i,
+        post_id: ENV["POST_ID"]&.to_i,
+        language: ENV["LANGUAGE"],
+        logger: ->(msg) { puts msg }
+      )
+
+    stats = recooker.run
+
+    puts ""
+    puts "Matched:          #{stats.matched}"
+    unless dry_run
+      puts "#{validate ? "Would change:     " : "Processed:        "}#{stats.processed}"
+      puts "Unchanged:        #{stats.unchanged}"
+      puts "Skipped (deleted post): #{stats.skipped_deleted}"
+      puts "Skipped (changed mid-run): #{stats.skipped_changed}"
+      puts "Failed (content kept): #{stats.failed}"
     end
   end
 
@@ -173,7 +223,9 @@ namespace :babel_reunited do
         next
       end
 
-      user.custom_fields[BabelReunited::PREFERRED_LANGUAGE_FIELD] = pref.language
+      user.custom_fields[
+        BabelReunited::PREFERRED_LANGUAGE_FIELD
+      ] = pref.language
       user.custom_fields[BabelReunited::PREFERRED_ENABLED_FIELD] = pref.enabled
       user.save_custom_fields
       migrated += 1
