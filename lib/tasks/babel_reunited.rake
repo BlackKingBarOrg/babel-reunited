@@ -213,6 +213,46 @@ namespace :babel_reunited do
     end
   end
 
+  desc "Remove translation records whose language matches the post's detected language (legacy source-to-source copies)"
+  task cleanup_same_language_copies: :environment do
+    dry_run = ENV["DRY_RUN"] != "false"
+
+    # Only provably redundant records are touched: the post's detected locale
+    # is the ground truth, and the original view already covers that language.
+    # Posts without a detected locale are left alone.
+    records =
+      BabelReunited::PostTranslation.joins(
+        "INNER JOIN post_custom_fields pcf " \
+          "ON pcf.post_id = post_translations.post_id " \
+          "AND pcf.name = '#{BabelReunited::DETECTED_LOCALE_FIELD}'"
+      ).where("post_translations.language = pcf.value")
+
+    total = records.count
+    puts "Found #{total} same-language translation records"
+
+    if total == 0
+      puts "Nothing to do"
+      next
+    end
+
+    if dry_run
+      puts ""
+      puts "DRY RUN mode - nothing will be deleted"
+      puts "Use DRY_RUN=false to actually delete these records"
+      puts ""
+      puts "Sample records:"
+      records
+        .limit(10)
+        .each do |t|
+          puts "  Translation ID: #{t.id}, Post ID: #{t.post_id}, Language: #{t.language}"
+        end
+      puts "  ... and #{total - 10} more" if total > 10
+    else
+      deleted = records.delete_all
+      puts "Deleted: #{deleted} records"
+    end
+  end
+
   desc "Migrate user language preferences from legacy table to custom fields"
   task migrate_user_preferences: :environment do
     migrated = 0
