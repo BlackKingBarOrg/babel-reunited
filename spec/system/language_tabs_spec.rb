@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-RSpec.describe "Language tabs", type: :system do
+RSpec.describe "Language tabs" do
   fab!(:admin)
   fab!(:topic)
   fab!(:post_record) do

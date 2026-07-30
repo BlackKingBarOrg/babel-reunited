@@ -194,7 +194,7 @@ namespace :babel_reunited do
         start_id: ENV["START_ID"]&.to_i,
         batch_size: (ENV["BATCH_SIZE"] || 500).to_i,
         post_id: ENV["POST_ID"]&.to_i,
-        language: ENV["LANGUAGE"],
+        language: ENV["TARGET_LANGUAGE"],
         logger: ->(msg) { puts msg }
       )
 

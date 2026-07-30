@@ -12,7 +12,7 @@
 # core's cooked pipeline). The CI-side regression for the related product
 # decision — diagram sources pass through translation byte-for-byte, labels
 # untranslated — lives in translation_service_spec.rb.
-RSpec.describe "Mermaid theme component compatibility", type: :system do
+RSpec.describe "Mermaid theme component compatibility" do
   MERMAID_BLOCK = <<~MERMAID.freeze
     ```mermaid
     flowchart TD
