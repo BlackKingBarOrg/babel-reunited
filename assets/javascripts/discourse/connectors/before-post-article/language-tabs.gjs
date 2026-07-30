@@ -3,6 +3,7 @@ import { tracked } from "@glimmer/tracking";
 import { fn } from "@ember/helper";
 import { on } from "@ember/modifier";
 import { action } from "@ember/object";
+import { cancel } from "@ember/runloop";
 import { service } from "@ember/service";
 import PostCookedHtml from "discourse/components/post/cooked-html";
 // The ui-kit module path suggested by the lint rule is not resolvable in the
@@ -11,11 +12,20 @@ import PostCookedHtml from "discourse/components/post/cooked-html";
 import concatClass from "discourse/helpers/concat-class";
 import { ajax } from "discourse/lib/ajax";
 import { popupAjaxError } from "discourse/lib/ajax-error";
+import discourseLater from "discourse/lib/later";
 import { eq } from "discourse/truth-helpers";
 import { i18n } from "discourse-i18n";
 import { getSupportedLanguages } from "../../lib/supported-languages";
 
 const DISPLAYABLE_STATUSES = ["completed", "stale"];
+
+// Posts scrolled past render transiently (cloaking); only posts the reader
+// dwells on for this long fire an automatic translation request.
+const VIEW_TRIGGER_DWELL_MS = 500;
+
+// Session-level dedup: cloak/uncloak cycles recreate the component, but one
+// (post, language) pair should only ever fire one automatic request.
+const viewTriggerAttempted = new Set();
 
 export default class LanguageTabsConnector extends Component {
   static getLanguageDisplayName(code) {
@@ -66,14 +76,82 @@ export default class LanguageTabsConnector extends Component {
       this._messageBusChannel,
       this._onTranslationUpdate
     );
+
+    this._viewTriggerTimer = discourseLater(
+      this,
+      this._maybeViewTrigger,
+      VIEW_TRIGGER_DWELL_MS
+    );
   }
 
   willDestroy() {
     super.willDestroy(...arguments);
+    cancel(this._viewTriggerTimer);
     this.messageBus?.unsubscribe(
       this._messageBusChannel,
       this._onTranslationUpdate
     );
+  }
+
+  _maybeViewTrigger() {
+    if (this.isDestroying || this.isDestroyed) {
+      return;
+    }
+    if (!this.siteSettings.babel_reunited_view_triggered_translation) {
+      return;
+    }
+    if (this.isAiTranslationDisabled || !this.translationEnabledForCategory) {
+      return;
+    }
+
+    const preferred = this.currentUser?.preferred_language;
+    if (!preferred) {
+      return;
+    }
+    if (this.post?.babel_detected_locale === preferred) {
+      return;
+    }
+
+    // Missing, stale, or failed records go to the server, which owns the
+    // retry/dedup/fuse policy; fresh or in-flight ones never leave the client.
+    const status = this.getTranslationStatus(preferred);
+    if (status === "translating" || status === "completed") {
+      return;
+    }
+
+    const key = `${this.post.id}:${preferred}`;
+    if (viewTriggerAttempted.has(key)) {
+      return;
+    }
+    viewTriggerAttempted.add(key);
+
+    this._sendViewTrigger(preferred);
+  }
+
+  async _sendViewTrigger(languageCode) {
+    try {
+      const response = await ajax(
+        `/babel-reunited/posts/${this.post.id}/translations`,
+        {
+          type: "POST",
+          data: { target_language: languageCode, trigger: "view" },
+        }
+      );
+
+      if (response?.status === "queued") {
+        const state = this.states[languageCode];
+        if (!state || !this.isDisplayableStatus(state.status)) {
+          // No readable content yet: show the translating hint and switch
+          // once the completion arrives.
+          this.mergeState(languageCode, { status: "translating" });
+          this._pendingLanguage = languageCode;
+        }
+        // Stale content stays on screen; the refresh swaps in silently.
+      }
+    } catch {
+      // The automated lane never surfaces errors: the reader still has the
+      // original content, and manual requests keep their own error popups.
+    }
   }
 
   // language -> { language, status, source_language, translated_content?, ... }

@@ -97,6 +97,7 @@ RSpec.describe BabelReunited::TranslationsController do
     before do
       sign_in(user)
       Jobs.run_later!
+      Discourse.redis.flushdb
     end
 
     it "enqueues a translation job and returns queued status" do
@@ -290,6 +291,218 @@ RSpec.describe BabelReunited::TranslationsController do
            params: {
              target_language: "es",
            }
+
+      expect(response.status).to eq(429)
+    end
+
+    it "records manual requests against the daily fuse" do
+      post "/babel-reunited/posts/#{post_record.id}/translations.json",
+           params: {
+             target_language: "es",
+           }
+
+      expect(response.status).to eq(200)
+      expect(BabelReunited::UsageFuse.site_count).to eq(1)
+      expect(BabelReunited::UsageFuse.user_count(user)).to eq(1)
+    end
+
+    it "rejects manual requests once the user daily fuse trips" do
+      SiteSetting.babel_reunited_user_daily_translation_limit = 1
+      BabelReunited::UsageFuse.record!(user)
+
+      post "/babel-reunited/posts/#{post_record.id}/translations.json",
+           params: {
+             target_language: "es",
+           }
+
+      expect(response.status).to eq(429)
+      expect(response.parsed_body["error"]).to include("Daily translation limit")
+      expect(Jobs::BabelReunited::TranslatePostJob.jobs).to be_empty
+    end
+
+    it "rejects manual requests once the site daily fuse trips" do
+      SiteSetting.babel_reunited_daily_translation_limit = 1
+      BabelReunited::UsageFuse.record!(Fabricate(:user))
+
+      post "/babel-reunited/posts/#{post_record.id}/translations.json",
+           params: {
+             target_language: "es",
+           }
+
+      expect(response.status).to eq(429)
+      expect(response.parsed_body["error"]).to include("Site-wide")
+    end
+
+    it "exempts staff from the daily fuses" do
+      SiteSetting.babel_reunited_daily_translation_limit = 1
+      BabelReunited::UsageFuse.record!(Fabricate(:user))
+      sign_in(admin)
+
+      post "/babel-reunited/posts/#{post_record.id}/translations.json",
+           params: {
+             target_language: "es",
+           }
+
+      expect(response.status).to eq(200)
+      expect(BabelReunited::UsageFuse.site_count).to eq(1)
+    end
+  end
+
+  describe "POST /babel-reunited/posts/:post_id/translations with trigger=view" do
+    before do
+      sign_in(user)
+      Jobs.run_later!
+      SiteSetting.babel_reunited_view_triggered_translation = true
+      Discourse.redis.flushdb
+    end
+
+    def view_trigger(language = "es", target = post_record)
+      post "/babel-reunited/posts/#{target.id}/translations.json",
+           params: {
+             target_language: language,
+             trigger: "view",
+           }
+    end
+
+    def expect_noop(reason)
+      expect(response.status).to eq(200)
+      expect(response.parsed_body["status"]).to eq("noop")
+      expect(response.parsed_body["reason"]).to eq(reason)
+      expect(Jobs::BabelReunited::TranslatePostJob.jobs).to be_empty
+    end
+
+    it "enqueues and reports queued for a missing translation" do
+      view_trigger
+
+      expect(response.status).to eq(200)
+      expect(response.parsed_body["status"]).to eq("queued")
+      expect(
+        job_enqueued?(
+          job: Jobs::BabelReunited::TranslatePostJob,
+          args: {
+            post_id: post_record.id,
+            target_language: "es",
+          },
+        ),
+      ).to be true
+      expect(BabelReunited::UsageFuse.site_count).to eq(1)
+    end
+
+    it "noops when the setting is disabled" do
+      SiteSetting.babel_reunited_view_triggered_translation = false
+      view_trigger
+      expect_noop("disabled")
+    end
+
+    it "noops below the minimum trust level" do
+      SiteSetting.babel_reunited_view_trigger_min_trust_level = 3
+      user.update!(trust_level: TrustLevel[1])
+      view_trigger
+      expect_noop("trust_level")
+    end
+
+    it "noops when the post is already in the target language" do
+      BabelReunited.store_detected_locale(post_record, "es")
+      view_trigger
+      expect_noop("source_language")
+    end
+
+    it "noops while a translation is in flight" do
+      BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
+      view_trigger
+      expect_noop("already_translating")
+    end
+
+    it "noops for permanent failures" do
+      Fabricate(
+        :post_translation,
+        post: post_record,
+        language: "es",
+        status: "failed",
+        translated_content: "",
+        metadata: {
+          "error_kind" => "permanent",
+          "failed_at" => 2.hours.ago.iso8601,
+        },
+      )
+      view_trigger
+      expect_noop("failed_not_retryable")
+    end
+
+    it "noops for transient failures inside the cooldown" do
+      Fabricate(
+        :post_translation,
+        post: post_record,
+        language: "es",
+        status: "failed",
+        translated_content: "",
+        metadata: {
+          "error_kind" => "transient",
+          "failed_at" => 5.minutes.ago.iso8601,
+          "failure_count" => 1,
+        },
+      )
+      view_trigger
+      expect_noop("failed_not_retryable")
+    end
+
+    it "re-enqueues transient failures after the cooldown" do
+      Fabricate(
+        :post_translation,
+        post: post_record,
+        language: "es",
+        status: "failed",
+        translated_content: "",
+        metadata: {
+          "error_kind" => "transient",
+          "failed_at" => 31.minutes.ago.iso8601,
+          "failure_count" => 1,
+        },
+      )
+      view_trigger
+
+      expect(response.parsed_body["status"]).to eq("queued")
+    end
+
+    it "re-enqueues stale translations" do
+      Fabricate(:post_translation, post: post_record, language: "es", status: "stale")
+      view_trigger
+
+      expect(response.parsed_body["status"]).to eq("queued")
+    end
+
+    it "noops when the user daily fuse trips" do
+      SiteSetting.babel_reunited_user_daily_translation_limit = 1
+      BabelReunited::UsageFuse.record!(user)
+      view_trigger
+      expect_noop("user_daily_limit")
+    end
+
+    it "noops when the site daily fuse trips" do
+      SiteSetting.babel_reunited_daily_translation_limit = 1
+      BabelReunited::UsageFuse.record!(Fabricate(:user))
+      view_trigger
+      expect_noop("site_daily_limit")
+    end
+
+    it "exempts staff from fuses and trust level" do
+      SiteSetting.babel_reunited_view_trigger_min_trust_level = 4
+      SiteSetting.babel_reunited_daily_translation_limit = 1
+      BabelReunited::UsageFuse.record!(Fabricate(:user))
+      sign_in(admin)
+
+      view_trigger
+
+      expect(response.parsed_body["status"]).to eq("queued")
+    end
+
+    it "applies the view-lane rate bucket" do
+      RateLimiter
+        .any_instance
+        .stubs(:performed!)
+        .raises(RateLimiter::LimitExceeded.new(1, "babel-reunited-view-translate", nil))
+
+      view_trigger
 
       expect(response.status).to eq(429)
     end

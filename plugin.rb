@@ -236,6 +236,7 @@ end
 
 require_relative "lib/babel_reunited/engine"
 require_relative "lib/babel_reunited/locales"
+require_relative "lib/babel_reunited/usage_fuse"
 
 # Load models BEFORE after_initialize
 require_relative "app/models/babel_reunited/post_translation"

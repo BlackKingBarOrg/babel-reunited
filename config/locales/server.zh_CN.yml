@@ -9,6 +9,10 @@ zh_CN:
     babel_reunited_enabled: "启用 Babel Reunited 插件"
     babel_reunited_preset_model: "选择预设模型"
     babel_reunited_auto_translate_languages: "自动翻译语言（逗号分隔的语言代码）"
+    babel_reunited_view_triggered_translation: "读者浏览帖子时，若其偏好语言尚无翻译则自动触发翻译"
+    babel_reunited_daily_translation_limit: "站点级熔断：全站非管理人员每日可接受的翻译请求上限（手动与浏览触发合并计数）。0 表示不限制。"
+    babel_reunited_user_daily_translation_limit: "单用户熔断：每个用户每日可接受的翻译请求上限（手动与浏览触发合并计数）。0 表示不限制。"
+    babel_reunited_view_trigger_min_trust_level: "浏览触发翻译所需的最低信任等级"
     
     babel_reunited_openai_api_key: "OpenAI API密钥"
     babel_reunited_xai_api_key: "xAI (Grok) API密钥"

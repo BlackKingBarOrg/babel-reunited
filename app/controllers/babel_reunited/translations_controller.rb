@@ -79,12 +79,35 @@ module BabelReunited
         )
       end
 
+      return handle_view_trigger(target_language) if params[:trigger] == "view"
+
+      unless guardian.is_staff?
+        if BabelReunited::UsageFuse.user_exhausted?(current_user)
+          return(
+            render json: {
+                     error: "Daily translation limit reached"
+                   },
+                   status: :too_many_requests
+          )
+        end
+        if BabelReunited::UsageFuse.site_exhausted?
+          return(
+            render json: {
+                     error: "Site-wide daily translation limit reached"
+                   },
+                   status: :too_many_requests
+          )
+        end
+      end
+
       ::RateLimiter.new(
         current_user,
         "babel-reunited-translate",
         10,
         1.minute
       ).performed!
+
+      BabelReunited::UsageFuse.record!(current_user) unless guardian.is_staff?
 
       BabelReunited.enqueue_translation_jobs(
         @post,
@@ -207,6 +230,72 @@ module BabelReunited
     end
 
     private
+
+    # The automated lane. Fire-and-forget from the client: every rejection is
+    # a silent 200 noop (the reader already sees the original or stale
+    # content), and the guard order keeps rejected requests cost-free.
+    def handle_view_trigger(target_language)
+      unless SiteSetting.babel_reunited_view_triggered_translation
+        return render_view_noop("disabled")
+      end
+
+      min_tl = SiteSetting.babel_reunited_view_trigger_min_trust_level
+      if !guardian.is_staff? && current_user.trust_level < min_tl
+        return render_view_noop("trust_level")
+      end
+
+      if BabelReunited.detected_locale_for(@post) == target_language
+        return render_view_noop("source_language")
+      end
+
+      translation =
+        BabelReunited::PostTranslation.find_translation(
+          @post.id,
+          target_language
+        )
+      if translation
+        if translation.translating?
+          return render_view_noop("already_translating")
+        end
+        if translation.failed? && !translation.auto_retryable?
+          return render_view_noop("failed_not_retryable")
+        end
+        # completed: enqueue anyway — the job's sha guard makes it free and
+        # republishes, self-healing clients that missed the body.
+        # stale: enqueue re-translation while old content stays readable.
+      end
+
+      unless guardian.is_staff?
+        if BabelReunited::UsageFuse.user_exhausted?(current_user)
+          return render_view_noop("user_daily_limit")
+        end
+        if BabelReunited::UsageFuse.site_exhausted?
+          return render_view_noop("site_daily_limit")
+        end
+      end
+
+      ::RateLimiter.new(
+        current_user,
+        "babel-reunited-view-translate",
+        30,
+        1.minute
+      ).performed!
+
+      BabelReunited::UsageFuse.record!(current_user) unless guardian.is_staff?
+
+      BabelReunited.enqueue_translation_jobs(@post, [target_language])
+
+      render json: {
+               status: "queued",
+               post_id: @post.id,
+               target_language: target_language,
+               trigger: "view"
+             }
+    end
+
+    def render_view_noop(reason)
+      render json: { status: "noop", reason: reason }
+    end
 
     def find_post
       @post = Post.find_by(id: params[:post_id])

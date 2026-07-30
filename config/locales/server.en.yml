@@ -12,6 +12,10 @@ en:
     babel_reunited_enabled_categories: "Only translate posts in these categories. Leave empty to translate in all categories."
     babel_reunited_preset_model: "Select preset model"
     babel_reunited_auto_translate_languages: "Auto-translate to languages (comma-separated language codes)"
+    babel_reunited_view_triggered_translation: "Automatically translate a post into a reader's preferred language when they view it and no translation exists yet"
+    babel_reunited_daily_translation_limit: "Site-wide circuit breaker: maximum translation requests accepted per day across all non-staff users (manual and view-triggered). 0 disables the limit."
+    babel_reunited_user_daily_translation_limit: "Per-user circuit breaker: maximum translation requests accepted per user per day (manual and view-triggered). 0 disables the limit."
+    babel_reunited_view_trigger_min_trust_level: "Minimum trust level required for view-triggered translation"
     
     babel_reunited_openai_api_key: "OpenAI API Key"
     babel_reunited_xai_api_key: "xAI (Grok) API Key"
