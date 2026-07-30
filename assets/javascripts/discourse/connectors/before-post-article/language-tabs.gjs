@@ -348,7 +348,7 @@ export default class LanguageTabsConnector extends Component {
   }
 
   get pickerExcludeCodes() {
-    return [this.detectedLocale, this.preferredCode];
+    return [this.preferredCode];
   }
 
   get instantCodes() {
@@ -368,6 +368,27 @@ export default class LanguageTabsConnector extends Component {
 
     const content = this.states[this.currentLanguage]?.translated_content;
     return content || this.post?.cooked || "";
+  }
+
+  // Shown above translated content whose source post has changed (stale) or
+  // which is being refreshed right now.
+  get viewingNotice() {
+    if (this.currentLanguage === "original") {
+      return null;
+    }
+
+    const state = this.states[this.currentLanguage];
+    if (!state?.translated_content) {
+      return null;
+    }
+
+    if (state.status === "stale") {
+      return i18n("babel_reunited.language_tabs.stale_notice");
+    }
+    if (state.status === "translating") {
+      return i18n("babel_reunited.language_tabs.refreshing_notice");
+    }
+    return null;
   }
 
   get currentLanguageName() {
@@ -532,11 +553,16 @@ export default class LanguageTabsConnector extends Component {
             @translatedCodes={{this.translatedCodes}}
             @excludeCodes={{this.pickerExcludeCodes}}
             @instantCodes={{this.instantCodes}}
+            @sourceCode={{this.detectedLocale}}
             @showHints={{true}}
             @onSelect={{fn this.pickLanguage menu.close}}
           />
         </DMenu>
       </div>
+    {{/if}}
+
+    {{#if this.viewingNotice}}
+      <div class="babel-reunited-stale-notice">{{this.viewingNotice}}</div>
     {{/if}}
 
     {{#if (eq this.currentLanguage "original")}}

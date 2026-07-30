@@ -20,6 +20,9 @@ zh_CN:
         on_demand_hint: "首次查看需数秒"
         failed_retry: "翻译失败，点击重试"
         retry: "重试"
+        source_language_hint: "源语言"
+        stale_notice: "此译文基于帖子的旧版本"
+        refreshing_notice: "此译文基于帖子的旧版本，正在刷新"
         switch_to: "切换到 %{language}"
         start_translation: "点击开始 %{language} 翻译"
       preferences:

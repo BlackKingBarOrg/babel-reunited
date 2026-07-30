@@ -756,6 +756,45 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
       expect(translation.metadata["error_kind"]).to eq("permanent")
     end
 
+    it "clears failure metadata after a later success" do
+      BabelReunited::PostTranslation.create_or_update_record(
+        post_record.id,
+        "es"
+      )
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+      expect(
+        BabelReunited::PostTranslation.find_translation(
+          post_record.id,
+          "es"
+        ).metadata[
+          "failure_count"
+        ]
+      ).to eq(1)
+
+      BabelReunited::TranslationService
+        .any_instance
+        .stubs(:call)
+        .returns(success_result)
+      BabelReunited::PostTranslation.create_or_update_record(
+        post_record.id,
+        "es"
+      )
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+
+      translation =
+        BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      expect(translation.status).to eq("completed")
+      expect(translation.metadata).not_to have_key("failure_count")
+      expect(translation.metadata).not_to have_key("error_kind")
+      expect(translation.metadata).not_to have_key("error")
+    end
+
     it "increments failure_count across repeated failures" do
       BabelReunited::PostTranslation.create_or_update_record(
         post_record.id,

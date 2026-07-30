@@ -20,6 +20,9 @@ es:
         on_demand_hint: "La primera vista tarda unos segundos"
         failed_retry: "La traducción falló, haz clic para reintentar"
         retry: "Reintentar"
+        source_language_hint: "Idioma de origen"
+        stale_notice: "Esta traducción corresponde a una versión anterior de la publicación"
+        refreshing_notice: "Esta traducción corresponde a una versión anterior; se está actualizando"
         switch_to: "Cambiar a %{language}"
         start_translation: "Haz clic para iniciar la traducción a %{language}"
       preferences:

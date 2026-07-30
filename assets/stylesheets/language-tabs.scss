@@ -139,3 +139,12 @@
     font-size: var(--font-down-3);
   }
 }
+
+.babel-reunited-stale-notice {
+  margin-bottom: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  border-left: 3px solid var(--highlight-medium);
+  background: var(--highlight-bg, var(--primary-very-low));
+  color: var(--primary-high);
+  font-size: var(--font-down-2);
+}

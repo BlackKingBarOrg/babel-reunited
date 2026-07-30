@@ -170,8 +170,17 @@ module(
         .exists("shows spinner on the transient tab");
     });
 
-    test("the detected language is excluded from the picker", async function (assert) {
+    test("the detected language stays selectable, tagged as source", async function (assert) {
       this.set("post", createPost({ babel_detected_locale: "th" }));
+      pretender.post(
+        `/babel-reunited/posts/${this.post.id}/translations`,
+        (request) => {
+          const body = new URLSearchParams(request.requestBody);
+          assert.step(`POST target_language=${body.get("target_language")}`);
+          return response({ status: "queued" });
+        }
+      );
+
       await render(
         <template>
           <LanguageTabsConnector @post={{this.post}}>
@@ -184,8 +193,12 @@ module(
       await fillIn(".babel-language-picker__filter", "thai");
 
       assert
-        .dom(".babel-language-picker__item")
-        .doesNotExist("the original tab already covers the post's language");
+        .dom(".babel-language-picker__hint")
+        .hasText("Source language", "entry is tagged instead of hidden");
+
+      // A reader can override a wrong detection by asking anyway.
+      await click(".babel-language-picker__item");
+      assert.verifySteps(["POST target_language=th"]);
     });
 
     test("picking an in-flight language fetches but never re-requests", async function (assert) {
@@ -349,6 +362,9 @@ module(
       );
 
       assert.dom(".cooked").hasText("Alte Übersetzung", "stale body displays");
+      assert
+        .dom(".babel-reunited-stale-notice")
+        .exists("stale content is labeled");
 
       await click(".ai-language-tabs button:nth-child(2)");
       assert.verifySteps(["refresh requested"]);

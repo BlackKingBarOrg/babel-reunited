@@ -20,6 +20,9 @@ en:
         on_demand_hint: "First view takes a few seconds"
         failed_retry: "Translation failed, click to retry"
         retry: "Retry"
+        source_language_hint: "Source language"
+        stale_notice: "This translation is from an older version of the post"
+        refreshing_notice: "This translation is from an older version of the post; a refresh is on the way"
         switch_to: "Switch to %{language}"
         start_translation: "Click to start translation for %{language}"
       preferences:

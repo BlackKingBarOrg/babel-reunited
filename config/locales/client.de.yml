@@ -20,6 +20,9 @@ de:
         on_demand_hint: "Erste Ansicht dauert einige Sekunden"
         failed_retry: "Übersetzung fehlgeschlagen, zum Wiederholen klicken"
         retry: "Erneut versuchen"
+        source_language_hint: "Ausgangssprache"
+        stale_notice: "Diese Übersetzung stammt von einer älteren Version des Beitrags"
+        refreshing_notice: "Diese Übersetzung stammt von einer älteren Version und wird gerade aktualisiert"
         switch_to: "Zu %{language} wechseln"
         start_translation: "Klicken, um die Übersetzung nach %{language} zu starten"
       preferences:

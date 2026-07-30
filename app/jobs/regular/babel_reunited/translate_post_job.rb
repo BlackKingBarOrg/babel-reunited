@@ -119,7 +119,10 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
       if !force_update && !translation.completed? &&
            translation.source_sha == source_sha &&
            translation.translated_content.present?
-        translation.update!(status: "completed")
+        translation.update!(
+          status: "completed",
+          metadata: success_metadata(translation)
+        )
         log_skipped(post_id, target_language, "content_unchanged_heal")
         publish_status(
           post,
@@ -227,6 +230,18 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
     )
   end
 
+  # A success wipes the failure history: auto-retry eligibility tracks
+  # consecutive failures, not lifetime totals.
+  def success_metadata(translation, extra = {})
+    (translation.metadata || {}).except(
+      "error",
+      "error_class",
+      "error_kind",
+      "failure_count",
+      "failed_at"
+    ).merge(extra)
+  end
+
   def failure_metadata(translation, message, **extra)
     meta = translation.metadata || {}
     meta.merge(
@@ -293,7 +308,8 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
         BabelReunited.detected_locale_for(post) || result.source_language,
       source_sha: source_sha,
       metadata:
-        (translation.metadata || {}).merge(
+        success_metadata(
+          translation,
           confidence: result.ai_response[:confidence],
           provider_info: result.ai_response[:provider_info],
           translated_at: Time.current,

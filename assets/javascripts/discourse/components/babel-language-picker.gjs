@@ -46,7 +46,13 @@ export default class BabelLanguagePicker extends Component {
     return codes
       .map((code) => {
         const entry = { code, name: languageDisplayName(code) };
-        if (hinted && this.args.showHints) {
+        if (code === this.args.sourceCode) {
+          // The post's own language stays selectable so readers can override
+          // a wrong detection; a right one just translates to itself once.
+          entry.hint = i18n(
+            "babel_reunited.language_tabs.source_language_hint"
+          );
+        } else if (hinted && this.args.showHints) {
           entry.hint = this.instantCodes.includes(code)
             ? i18n("babel_reunited.language_tabs.instant_hint")
             : i18n("babel_reunited.language_tabs.on_demand_hint");
