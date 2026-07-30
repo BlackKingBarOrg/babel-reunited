@@ -202,18 +202,25 @@ module(
     });
 
     test("picking an in-flight language fetches but never re-requests", async function (assert) {
-      this.set("post", createPost());
+      this.set(
+        "post",
+        createPost({
+          babel_translations_meta: [
+            { language: "vi", status: "translating", source_language: null },
+          ],
+        })
+      );
       pretender.post(`/babel-reunited/posts/${this.post.id}/translations`, () => {
         assert.step("POST called");
         return response({ status: "queued" });
       });
       pretender.get(
-        `/babel-reunited/posts/${this.post.id}/translations/es.json`,
+        `/babel-reunited/posts/${this.post.id}/translations/vi.json`,
         () => {
           assert.step("GET body");
           return response({
             post_translation: {
-              language: "es",
+              language: "vi",
               status: "translating",
               translated_content: "",
             },
@@ -230,7 +237,7 @@ module(
       );
 
       await openLanguageMenu();
-      await fillIn(".babel-language-picker__filter", "spanish");
+      await fillIn(".babel-language-picker__filter", "vietnamese");
       await click(".babel-language-picker__item");
 
       // A fresh in-flight record has no body yet: one read, no new job.

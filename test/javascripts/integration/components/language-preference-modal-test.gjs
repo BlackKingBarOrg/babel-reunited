@@ -40,7 +40,7 @@ module(
         </template>
       );
 
-      await fillIn(".babel-language-picker__filter", "english");
+      await fillIn(".babel-language-picker__filter", "zh-cn");
       assert.dom(".babel-language-picker__hint").hasText("Instant");
 
       await fillIn(".babel-language-picker__filter", "thai");
@@ -68,10 +68,10 @@ module(
         </template>
       );
 
-      await fillIn(".babel-language-picker__filter", "english");
+      await fillIn(".babel-language-picker__filter", "zh-cn");
       await click(".babel-language-picker__item");
 
-      assert.verifySteps(["POST language=en"]);
+      assert.verifySteps(["POST language=zh-cn"]);
       assert.true(modalClosed, "closeModal was called");
     });
 
