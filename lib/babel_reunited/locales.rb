@@ -23,10 +23,18 @@ module BabelReunited
       cy
       da
       de
+      de-at
+      de-ch
       el
       en
+      en-au
+      en-ca
+      en-gb
+      en-us
       eo
       es
+      es-ar
+      es-mx
       et
       eu
       fa
@@ -35,6 +43,9 @@ module BabelReunited
       fj
       fo
       fr
+      fr-be
+      fr-ca
+      fr-ch
       fy
       ga
       gd
@@ -52,6 +63,7 @@ module BabelReunited
       ig
       is
       it
+      it-ch
       ja
       jv
       ka
@@ -77,12 +89,14 @@ module BabelReunited
       my
       ne
       nl
+      nl-be
       no
       pa
       pl
       ps
       pt
       pt-br
+      pt-pt
       ro
       ru
       rw
@@ -117,6 +131,7 @@ module BabelReunited
       yo
       yue
       zh-cn
+      zh-hk
       zh-tw
       zu
     ].freeze

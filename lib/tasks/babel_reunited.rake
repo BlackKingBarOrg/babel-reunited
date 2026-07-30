@@ -213,6 +213,37 @@ namespace :babel_reunited do
     end
   end
 
+  desc "Report language codes in existing data that are not in the supported list"
+  task audit_language_codes: :environment do
+    supported = BabelReunited::Locales::SUPPORTED
+
+    translation_codes =
+      BabelReunited::PostTranslation.distinct.pluck(:language) - supported
+    puts "post_translations languages outside the supported list: " \
+           "#{translation_codes.sort.join(", ").presence || "none"}"
+    translation_codes.sort.each do |code|
+      count = BabelReunited::PostTranslation.where(language: code).count
+      puts "  #{code}: #{count} records"
+    end
+
+    pref_codes =
+      UserCustomField
+        .where(name: BabelReunited::PREFERRED_LANGUAGE_FIELD)
+        .distinct
+        .pluck(:value)
+        .compact - supported
+    legacy_pref_codes =
+      BabelReunited::UserPreferredLanguage.distinct.pluck(:language).compact -
+        supported
+    all_pref_codes = (pref_codes + legacy_pref_codes).uniq.sort
+    puts "user preference languages outside the supported list: " \
+           "#{all_pref_codes.join(", ").presence || "none"}"
+    puts ""
+    puts "These codes can no longer be requested for translation. Extend " \
+           "BabelReunited::Locales::SUPPORTED (and the client mirror) or " \
+           "migrate the data."
+  end
+
   desc "Remove translation records whose language matches the post's detected language (legacy source-to-source copies)"
   task cleanup_same_language_copies: :environment do
     dry_run = ENV["DRY_RUN"] != "false"

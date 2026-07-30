@@ -46,22 +46,28 @@ RSpec.describe BabelReunited::Locales do
 
   describe "list integrity" do
     it "contains only codes matching the format" do
-      expect(described_class::SUPPORTED).to all(match(described_class::LANGUAGE_CODE_FORMAT))
+      expect(described_class::SUPPORTED).to all(
+        match(described_class::LANGUAGE_CODE_FORMAT)
+      )
     end
 
     it "contains no duplicates and stays sorted" do
-      expect(described_class::SUPPORTED).to eq(described_class::SUPPORTED.uniq.sort)
+      expect(described_class::SUPPORTED).to eq(
+        described_class::SUPPORTED.uniq.sort
+      )
     end
 
     it "includes the default auto-translate languages" do
-      %w[en zh-cn es].each { |code| expect(described_class.valid?(code)).to be true }
+      %w[en zh-cn es].each do |code|
+        expect(described_class.valid?(code)).to be true
+      end
     end
 
     it "stays in sync with the client-side mirror" do
       js_path =
         File.expand_path(
           "../../../assets/javascripts/discourse/lib/babel-locales.js",
-          __dir__,
+          __dir__
         )
       js_codes = File.read(js_path).scan(/^\s+"([a-z-]+)",$/).flatten
       expect(js_codes).to eq(described_class::SUPPORTED)

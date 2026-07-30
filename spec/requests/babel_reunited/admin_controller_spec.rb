@@ -43,17 +43,19 @@ RSpec.describe BabelReunited::AdminController do
       expect(json).to have_key("recent_translations")
     end
 
-    it "reports fuse usage and limits" do
+    it "reports fuse usage, provider calls, and limits" do
       Discourse.redis.flushdb
       SiteSetting.babel_reunited_daily_translation_limit = 1234
       BabelReunited::UsageFuse.record!(user)
       BabelReunited::UsageFuse.record!(user)
+      3.times { BabelReunited::RateLimiter.perform_request_if_allowed }
 
       get "/babel-reunited/admin/stats.json"
       json = response.parsed_body
 
       usage = json["today_usage"]
-      expect(usage["accepted_requests"]).to eq(2)
+      expect(usage["accepted_ondemand_requests"]).to eq(2)
+      expect(usage["provider_calls_today"]).to eq(3)
       expect(usage["site_daily_limit"]).to eq(1234)
       expect(usage).to have_key("user_daily_limit")
       expect(usage).to have_key("view_triggered_enabled")
@@ -61,7 +63,12 @@ RSpec.describe BabelReunited::AdminController do
 
     it "groups status distribution" do
       Fabricate(:post_translation, post: post_record, language: "es")
-      Fabricate(:post_translation, post: post_record, language: "de", status: "stale")
+      Fabricate(
+        :post_translation,
+        post: post_record,
+        language: "de",
+        status: "stale"
+      )
 
       get "/babel-reunited/admin/stats.json"
       json = response.parsed_body

@@ -8,7 +8,8 @@ RSpec.describe BabelReunited::LanguageDetectionService do
       :post,
       topic: topic,
       user: user,
-      raw: "This is a long enough English sentence for language detection to work.",
+      raw:
+        "This is a long enough English sentence for language detection to work."
     )
   end
 
@@ -23,14 +24,14 @@ RSpec.describe BabelReunited::LanguageDetectionService do
     stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
       status: 200,
       headers: {
-        "Content-Type" => "application/json",
+        "Content-Type" => "application/json"
       },
       body: {
         choices: [{ message: { content: reply }, finish_reason: "stop" }],
         usage: {
-          total_tokens: 42,
-        },
-      }.to_json,
+          total_tokens: 42
+        }
+      }.to_json
     )
   end
 
@@ -77,12 +78,14 @@ RSpec.describe BabelReunited::LanguageDetectionService do
     BabelReunited::RateLimiter.stubs(:perform_request_if_allowed).returns(false)
 
     expect { described_class.new(post: post_record).call }.to raise_error(
-      BabelReunited::RateLimitError,
+      BabelReunited::RateLimitError
     )
   end
 
   it "returns an error on provider failure" do
-    stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(status: 500)
+    stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
+      status: 500
+    )
 
     result = described_class.new(post: post_record).call
     expect(result.failure?).to be true

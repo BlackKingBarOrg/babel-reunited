@@ -31,12 +31,15 @@ RSpec.describe "babel_reunited:cleanup_same_language_copies" do
     keeper = Fabricate(:post_translation, post: post_record, language: "es")
 
     undetected_post = Fabricate(:post, topic: topic, user: user)
-    undetected_copy = Fabricate(:post_translation, post: undetected_post, language: "en")
+    undetected_copy =
+      Fabricate(:post_translation, post: undetected_post, language: "en")
 
     expect { task.invoke }.to output(/Deleted: 1 records/).to_stdout
 
     expect(BabelReunited::PostTranslation.exists?(copy.id)).to be false
     expect(BabelReunited::PostTranslation.exists?(keeper.id)).to be true
-    expect(BabelReunited::PostTranslation.exists?(undetected_copy.id)).to be true
+    expect(
+      BabelReunited::PostTranslation.exists?(undetected_copy.id)
+    ).to be true
   end
 end
