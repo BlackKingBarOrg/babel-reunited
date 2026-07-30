@@ -9,3 +9,10 @@ on:
 jobs:
   ci:
     uses: discourse/.github/.github/workflows/discourse-plugin.yml@v1
+
+  # Pinned to the exact core commit running on talk.nervos.org.
+  # Update the ref whenever production upgrades Discourse.
+  ci-production-core:
+    uses: discourse/.github/.github/workflows/discourse-plugin.yml@v1
+    with:
+      core_ref: c7126de2becc2dfd32eea63c1816adb4216357e1

@@ -1,6 +1,12 @@
 import { getOwner } from "@ember/owner";
+import { trustHTML } from "@ember/template";
 import { click, render, settled } from "@ember/test-helpers";
 import { module, test } from "qunit";
+// The ui-kit module path suggested by the lint rule is not resolvable in the
+// plugin runtime yet; the legacy path works through core's compatibility shim.
+// eslint-disable-next-line simple-import-sort/imports, discourse/ui-kit-imports
+import { resetHtmlDecorators } from "discourse/components/decorated-html";
+import { withPluginApi } from "discourse/lib/plugin-api";
 import { setupRenderingTest } from "discourse/tests/helpers/component-test";
 import pretender, { response } from "discourse/tests/helpers/create-pretender";
 import { publishToMessageBus } from "discourse/tests/helpers/qunit-helpers";
@@ -48,7 +54,11 @@ module(
     test("renders Original button and 3 language buttons", async function (assert) {
       this.set("post", createPost());
       await render(
-        <template><LanguageTabsConnector @post={{this.post}} /></template>
+        <template>
+          <LanguageTabsConnector @post={{this.post}}>
+            <div class="cooked">{{trustHTML this.post.cooked}}</div>
+          </LanguageTabsConnector>
+        </template>
       );
 
       assert.dom(".ai-language-tabs button").exists({ count: 4 });
@@ -57,7 +67,11 @@ module(
     test("default selection is original, displaying post.cooked", async function (assert) {
       this.set("post", createPost());
       await render(
-        <template><LanguageTabsConnector @post={{this.post}} /></template>
+        <template>
+          <LanguageTabsConnector @post={{this.post}}>
+            <div class="cooked">{{trustHTML this.post.cooked}}</div>
+          </LanguageTabsConnector>
+        </template>
       );
 
       assert.dom(".cooked").hasText("Original cooked content");
@@ -66,7 +80,11 @@ module(
     test("clicking completed language shows translated content", async function (assert) {
       this.set("post", createPost());
       await render(
-        <template><LanguageTabsConnector @post={{this.post}} /></template>
+        <template>
+          <LanguageTabsConnector @post={{this.post}}>
+            <div class="cooked">{{trustHTML this.post.cooked}}</div>
+          </LanguageTabsConnector>
+        </template>
       );
 
       // Button order follows site setting default: en(2), zh-cn(3), es(4)
@@ -78,7 +96,11 @@ module(
     test("clicking Original restores post.cooked content", async function (assert) {
       this.set("post", createPost());
       await render(
-        <template><LanguageTabsConnector @post={{this.post}} /></template>
+        <template>
+          <LanguageTabsConnector @post={{this.post}}>
+            <div class="cooked">{{trustHTML this.post.cooked}}</div>
+          </LanguageTabsConnector>
+        </template>
       );
 
       await click(".ai-language-tabs button:nth-child(2)");
@@ -124,7 +146,11 @@ module(
         })
       );
       await render(
-        <template><LanguageTabsConnector @post={{this.post}} /></template>
+        <template>
+          <LanguageTabsConnector @post={{this.post}}>
+            <div class="cooked">{{trustHTML this.post.cooked}}</div>
+          </LanguageTabsConnector>
+        </template>
       );
 
       await click(".ai-language-tabs button:nth-child(4)");
@@ -143,7 +169,11 @@ module(
 
       this.set("post", createPost());
       await render(
-        <template><LanguageTabsConnector @post={{this.post}} /></template>
+        <template>
+          <LanguageTabsConnector @post={{this.post}}>
+            <div class="cooked">{{trustHTML this.post.cooked}}</div>
+          </LanguageTabsConnector>
+        </template>
       );
 
       // es already has status "translating" — clicking should not fire AJAX
@@ -187,7 +217,11 @@ module(
         })
       );
       await render(
-        <template><LanguageTabsConnector @post={{this.post}} /></template>
+        <template>
+          <LanguageTabsConnector @post={{this.post}}>
+            <div class="cooked">{{trustHTML this.post.cooked}}</div>
+          </LanguageTabsConnector>
+        </template>
       );
 
       // zh-cn is re-translating but has old content — clicking should show old content
@@ -234,7 +268,11 @@ module(
         })
       );
       await render(
-        <template><LanguageTabsConnector @post={{this.post}} /></template>
+        <template>
+          <LanguageTabsConnector @post={{this.post}}>
+            <div class="cooked">{{trustHTML this.post.cooked}}</div>
+          </LanguageTabsConnector>
+        </template>
       );
 
       // Click failed "es" tab to trigger on-demand
@@ -286,7 +324,11 @@ module(
         })
       );
       await render(
-        <template><LanguageTabsConnector @post={{this.post}} /></template>
+        <template>
+          <LanguageTabsConnector @post={{this.post}}>
+            <div class="cooked">{{trustHTML this.post.cooked}}</div>
+          </LanguageTabsConnector>
+        </template>
       );
 
       await click(".ai-language-tabs button:nth-child(4)");
@@ -299,7 +341,11 @@ module(
     test("Tripwire: currentContent in original mode returns post.cooked not post.raw", async function (assert) {
       this.set("post", createPost());
       await render(
-        <template><LanguageTabsConnector @post={{this.post}} /></template>
+        <template>
+          <LanguageTabsConnector @post={{this.post}}>
+            <div class="cooked">{{trustHTML this.post.cooked}}</div>
+          </LanguageTabsConnector>
+        </template>
       );
 
       assert.dom(".cooked").hasText("Original cooked content");
@@ -313,7 +359,11 @@ module(
 
       this.set("post", createPost());
       await render(
-        <template><LanguageTabsConnector @post={{this.post}} /></template>
+        <template>
+          <LanguageTabsConnector @post={{this.post}}>
+            <div class="cooked">{{trustHTML this.post.cooked}}</div>
+          </LanguageTabsConnector>
+        </template>
       );
 
       assert.dom(".cooked").hasText("中文翻译");
@@ -325,7 +375,11 @@ module(
 
       this.set("post", createPost());
       await render(
-        <template><LanguageTabsConnector @post={{this.post}} /></template>
+        <template>
+          <LanguageTabsConnector @post={{this.post}}>
+            <div class="cooked">{{trustHTML this.post.cooked}}</div>
+          </LanguageTabsConnector>
+        </template>
       );
 
       assert.dom(".ai-language-tabs").doesNotExist();
@@ -334,7 +388,11 @@ module(
     test("shows spinner icon for translating status", async function (assert) {
       this.set("post", createPost());
       await render(
-        <template><LanguageTabsConnector @post={{this.post}} /></template>
+        <template>
+          <LanguageTabsConnector @post={{this.post}}>
+            <div class="cooked">{{trustHTML this.post.cooked}}</div>
+          </LanguageTabsConnector>
+        </template>
       );
 
       assert.dom(".ai-language-tabs .spinner.small").exists();
@@ -343,7 +401,11 @@ module(
     test("MessageBus update refreshes translation data and UI", async function (assert) {
       this.set("post", createPost());
       await render(
-        <template><LanguageTabsConnector @post={{this.post}} /></template>
+        <template>
+          <LanguageTabsConnector @post={{this.post}}>
+            <div class="cooked">{{trustHTML this.post.cooked}}</div>
+          </LanguageTabsConnector>
+        </template>
       );
 
       assert
@@ -372,7 +434,11 @@ module(
       this.siteSettings.babel_reunited_enabled_categories = "99";
       this.set("post", createPost({ topic: { category_id: 42 } }));
       await render(
-        <template><LanguageTabsConnector @post={{this.post}} /></template>
+        <template>
+          <LanguageTabsConnector @post={{this.post}}>
+            <div class="cooked">{{trustHTML this.post.cooked}}</div>
+          </LanguageTabsConnector>
+        </template>
       );
 
       assert.dom(".ai-language-tabs").doesNotExist();
@@ -383,7 +449,11 @@ module(
       this.siteSettings.babel_reunited_enabled_categories = "42";
       this.set("post", createPost({ topic: { category_id: 42 } }));
       await render(
-        <template><LanguageTabsConnector @post={{this.post}} /></template>
+        <template>
+          <LanguageTabsConnector @post={{this.post}}>
+            <div class="cooked">{{trustHTML this.post.cooked}}</div>
+          </LanguageTabsConnector>
+        </template>
       );
 
       assert.dom(".ai-language-tabs").exists();
@@ -393,10 +463,106 @@ module(
       this.siteSettings.babel_reunited_enabled_categories = "";
       this.set("post", createPost());
       await render(
-        <template><LanguageTabsConnector @post={{this.post}} /></template>
+        <template>
+          <LanguageTabsConnector @post={{this.post}}>
+            <div class="cooked">{{trustHTML this.post.cooked}}</div>
+          </LanguageTabsConnector>
+        </template>
       );
 
       assert.dom(".ai-language-tabs").exists();
+    });
+
+    test("original mode renders the yielded block, not PostCookedHtml", async function (assert) {
+      this.set("post", createPost());
+      await render(
+        <template>
+          <LanguageTabsConnector @post={{this.post}}>
+            <div class="cooked" data-yielded-block>
+              {{trustHTML this.post.cooked}}
+            </div>
+          </LanguageTabsConnector>
+        </template>
+      );
+
+      assert.dom("[data-yielded-block]").exists("block content is rendered");
+      assert.dom(".cooked").exists({ count: 1 });
+      assert.dom(".cooked").hasText("Original cooked content");
+    });
+
+    test("translated mode replaces the block with PostCookedHtml output", async function (assert) {
+      this.set("post", createPost());
+      await render(
+        <template>
+          <LanguageTabsConnector @post={{this.post}}>
+            <div class="cooked" data-yielded-block>
+              {{trustHTML this.post.cooked}}
+            </div>
+          </LanguageTabsConnector>
+        </template>
+      );
+
+      await click(".ai-language-tabs button:nth-child(2)");
+
+      assert
+        .dom("[data-yielded-block]")
+        .doesNotExist("block is not rendered in translated mode");
+      assert.dom(".cooked").exists({ count: 1 });
+      assert.dom(".cooked").hasText("English translation");
+    });
+
+    test("switching languages never duplicates the post body", async function (assert) {
+      this.set("post", createPost());
+      await render(
+        <template>
+          <LanguageTabsConnector @post={{this.post}}>
+            <div class="cooked">{{trustHTML this.post.cooked}}</div>
+          </LanguageTabsConnector>
+        </template>
+      );
+
+      const sequence = [2, 1, 3, 1, 2];
+      for (const position of sequence) {
+        await click(`.ai-language-tabs button:nth-child(${position})`);
+        assert.dom(".cooked").exists({ count: 1 }, `single body after switching to button ${position}`);
+      }
+    });
+
+    test("cooked decorators run on translated content and clean up on switch", async function (assert) {
+      let applied = 0;
+      let cleaned = 0;
+      withPluginApi((api) => {
+        api.decorateCookedElement(() => {
+          applied += 1;
+          return () => (cleaned += 1);
+        });
+      });
+
+      try {
+        this.set("post", createPost());
+        await render(
+          <template>
+            <LanguageTabsConnector @post={{this.post}}>
+              <div class="cooked">{{trustHTML this.post.cooked}}</div>
+            </LanguageTabsConnector>
+          </template>
+        );
+
+        assert.strictEqual(applied, 0, "no decoration in original mode (yield)");
+
+        await click(".ai-language-tabs button:nth-child(2)");
+        assert.true(applied >= 1, "decorator ran for translated content");
+
+        const appliedBeforeSwitch = applied;
+        await click(".ai-language-tabs button:first-child");
+        assert.strictEqual(
+          cleaned,
+          appliedBeforeSwitch,
+          "every decoration was cleaned up when leaving the translated view"
+        );
+      } finally {
+        resetHtmlDecorators();
+      }
     });
   }
 );

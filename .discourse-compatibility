@@ -1,0 +1,4 @@
+# Sites on Discourse older than 2026.7.0 must use the plugin version below:
+# it predates the dependency on core's PostCookedHtml component and the
+# ui-kit module paths introduced by the 2026.7 lint migration.
+< 2026.7.0: 11c9c7d464abc3912de7b09a2bd82a6926e70609

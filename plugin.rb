@@ -6,7 +6,7 @@
 # version: 0.1.0
 # authors: Divine Rapier
 # url: https://github.com/divine-rapier/babel-reunited
-# required_version: 2.7.0
+# required_version: 2026.7.0
 
 enabled_site_setting :babel_reunited_enabled
 
@@ -59,14 +59,15 @@ module ::BabelReunited
         Jobs::BabelReunited::TranslatePostJob,
         post_id: post.id,
         target_language: language,
-        force_update: force_update,
+        force_update: force_update
       )
     end
   end
 
   def self.user_has_preferred_language?(user)
     return false unless user
-    user.custom_fields[PREFERRED_LANGUAGE_FIELD].present? || user.user_preferred_language.present?
+    user.custom_fields[PREFERRED_LANGUAGE_FIELD].present? ||
+      user.user_preferred_language.present?
   end
 
   def self.translated_title_for(post, language)
@@ -90,12 +91,14 @@ module ::BabelReunited
     return if posts.blank? || language.blank?
 
     translations =
-      BabelReunited::PostTranslation.where(post_id: posts.map(&:id), language: language).index_by(
-        &:post_id
-      )
+      BabelReunited::PostTranslation.where(
+        post_id: posts.map(&:id),
+        language: language
+      ).index_by(&:post_id)
 
     posts.each do |post|
-      preloaded = post.instance_variable_get(:@babel_reunited_translations) || {}
+      preloaded =
+        post.instance_variable_get(:@babel_reunited_translations) || {}
       preloaded[language] = translations[post.id]
       post.instance_variable_set(:@babel_reunited_translations, preloaded)
     end
@@ -109,11 +112,17 @@ module ::BabelReunited
     return if posts.blank?
 
     post_ids = posts.map(&:id)
-    translations = BabelReunited::PostTranslation.where(post_id: post_ids).order(created_at: :desc)
+    translations =
+      BabelReunited::PostTranslation.where(post_id: post_ids).order(
+        created_at: :desc
+      )
     grouped = translations.group_by(&:post_id)
 
     posts.each do |post|
-      post.instance_variable_set(:@babel_reunited_all_translations, grouped[post.id] || [])
+      post.instance_variable_set(
+        :@babel_reunited_all_translations,
+        grouped[post.id] || []
+      )
     end
   end
 
@@ -135,7 +144,9 @@ module ::BabelReunited
     languages = auto_translate_languages
     return if languages.empty?
 
-    languages.each { |language| PostTranslation.create_or_update_record(post.id, language) }
+    languages.each do |language|
+      PostTranslation.create_or_update_record(post.id, language)
+    end
     enqueue_translation_jobs(post, languages)
   end
 
@@ -144,10 +155,13 @@ module ::BabelReunited
     return if post.blank? || post.raw.blank?
     return unless translation_enabled_for_post?(post)
 
-    languages = (post.post_translations.pluck(:language) + auto_translate_languages).uniq
+    languages =
+      (post.post_translations.pluck(:language) + auto_translate_languages).uniq
     return if languages.empty?
 
-    languages.each { |language| PostTranslation.create_or_update_record(post.id, language) }
+    languages.each do |language|
+      PostTranslation.create_or_update_record(post.id, language)
+    end
     enqueue_translation_jobs(post, languages, force_update: true)
   end
 end
@@ -162,8 +176,15 @@ require_relative "lib/babel_reunited/post_extension"
 after_initialize do
   register_editable_user_custom_field(BabelReunited::PREFERRED_LANGUAGE_FIELD)
   register_editable_user_custom_field(BabelReunited::PREFERRED_ENABLED_FIELD)
-  register_user_custom_field_type(BabelReunited::PREFERRED_LANGUAGE_FIELD, :string, max_length: 10)
-  register_user_custom_field_type(BabelReunited::PREFERRED_ENABLED_FIELD, :boolean)
+  register_user_custom_field_type(
+    BabelReunited::PREFERRED_LANGUAGE_FIELD,
+    :string,
+    max_length: 10
+  )
+  register_user_custom_field_type(
+    BabelReunited::PREFERRED_ENABLED_FIELD,
+    :boolean
+  )
   DiscoursePluginRegistry.serialized_current_user_fields << BabelReunited::PREFERRED_LANGUAGE_FIELD
   DiscoursePluginRegistry.serialized_current_user_fields << BabelReunited::PREFERRED_ENABLED_FIELD
 
@@ -184,12 +205,16 @@ after_initialize do
   require_relative "app/lib/babel_reunited/providers/anthropic"
 
   # Mount the engine routes
-  Discourse::Application.routes.append { mount ::BabelReunited::Engine, at: "/babel-reunited" }
+  Discourse::Application.routes.append do
+    mount ::BabelReunited::Engine, at: "/babel-reunited"
+  end
 
   # Extend Post model with translation functionality
   reloadable_patch do
     Post.class_eval do # rubocop:disable Discourse/Plugins/NoMonkeyPatching
-      has_many :post_translations, class_name: "BabelReunited::PostTranslation", dependent: :destroy
+      has_many :post_translations,
+               class_name: "BabelReunited::PostTranslation",
+               dependent: :destroy
 
       prepend BabelReunited::PostExtension
     end
@@ -205,7 +230,11 @@ after_initialize do
 
   plugin_enabled_condition = -> { SiteSetting.babel_reunited_enabled }
 
-  add_to_serializer(:post, :available_translations, include_condition: plugin_enabled_condition) do
+  add_to_serializer(
+    :post,
+    :available_translations,
+    include_condition: plugin_enabled_condition
+  ) do
     preloaded = BabelReunited.preloaded_all_translations(object)
     if preloaded
       preloaded.map(&:language)
@@ -214,7 +243,11 @@ after_initialize do
     end
   end
 
-  add_to_serializer(:post, :post_translations, include_condition: plugin_enabled_condition) do
+  add_to_serializer(
+    :post,
+    :post_translations,
+    include_condition: plugin_enabled_condition
+  ) do
     preloaded = BabelReunited.preloaded_all_translations(object)
     translations =
       if preloaded
@@ -222,34 +255,38 @@ after_initialize do
       else
         object.post_translations.recent.limit(5).to_a
       end
-    translations.map { |t| BabelReunited::PostTranslationSerializer.new(t).as_json }
-  end
-
-  add_to_serializer(:post, :show_translation_widget, include_condition: plugin_enabled_condition) do
-    next false unless BabelReunited.translation_enabled_for_post?(object)
-
-    preloaded = BabelReunited.preloaded_all_translations(object)
-    if preloaded
-      preloaded.any?
-    else
-      object.post_translations.exists?
+    translations.map do |t|
+      BabelReunited::PostTranslationSerializer.new(t).as_json
     end
   end
 
-  add_to_serializer(:post, :show_translation_button, include_condition: plugin_enabled_condition) do
-    BabelReunited.translation_enabled_for_post?(object)
+  add_to_serializer(
+    :post,
+    :show_translation_widget,
+    include_condition: plugin_enabled_condition
+  ) do
+    next false unless BabelReunited.translation_enabled_for_post?(object)
+
+    preloaded = BabelReunited.preloaded_all_translations(object)
+    preloaded ? preloaded.any? : object.post_translations.exists?
   end
+
+  add_to_serializer(
+    :post,
+    :show_translation_button,
+    include_condition: plugin_enabled_condition
+  ) { BabelReunited.translation_enabled_for_post?(object) }
 
   add_to_serializer(
     :current_user,
     :preferred_language,
-    include_condition: plugin_enabled_condition,
+    include_condition: plugin_enabled_condition
   ) { BabelReunited.preferred_language_for(object) }
 
   add_to_serializer(
     :current_user,
     :preferred_language_enabled,
-    include_condition: plugin_enabled_condition,
+    include_condition: plugin_enabled_condition
   ) do
     cast = ActiveModel::Type::Boolean.new
     enabled = object.custom_fields[BabelReunited::PREFERRED_ENABLED_FIELD]
@@ -262,7 +299,8 @@ after_initialize do
   end
 
   translated_title_condition = -> do
-    SiteSetting.babel_reunited_enabled && BabelReunited.preferred_language_for(scope&.user).present?
+    SiteSetting.babel_reunited_enabled &&
+      BabelReunited.preferred_language_for(scope&.user).present?
   end
 
   # NOTE: Field is named `babel_translated_title` (not `translated_title`) to avoid
@@ -271,9 +309,13 @@ after_initialize do
   add_to_serializer(
     :topic_view,
     :babel_translated_title,
-    include_condition: translated_title_condition,
+    include_condition: translated_title_condition
   ) do
-    return nil unless BabelReunited.translation_enabled_for_category?(object.topic&.category_id)
+    unless BabelReunited.translation_enabled_for_category?(
+             object.topic&.category_id
+           )
+      return nil
+    end
 
     language = BabelReunited.preferred_language_for(scope&.user)
     return nil unless language
@@ -284,9 +326,11 @@ after_initialize do
   add_to_serializer(
     :listable_topic,
     :babel_translated_title,
-    include_condition: translated_title_condition,
+    include_condition: translated_title_condition
   ) do
-    return nil unless BabelReunited.translation_enabled_for_category?(object.category_id)
+    unless BabelReunited.translation_enabled_for_category?(object.category_id)
+      return nil
+    end
 
     language = BabelReunited.preferred_language_for(scope&.user)
     return nil unless language
@@ -297,9 +341,11 @@ after_initialize do
   add_to_serializer(
     :topic_list_item,
     :babel_translated_title,
-    include_condition: translated_title_condition,
+    include_condition: translated_title_condition
   ) do
-    return nil unless BabelReunited.translation_enabled_for_category?(object.category_id)
+    unless BabelReunited.translation_enabled_for_category?(object.category_id)
+      return nil
+    end
 
     language = BabelReunited.preferred_language_for(scope&.user)
     return nil unless language
@@ -347,10 +393,12 @@ after_initialize do
     MessageBus.publish(
       "/language-preference-prompt/#{user.id}",
       { user_id: user.id, username: user.username },
-      user_ids: [user.id],
+      user_ids: [user.id]
     )
   end
 
   # Add admin route
-  add_admin_route "babel_reunited.title", "babel-reunited", use_new_show_route: true
+  add_admin_route "babel_reunited.title",
+                  "babel-reunited",
+                  use_new_show_route: true
 end

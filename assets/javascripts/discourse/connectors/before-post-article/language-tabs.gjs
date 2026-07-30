@@ -4,7 +4,10 @@ import { fn } from "@ember/helper";
 import { on } from "@ember/modifier";
 import { action } from "@ember/object";
 import { service } from "@ember/service";
-import { htmlSafe } from "@ember/template";
+import PostCookedHtml from "discourse/components/post/cooked-html";
+// The ui-kit module path suggested by the lint rule is not resolvable in the
+// plugin runtime yet; the legacy path works through core's compatibility shim.
+// eslint-disable-next-line simple-import-sort/imports, discourse/ui-kit-imports
 import concatClass from "discourse/helpers/concat-class";
 import { ajax } from "discourse/lib/ajax";
 import { popupAjaxError } from "discourse/lib/ajax-error";
@@ -289,8 +292,16 @@ export default class LanguageTabsConnector extends Component {
       </div>
     {{/if}}
 
-    <div class="cooked">
-      {{htmlSafe this.currentContent}}
-    </div>
+    {{#if (eq this.currentLanguage "original")}}
+      {{! Core's own PostCookedHtml, passed in as the outlet's default block:
+          identical rendering and decoration to a Babel-less install }}
+      {{yield}}
+    {{else}}
+      <PostCookedHtml
+        @post={{this.post}}
+        @cooked={{this.currentContent}}
+        @decoratorState={{@decoratorState}}
+      />
+    {{/if}}
   </template>
 }
