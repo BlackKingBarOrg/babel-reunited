@@ -58,7 +58,11 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
   ].freeze
 
   def self.error_kind_for(message)
-    PERMANENT_ERROR_PATTERNS.any? { |p| message.to_s.match?(p) } ? "permanent" : "transient"
+    if PERMANENT_ERROR_PATTERNS.any? { |p| message.to_s.match?(p) }
+      "permanent"
+    else
+      "transient"
+    end
   end
 
   # Content fingerprint for change detection. Includes the topic title for
@@ -83,6 +87,10 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
     with_translation_lock(post_id, target_language) do
       post = find_post(post_id, target_language)
       return unless post
+
+      if BabelReunited.detected_locale_for(post).blank?
+        BabelReunited.enqueue_detection_backfill(post)
+      end
 
       source_sha = self.class.content_sha(post)
       translation = ensure_translation_record(post, target_language)
@@ -270,7 +278,8 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
       translated_raw: result.translated_raw,
       translated_content: translated_cooked,
       translated_title: translated_title,
-      source_language: result.source_language,
+      source_language:
+        BabelReunited.detected_locale_for(post) || result.source_language,
       source_sha: source_sha,
       metadata:
         (translation.metadata || {}).merge(

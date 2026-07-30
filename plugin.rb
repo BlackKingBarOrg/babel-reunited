@@ -20,6 +20,7 @@ module ::BabelReunited
   PLUGIN_NAME = "babel-reunited"
   PREFERRED_LANGUAGE_FIELD = "babel_reunited_language"
   PREFERRED_ENABLED_FIELD = "babel_reunited_enabled"
+  DETECTED_LOCALE_FIELD = "babel_detected_locale"
 
   def self.preferred_language_for(user)
     return nil unless user
@@ -133,15 +134,47 @@ module ::BabelReunited
   def self.auto_translate_languages
     raw = SiteSetting.babel_reunited_auto_translate_languages
     return [] if raw.blank?
-    raw.split(",").map(&:strip).reject(&:blank?)
+
+    codes = raw.split(",").map(&:strip).reject(&:blank?)
+    valid, invalid = codes.partition { |code| Locales.valid?(code) }
+    if invalid.any?
+      Rails.logger.warn(
+        "BabelReunited: ignoring unsupported auto_translate_languages entries: #{invalid.join(", ")}"
+      )
+    end
+    valid
   end
 
-  def self.trigger_auto_translation(post)
+  def self.detected_locale_for(post)
+    return nil if post.blank?
+    post.custom_fields[DETECTED_LOCALE_FIELD].presence
+  end
+
+  def self.store_detected_locale(post, locale)
+    return if post.blank? || locale.blank?
+    post.custom_fields[DETECTED_LOCALE_FIELD] = locale
+    post.save_custom_fields
+  end
+
+  # Lazy convergence for posts created before detection existed. Deduplicated
+  # via Redis so a burst of translate jobs enqueues one detection, not N.
+  def self.enqueue_detection_backfill(post)
+    return if post.blank?
+
+    key = "babel_reunited:detect_enqueued:#{post.id}"
+    return unless Discourse.redis.set(key, "1", nx: true, ex: 600)
+
+    Jobs.enqueue(Jobs::BabelReunited::DetectPostLanguageJob, post_id: post.id)
+  end
+
+  # Enqueues pre-translate layer jobs, skipping the post's own language when
+  # detection already identified it (the original tab covers that language).
+  def self.fanout_translations(post)
     return unless SiteSetting.babel_reunited_enabled
     return if post.blank? || post.raw.blank?
     return unless translation_enabled_for_post?(post)
 
-    languages = auto_translate_languages
+    languages = auto_translate_languages - [detected_locale_for(post)].compact
     return if languages.empty?
 
     languages.each do |language|
@@ -150,12 +183,24 @@ module ::BabelReunited
     enqueue_translation_jobs(post, languages)
   end
 
+  def self.trigger_auto_translation(post)
+    return unless SiteSetting.babel_reunited_enabled
+    return if post.blank? || post.raw.blank?
+    return unless translation_enabled_for_post?(post)
+
+    Jobs.enqueue(
+      Jobs::BabelReunited::DetectPostLanguageJob,
+      post_id: post.id,
+      then_fanout: true
+    )
+  end
+
   def self.trigger_retranslation(post)
     return unless SiteSetting.babel_reunited_enabled
     return if post.blank? || post.raw.blank?
     return unless translation_enabled_for_post?(post)
 
-    eager = auto_translate_languages
+    eager = auto_translate_languages - [detected_locale_for(post)].compact
 
     # Lazy-layer translations are not re-translated on every edit — that would
     # re-pay one LLM call per accumulated language. They are marked stale (old
@@ -184,6 +229,13 @@ require_relative "app/models/babel_reunited/user_preferred_language"
 require_relative "lib/babel_reunited/post_extension"
 
 after_initialize do
+  register_post_custom_field_type(
+    BabelReunited::DETECTED_LOCALE_FIELD,
+    :string,
+    max_length: 10
+  )
+  TopicView.default_post_custom_fields << BabelReunited::DETECTED_LOCALE_FIELD
+
   register_editable_user_custom_field(BabelReunited::PREFERRED_LANGUAGE_FIELD)
   register_editable_user_custom_field(BabelReunited::PREFERRED_ENABLED_FIELD)
   register_user_custom_field_type(
@@ -200,7 +252,9 @@ after_initialize do
 
   # Load other required files
   require_relative "app/services/babel_reunited/translation_service"
+  require_relative "app/services/babel_reunited/language_detection_service"
   require_relative "app/jobs/regular/babel_reunited/translate_post_job"
+  require_relative "app/jobs/regular/babel_reunited/detect_post_language_job"
   require_relative "app/controllers/babel_reunited/translations_controller"
   require_relative "app/controllers/babel_reunited/admin_controller"
   require_relative "app/serializers/babel_reunited/post_translation_serializer"
@@ -288,6 +342,12 @@ after_initialize do
     :show_translation_button,
     include_condition: plugin_enabled_condition
   ) { BabelReunited.translation_enabled_for_post?(object) }
+
+  add_to_serializer(
+    :post,
+    :babel_detected_locale,
+    include_condition: plugin_enabled_condition
+  ) { object.custom_fields[BabelReunited::DETECTED_LOCALE_FIELD] }
 
   add_to_serializer(
     :current_user,

@@ -10,6 +10,7 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
     SiteSetting.babel_reunited_openai_api_key = "sk-test-key"
     SiteSetting.babel_reunited_preset_model = "gpt-4o"
     Discourse.redis.flushdb
+    Jobs.run_later!
   end
 
   def success_result(
@@ -281,6 +282,36 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
 
       translation = BabelReunited::PostTranslation.find_translation(post_record.id, "es")
       expect(translation.source_sha).to eq(described_class.content_sha(post_record))
+    end
+
+    it "stores the detected locale as source_language" do
+      BabelReunited.store_detected_locale(post_record, "en")
+
+      described_class.new.execute(post_id: post_record.id, target_language: "es")
+
+      translation = BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      expect(translation.source_language).to eq("en")
+    end
+
+    it "enqueues detection backfill for posts without a detected locale" do
+      described_class.new.execute(post_id: post_record.id, target_language: "es")
+
+      expect(
+        job_enqueued?(
+          job: Jobs::BabelReunited::DetectPostLanguageJob,
+          args: {
+            post_id: post_record.id,
+          },
+        ),
+      ).to be true
+    end
+
+    it "does not enqueue detection backfill when locale is already detected" do
+      BabelReunited.store_detected_locale(post_record, "en")
+
+      described_class.new.execute(post_id: post_record.id, target_language: "es")
+
+      expect(Jobs::BabelReunited::DetectPostLanguageJob.jobs).to be_empty
     end
 
     it "truncates translated title longer than 255 characters" do

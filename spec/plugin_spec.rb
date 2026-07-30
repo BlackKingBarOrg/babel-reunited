@@ -16,34 +16,42 @@ RSpec.describe BabelReunited do
   end
 
   describe "post_created event" do
-    it "enqueues translation jobs for auto_translate_languages" do
+    it "enqueues language detection with fanout instead of direct translation" do
       new_post = Fabricate(:post, user: user)
 
       DiscourseEvent.trigger(:post_created, new_post)
 
-      %w[zh-cn en es].each do |lang|
-        expect(
-          job_enqueued?(
-            job: Jobs::BabelReunited::TranslatePostJob,
-            args: {
-              post_id: new_post.id,
-              target_language: lang,
-            },
-          ),
-        ).to be true
-      end
+      expect(
+        job_enqueued?(
+          job: Jobs::BabelReunited::DetectPostLanguageJob,
+          args: {
+            post_id: new_post.id,
+            then_fanout: true,
+          },
+        ),
+      ).to be true
+      expect(Jobs::BabelReunited::TranslatePostJob.jobs).to be_empty
     end
 
-    it "pre-creates translation records with translating status" do
+    it "creates translating records for auto languages minus the detected one" do
+      BabelReunited::LanguageDetectionService
+        .any_instance
+        .stubs(:call)
+        .returns(BabelReunited::LanguageDetectionService::Result.new(locale: "en"))
       new_post = Fabricate(:post, user: user)
 
       DiscourseEvent.trigger(:post_created, new_post)
+      Jobs::BabelReunited::DetectPostLanguageJob.new.execute(
+        post_id: new_post.id,
+        then_fanout: true,
+      )
 
-      %w[zh-cn en es].each do |lang|
+      %w[zh-cn es].each do |lang|
         translation = BabelReunited::PostTranslation.find_translation(new_post.id, lang)
         expect(translation).to be_present
         expect(translation.status).to eq("translating")
       end
+      expect(BabelReunited::PostTranslation.find_translation(new_post.id, "en")).to be_nil
     end
 
     it "does nothing when auto_translate_languages is blank" do
@@ -185,33 +193,57 @@ RSpec.describe BabelReunited do
         ).to be true
       end
     end
+
+    it "excludes the detected source language from eager re-translation" do
+      BabelReunited.store_detected_locale(post_record, "en")
+      legacy_copy = Fabricate(:post_translation, post: post_record, language: "en")
+
+      revisor = OpenStruct.new(topic_diff: {})
+      DiscourseEvent.trigger(:post_edited, post_record, false, revisor)
+
+      expect(
+        job_enqueued?(
+          job: Jobs::BabelReunited::TranslatePostJob,
+          args: {
+            post_id: post_record.id,
+            target_language: "en",
+          },
+        ),
+      ).to be false
+      expect(legacy_copy.reload.status).to eq("stale")
+
+      %w[zh-cn es].each do |lang|
+        expect(
+          job_enqueued?(
+            job: Jobs::BabelReunited::TranslatePostJob,
+            args: {
+              post_id: post_record.id,
+              target_language: lang,
+              force_update: true,
+            },
+          ),
+        ).to be true
+      end
+    end
   end
 
   describe "category_created event" do
     fab!(:category_with_definition)
 
-    it "enqueues translation jobs for the category definition post" do
+    it "enqueues language detection for the category definition post" do
       first_post = category_with_definition.topic.first_post
 
       DiscourseEvent.trigger(:category_created, category_with_definition)
 
-      %w[zh-cn en es].each do |lang|
-        expect(
-          job_enqueued?(
-            job: Jobs::BabelReunited::TranslatePostJob,
-            args: {
-              post_id: first_post.id,
-              target_language: lang,
-            },
-          ),
-        ).to be true
-      end
-
-      %w[zh-cn en es].each do |lang|
-        translation = BabelReunited::PostTranslation.find_translation(first_post.id, lang)
-        expect(translation).to be_present
-        expect(translation.status).to eq("translating")
-      end
+      expect(
+        job_enqueued?(
+          job: Jobs::BabelReunited::DetectPostLanguageJob,
+          args: {
+            post_id: first_post.id,
+            then_fanout: true,
+          },
+        ),
+      ).to be true
     end
 
     it "does nothing when plugin is disabled" do
@@ -432,7 +464,7 @@ RSpec.describe BabelReunited do
     end
 
     describe "post_created event with category whitelist" do
-      it "does not enqueue jobs for non-whitelisted category" do
+      it "does not enqueue detection for non-whitelisted category" do
         topic_in_blocked = Fabricate(:topic, user: user, category: blocked_category)
         new_post = Fabricate(:post, topic: topic_in_blocked, user: user)
 
@@ -442,16 +474,15 @@ RSpec.describe BabelReunited do
 
         expect(
           job_enqueued?(
-            job: Jobs::BabelReunited::TranslatePostJob,
+            job: Jobs::BabelReunited::DetectPostLanguageJob,
             args: {
               post_id: new_post.id,
-              target_language: "zh-cn",
             },
           ),
         ).to be false
       end
 
-      it "enqueues jobs for whitelisted category" do
+      it "enqueues detection for whitelisted category" do
         topic_in_allowed = Fabricate(:topic, user: user, category: allowed_category)
         new_post = Fabricate(:post, topic: topic_in_allowed, user: user)
 
@@ -459,17 +490,15 @@ RSpec.describe BabelReunited do
 
         DiscourseEvent.trigger(:post_created, new_post)
 
-        %w[zh-cn en es].each do |lang|
-          expect(
-            job_enqueued?(
-              job: Jobs::BabelReunited::TranslatePostJob,
-              args: {
-                post_id: new_post.id,
-                target_language: lang,
-              },
-            ),
-          ).to be true
-        end
+        expect(
+          job_enqueued?(
+            job: Jobs::BabelReunited::DetectPostLanguageJob,
+            args: {
+              post_id: new_post.id,
+              then_fanout: true,
+            },
+          ),
+        ).to be true
       end
     end
 
