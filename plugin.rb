@@ -21,6 +21,7 @@ module ::BabelReunited
   PREFERRED_LANGUAGE_FIELD = "babel_reunited_language"
   PREFERRED_ENABLED_FIELD = "babel_reunited_enabled"
   DETECTED_LOCALE_FIELD = "babel_detected_locale"
+  DETECTED_SHA_FIELD = "babel_detected_sha"
 
   def self.preferred_language_for(user)
     return nil unless user
@@ -164,9 +165,22 @@ module ::BabelReunited
     post.custom_fields[DETECTED_LOCALE_FIELD].presence
   end
 
-  def self.store_detected_locale(post, locale)
+  # Detection is bound to the raw content it sampled: a post rewritten in
+  # another language re-detects instead of trusting a stale result forever.
+  def self.detection_raw_sha(post)
+    Digest::SHA256.hexdigest(post.raw.to_s)
+  end
+
+  def self.detection_current?(post)
+    return false if post.blank?
+    detected_locale_for(post).present? &&
+      post.custom_fields[DETECTED_SHA_FIELD] == detection_raw_sha(post)
+  end
+
+  def self.store_detected_locale(post, locale, raw_sha: nil)
     return if post.blank? || locale.blank?
     post.custom_fields[DETECTED_LOCALE_FIELD] = locale
+    post.custom_fields[DETECTED_SHA_FIELD] = raw_sha || detection_raw_sha(post)
     post.save_custom_fields
   end
 
@@ -225,6 +239,19 @@ module ::BabelReunited
       .where.not(language: eager)
       .update_all(status: "stale", updated_at: Time.current)
 
+    # Content changed since the last detection (or was never detected): the
+    # post may now be in a different language, so re-detect first and fan out
+    # from the fresh result. The changed fingerprint drives re-translation
+    # without force.
+    unless detection_current?(post)
+      Jobs.enqueue(
+        Jobs::BabelReunited::DetectPostLanguageJob,
+        post_id: post.id,
+        then_fanout: true
+      )
+      return
+    end
+
     return if eager.empty?
 
     eager.each do |language|
@@ -248,6 +275,11 @@ after_initialize do
     BabelReunited::DETECTED_LOCALE_FIELD,
     :string,
     max_length: 10
+  )
+  register_post_custom_field_type(
+    BabelReunited::DETECTED_SHA_FIELD,
+    :string,
+    max_length: 64
   )
   TopicView.default_post_custom_fields << BabelReunited::DETECTED_LOCALE_FIELD
 

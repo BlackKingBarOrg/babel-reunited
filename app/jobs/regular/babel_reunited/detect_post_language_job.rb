@@ -26,11 +26,29 @@ class Jobs::BabelReunited::DetectPostLanguageJob < ::Jobs::Base
 
     then_fanout = args[:then_fanout] || false
 
-    if BabelReunited.detected_locale_for(post).blank?
+    unless BabelReunited.detection_current?(post)
+      sampled_sha = BabelReunited.detection_raw_sha(post)
       result = BabelReunited::LanguageDetectionService.new(post: post).call
 
       if result.success?
-        BabelReunited.store_detected_locale(post, result.locale)
+        post.reload
+        if BabelReunited.detection_raw_sha(post) == sampled_sha
+          BabelReunited.store_detected_locale(
+            post,
+            result.locale,
+            raw_sha: sampled_sha
+          )
+        else
+          # The post changed while detection ran; the result may describe the
+          # old content. Discard it and try again shortly.
+          Jobs.enqueue_in(
+            5.seconds,
+            Jobs::BabelReunited::DetectPostLanguageJob,
+            post_id: post.id,
+            then_fanout: then_fanout
+          )
+          return
+        end
       else
         ::BabelReunited::TranslationLogger.log_translation_skipped(
           post_id: post.id,

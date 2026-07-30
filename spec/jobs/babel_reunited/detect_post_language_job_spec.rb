@@ -17,31 +17,84 @@ RSpec.describe Jobs::BabelReunited::DetectPostLanguageJob do
     BabelReunited::LanguageDetectionService
       .any_instance
       .stubs(:call)
-      .returns(BabelReunited::LanguageDetectionService::Result.new(locale: locale))
+      .returns(
+        BabelReunited::LanguageDetectionService::Result.new(locale: locale)
+      )
   end
 
   def stub_detection_failure(error = "boom")
     BabelReunited::LanguageDetectionService
       .any_instance
       .stubs(:call)
-      .returns(BabelReunited::LanguageDetectionService::Result.new(error: error))
+      .returns(
+        BabelReunited::LanguageDetectionService::Result.new(error: error)
+      )
   end
 
-  it "stores the detected locale on the post" do
+  it "stores the detected locale and content fingerprint on the post" do
     stub_detection_success("en")
 
     described_class.new.execute(post_id: post_record.id)
 
-    expect(post_record.reload.custom_fields[BabelReunited::DETECTED_LOCALE_FIELD]).to eq("en")
+    post_record.reload
+    expect(
+      post_record.custom_fields[BabelReunited::DETECTED_LOCALE_FIELD]
+    ).to eq("en")
+    expect(post_record.custom_fields[BabelReunited::DETECTED_SHA_FIELD]).to eq(
+      BabelReunited.detection_raw_sha(post_record)
+    )
   end
 
-  it "does not re-detect when the post already has a locale" do
+  it "does not re-detect when the detection is current" do
     BabelReunited.store_detected_locale(post_record, "th")
     BabelReunited::LanguageDetectionService.any_instance.expects(:call).never
 
     described_class.new.execute(post_id: post_record.id)
 
-    expect(post_record.reload.custom_fields[BabelReunited::DETECTED_LOCALE_FIELD]).to eq("th")
+    expect(
+      post_record.reload.custom_fields[BabelReunited::DETECTED_LOCALE_FIELD]
+    ).to eq("th")
+  end
+
+  it "re-detects when the content changed since the last detection" do
+    BabelReunited.store_detected_locale(post_record, "th", raw_sha: "0" * 64)
+    stub_detection_success("en")
+
+    described_class.new.execute(post_id: post_record.id)
+
+    expect(
+      post_record.reload.custom_fields[BabelReunited::DETECTED_LOCALE_FIELD]
+    ).to eq("en")
+  end
+
+  it "discards the result and retries when the post changes during detection" do
+    detection_result =
+      BabelReunited::LanguageDetectionService::Result.new(locale: "en")
+    fake_service = Object.new
+    target_post = post_record
+    fake_service.define_singleton_method(:call) do
+      target_post.update_columns(
+        raw: "Contenu remplace pendant la detection en cours"
+      )
+      detection_result
+    end
+    BabelReunited::LanguageDetectionService.stubs(:new).returns(fake_service)
+
+    described_class.new.execute(post_id: post_record.id, then_fanout: true)
+
+    expect(
+      post_record.reload.custom_fields[BabelReunited::DETECTED_LOCALE_FIELD]
+    ).to be_blank
+    expect(
+      job_enqueued?(
+        job: Jobs::BabelReunited::DetectPostLanguageJob,
+        args: {
+          post_id: post_record.id,
+          then_fanout: true
+        }
+      )
+    ).to be true
+    expect(Jobs::BabelReunited::TranslatePostJob.jobs).to be_empty
   end
 
   it "fans out to auto languages minus the detected one" do
@@ -55,12 +108,15 @@ RSpec.describe Jobs::BabelReunited::DetectPostLanguageJob do
           job: Jobs::BabelReunited::TranslatePostJob,
           args: {
             post_id: post_record.id,
-            target_language: lang,
-          },
-        ),
+            target_language: lang
+          }
+        )
       ).to be true
       expect(
-        BabelReunited::PostTranslation.find_translation(post_record.id, lang)&.status,
+        BabelReunited::PostTranslation.find_translation(
+          post_record.id,
+          lang
+        )&.status
       ).to eq("translating")
     end
 
@@ -69,11 +125,13 @@ RSpec.describe Jobs::BabelReunited::DetectPostLanguageJob do
         job: Jobs::BabelReunited::TranslatePostJob,
         args: {
           post_id: post_record.id,
-          target_language: "en",
-        },
-      ),
+          target_language: "en"
+        }
+      )
     ).to be false
-    expect(BabelReunited::PostTranslation.find_translation(post_record.id, "en")).to be_nil
+    expect(
+      BabelReunited::PostTranslation.find_translation(post_record.id, "en")
+    ).to be_nil
   end
 
   it "fans out to all auto languages when detection fails" do
@@ -87,12 +145,14 @@ RSpec.describe Jobs::BabelReunited::DetectPostLanguageJob do
           job: Jobs::BabelReunited::TranslatePostJob,
           args: {
             post_id: post_record.id,
-            target_language: lang,
-          },
-        ),
+            target_language: lang
+          }
+        )
       ).to be true
     end
-    expect(post_record.reload.custom_fields[BabelReunited::DETECTED_LOCALE_FIELD]).to be_blank
+    expect(
+      post_record.reload.custom_fields[BabelReunited::DETECTED_LOCALE_FIELD]
+    ).to be_blank
   end
 
   it "does not fan out without then_fanout" do
@@ -109,8 +169,8 @@ RSpec.describe Jobs::BabelReunited::DetectPostLanguageJob do
       .stubs(:call)
       .raises(BabelReunited::RateLimitError.new("limited"))
 
-    expect { described_class.new.execute(post_id: post_record.id) }.to raise_error(
-      BabelReunited::RateLimitError,
-    )
+    expect {
+      described_class.new.execute(post_id: post_record.id)
+    }.to raise_error(BabelReunited::RateLimitError)
   end
 end

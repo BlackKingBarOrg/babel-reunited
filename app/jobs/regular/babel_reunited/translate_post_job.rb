@@ -88,7 +88,7 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
       post = find_post(post_id, target_language)
       return unless post
 
-      if BabelReunited.detected_locale_for(post).blank?
+      unless BabelReunited.detection_current?(post)
         BabelReunited.enqueue_detection_backfill(post)
       end
 
