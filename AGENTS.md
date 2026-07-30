@@ -115,7 +115,7 @@ Run these from Discourse root.
 - Remove unused imports when editing a file.
 
 ## Naming and Data Contracts
-- Language code format is `xx` or `xx-xx` (examples: `en`, `zh-cn`, `es`).
+- Language code format is `xx`, `xxx`, or `xx(x)-xx` (examples: `en`, `yue`, `zh-cn`), and codes must be members of `BabelReunited::Locales::SUPPORTED` (mirrored client-side in `assets/javascripts/discourse/lib/babel-locales.js`; a spec keeps the two lists in sync).
 - Keep API response keys stable unless a migration/compatibility plan is included.
 - Treat MessageBus channel names as public contracts with frontend subscribers.
 - New site settings must be prefixed with `babel_reunited_` in `config/settings.yml`.
