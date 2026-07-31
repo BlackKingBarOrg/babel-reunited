@@ -155,6 +155,64 @@ RSpec.describe Jobs::BabelReunited::DetectPostLanguageJob do
     ).to be_blank
   end
 
+  it "ignores a stale detection when the retry fails, fanning out to every language" do
+    # The post used to be English; it has since been rewritten and detection
+    # cannot confirm the new language.
+    BabelReunited.store_detected_locale(post_record, "en", raw_sha: "0" * 64)
+    stub_detection_failure
+
+    described_class.new.execute(post_id: post_record.id, then_fanout: true)
+
+    %w[zh-cn en es].each do |lang|
+      expect(
+        job_enqueued?(
+          job: Jobs::BabelReunited::TranslatePostJob,
+          args: {
+            post_id: post_record.id,
+            target_language: lang
+          }
+        )
+      ).to be true
+    end
+  end
+
+  describe "post guards" do
+    it "never sends a hidden post to the provider" do
+      post_record.update!(hidden: true)
+      BabelReunited::LanguageDetectionService.any_instance.expects(:call).never
+
+      described_class.new.execute(post_id: post_record.id, then_fanout: true)
+
+      expect(
+        BabelReunited::PostTranslation.where(post_id: post_record.id)
+      ).to be_empty
+      expect(Jobs::BabelReunited::TranslatePostJob.jobs).to be_empty
+    end
+
+    it "never sends a deleted post to the provider" do
+      post_record.trash!
+      BabelReunited::LanguageDetectionService.any_instance.expects(:call).never
+
+      described_class.new.execute(post_id: post_record.id, then_fanout: true)
+
+      expect(
+        BabelReunited::PostTranslation.where(post_id: post_record.id)
+      ).to be_empty
+    end
+
+    it "never sends a post from a disabled category to the provider" do
+      SiteSetting.babel_reunited_enabled_categories =
+        Fabricate(:category).id.to_s
+      BabelReunited::LanguageDetectionService.any_instance.expects(:call).never
+
+      described_class.new.execute(post_id: post_record.id, then_fanout: true)
+
+      expect(
+        BabelReunited::PostTranslation.where(post_id: post_record.id)
+      ).to be_empty
+    end
+  end
+
   it "does not fan out without then_fanout" do
     stub_detection_success("en")
 

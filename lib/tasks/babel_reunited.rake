@@ -251,15 +251,27 @@ namespace :babel_reunited do
     # Only provably redundant records are touched: the post's detected locale
     # is the ground truth, and the original view already covers that language.
     # Posts without a detected locale are left alone.
-    records =
-      BabelReunited::PostTranslation.joins(
-        "INNER JOIN post_custom_fields pcf " \
-          "ON pcf.post_id = post_translations.post_id " \
-          "AND pcf.name = '#{BabelReunited::DETECTED_LOCALE_FIELD}'"
-      ).where("post_translations.language = pcf.value")
+    candidates =
+      BabelReunited::PostTranslation
+        .joins(
+          "INNER JOIN post_custom_fields pcf " \
+            "ON pcf.post_id = post_translations.post_id " \
+            "AND pcf.name = '#{BabelReunited::DETECTED_LOCALE_FIELD}'"
+        )
+        .where("post_translations.language = pcf.value")
+        .includes(:post)
 
-    total = records.count
+    # A detection bound to older content proves nothing: the post may have
+    # been rewritten in another language, which makes this record the
+    # translation that is now needed rather than a redundant copy.
+    records, skipped =
+      candidates.partition { |t| BabelReunited.detection_current?(t.post) }
+
+    total = records.size
     puts "Found #{total} same-language translation records"
+    if skipped.any?
+      puts "Skipped #{skipped.size} records whose post changed after detection"
+    end
 
     if total == 0
       puts "Nothing to do"
@@ -273,13 +285,14 @@ namespace :babel_reunited do
       puts ""
       puts "Sample records:"
       records
-        .limit(10)
+        .first(10)
         .each do |t|
           puts "  Translation ID: #{t.id}, Post ID: #{t.post_id}, Language: #{t.language}"
         end
       puts "  ... and #{total - 10} more" if total > 10
     else
-      deleted = records.delete_all
+      deleted =
+        BabelReunited::PostTranslation.where(id: records.map(&:id)).delete_all
       puts "Deleted: #{deleted} records"
     end
   end

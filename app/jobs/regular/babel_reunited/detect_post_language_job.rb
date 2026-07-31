@@ -22,7 +22,9 @@ class Jobs::BabelReunited::DetectPostLanguageJob < ::Jobs::Base
 
   def execute(args)
     post = Post.find_by(id: args[:post_id])
-    return if post.blank? || post.raw.blank?
+    # Detection sends post content to a third-party provider, so it refuses
+    # the same posts translation does (deleted, hidden, disabled category).
+    return unless BabelReunited.translatable_post?(post)
 
     then_fanout = args[:then_fanout] || false
 

@@ -42,4 +42,16 @@ RSpec.describe "babel_reunited:cleanup_same_language_copies" do
       BabelReunited::PostTranslation.exists?(undetected_copy.id)
     ).to be true
   end
+
+  it "keeps records whose post changed after the detection" do
+    ENV["DRY_RUN"] = "false"
+
+    # Detection says "en" but describes older content: the post may now be
+    # written in another language, making the en translation the one needed.
+    BabelReunited.store_detected_locale(post_record, "en", raw_sha: "0" * 64)
+    needed = Fabricate(:post_translation, post: post_record, language: "en")
+
+    expect { task.invoke }.to output(/Nothing to do/).to_stdout
+    expect(BabelReunited::PostTranslation.exists?(needed.id)).to be true
+  end
 end

@@ -244,7 +244,7 @@ module BabelReunited
         return render_view_noop("trust_level")
       end
 
-      if BabelReunited.detected_locale_for(@post) == target_language
+      if BabelReunited.current_detected_locale_for(@post) == target_language
         return render_view_noop("source_language")
       end
 

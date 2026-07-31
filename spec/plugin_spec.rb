@@ -229,6 +229,22 @@ RSpec.describe BabelReunited do
       expect(Jobs::BabelReunited::TranslatePostJob.jobs).to be_empty
     end
 
+    it "marks pre-translate-layer translations stale too when content changed" do
+      # The post was English (es/zh-cn were its translations) and is rewritten
+      # in Spanish. The old es translation is now both outdated and redundant:
+      # it must not stay completed and readable as pre-edit content.
+      BabelReunited.store_detected_locale(post_record, "en", raw_sha: "0" * 64)
+      es = Fabricate(:post_translation, post: post_record, language: "es")
+      zh = Fabricate(:post_translation, post: post_record, language: "zh-cn")
+
+      revisor = OpenStruct.new(topic_diff: {})
+      DiscourseEvent.trigger(:post_edited, post_record, false, revisor)
+
+      expect(es.reload.status).to eq("stale")
+      expect(zh.reload.status).to eq("stale")
+      expect(es.translated_content).to be_present
+    end
+
     it "still marks lazy translations stale when routing through re-detection" do
       translation =
         Fabricate(:post_translation, post: post_record, language: "de")

@@ -305,7 +305,8 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
       translated_content: translated_cooked,
       translated_title: translated_title,
       source_language:
-        BabelReunited.detected_locale_for(post) || result.source_language,
+        BabelReunited.current_detected_locale_for(post) ||
+          result.source_language,
       source_sha: source_sha,
       metadata:
         success_metadata(

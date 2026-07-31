@@ -177,6 +177,22 @@ module ::BabelReunited
       post.custom_fields[DETECTED_SHA_FIELD] == detection_raw_sha(post)
   end
 
+  # The only detection result callers may act on. A result bound to older
+  # content proves nothing about the post's current language, so treating it
+  # as unknown (nil) is what makes the degradation paths correct: fan out to
+  # every configured language rather than silently skipping the wrong one.
+  def self.current_detected_locale_for(post)
+    detection_current?(post) ? detected_locale_for(post) : nil
+  end
+
+  # Mirrors the translate job's guards. Detection ships post content to a
+  # third-party provider, so it must refuse the same posts translation does.
+  def self.translatable_post?(post)
+    return false if post.blank? || post.raw.blank?
+    return false if post.deleted_at.present? || post.hidden?
+    translation_enabled_for_post?(post)
+  end
+
   def self.store_detected_locale(post, locale, raw_sha: nil)
     return if post.blank? || locale.blank?
     post.custom_fields[DETECTED_LOCALE_FIELD] = locale
@@ -199,10 +215,10 @@ module ::BabelReunited
   # detection already identified it (the original tab covers that language).
   def self.fanout_translations(post)
     return unless SiteSetting.babel_reunited_enabled
-    return if post.blank? || post.raw.blank?
-    return unless translation_enabled_for_post?(post)
+    return unless translatable_post?(post)
 
-    languages = auto_translate_languages - [detected_locale_for(post)].compact
+    languages =
+      auto_translate_languages - [current_detected_locale_for(post)].compact
     return if languages.empty?
 
     languages.each do |language|
@@ -213,8 +229,7 @@ module ::BabelReunited
 
   def self.trigger_auto_translation(post)
     return unless SiteSetting.babel_reunited_enabled
-    return if post.blank? || post.raw.blank?
-    return unless translation_enabled_for_post?(post)
+    return unless translatable_post?(post)
 
     Jobs.enqueue(
       Jobs::BabelReunited::DetectPostLanguageJob,
@@ -225,25 +240,18 @@ module ::BabelReunited
 
   def self.trigger_retranslation(post)
     return unless SiteSetting.babel_reunited_enabled
-    return if post.blank? || post.raw.blank?
-    return unless translation_enabled_for_post?(post)
+    return unless translatable_post?(post)
 
-    eager = auto_translate_languages - [detected_locale_for(post)].compact
-
-    # Lazy-layer translations are not re-translated on every edit — that would
-    # re-pay one LLM call per accumulated language. They are marked stale (old
-    # content stays readable) and refresh on next view or manual request.
-    post
-      .post_translations
-      .where(status: "completed")
-      .where.not(language: eager)
-      .update_all(status: "stale", updated_at: Time.current)
-
-    # Content changed since the last detection (or was never detected): the
-    # post may now be in a different language, so re-detect first and fan out
-    # from the fresh result. The changed fingerprint drives re-translation
-    # without force.
+    # Content changed since the last detection: the post may now be in a
+    # different language, so no split can be trusted. Every completed
+    # translation is outdated by definition (content stays readable while
+    # marked stale), and the fresh detection drives the fan-out.
     unless detection_current?(post)
+      post
+        .post_translations
+        .where(status: "completed")
+        .update_all(status: "stale", updated_at: Time.current)
+
       Jobs.enqueue(
         Jobs::BabelReunited::DetectPostLanguageJob,
         post_id: post.id,
@@ -251,6 +259,18 @@ module ::BabelReunited
       )
       return
     end
+
+    # Metadata-only edit (the raw content still matches the detection): the
+    # pre-translate layer is refreshed immediately, everything else is marked
+    # stale and refreshes on next view or manual request rather than re-paying
+    # one LLM call per accumulated language.
+    eager = auto_translate_languages - [detected_locale_for(post)].compact
+
+    post
+      .post_translations
+      .where(status: "completed")
+      .where.not(language: eager)
+      .update_all(status: "stale", updated_at: Time.current)
 
     return if eager.empty?
 
@@ -381,11 +401,14 @@ after_initialize do
     include_condition: plugin_enabled_condition
   ) { BabelReunited.translation_enabled_for_post?(object) }
 
+  # Only a detection bound to the post's current content is reported: a stale
+  # one would mislabel the original tab and hide the language the reader now
+  # needs, until re-detection lands.
   add_to_serializer(
     :post,
     :babel_detected_locale,
     include_condition: plugin_enabled_condition
-  ) { object.custom_fields[BabelReunited::DETECTED_LOCALE_FIELD] }
+  ) { BabelReunited.current_detected_locale_for(object) }
 
   add_to_serializer(
     :current_user,
