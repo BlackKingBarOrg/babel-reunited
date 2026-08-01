@@ -43,6 +43,25 @@ RSpec.describe "babel_reunited:cleanup_same_language_copies" do
     ).to be true
   end
 
+  it "processes candidates in batches without loading them all at once" do
+    ENV["DRY_RUN"] = "false"
+    ENV["BATCH_SIZE"] = "2"
+
+    copies =
+      3.times.map do
+        other = Fabricate(:post, topic: topic, user: user)
+        BabelReunited.store_detected_locale(other, "en")
+        Fabricate(:post_translation, post: other, language: "en")
+      end
+
+    expect { task.invoke }.to output(/Deleted: 3 records/).to_stdout
+    copies.each do |copy|
+      expect(BabelReunited::PostTranslation.exists?(copy.id)).to be false
+    end
+  ensure
+    ENV.delete("BATCH_SIZE")
+  end
+
   it "keeps records whose post changed after the detection" do
     ENV["DRY_RUN"] = "false"
 

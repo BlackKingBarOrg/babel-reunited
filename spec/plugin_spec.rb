@@ -229,6 +229,33 @@ RSpec.describe BabelReunited do
       expect(Jobs::BabelReunited::TranslatePostJob.jobs).to be_empty
     end
 
+    it "invalidates translations of a hidden post without dispatching work" do
+      # Invalidation is local bookkeeping: a hidden post whose content changed
+      # must not keep serving pre-edit translations once it becomes visible.
+      translation =
+        Fabricate(:post_translation, post: post_record, language: "de")
+      post_record.update!(hidden: true)
+
+      revisor = OpenStruct.new(topic_diff: {})
+      DiscourseEvent.trigger(:post_edited, post_record, false, revisor)
+
+      expect(translation.reload.status).to eq("stale")
+      expect(Jobs::BabelReunited::DetectPostLanguageJob.jobs).to be_empty
+      expect(Jobs::BabelReunited::TranslatePostJob.jobs).to be_empty
+    end
+
+    it "invalidates translations of a deleted post without dispatching work" do
+      translation =
+        Fabricate(:post_translation, post: post_record, language: "de")
+      post_record.trash!
+
+      revisor = OpenStruct.new(topic_diff: {})
+      DiscourseEvent.trigger(:post_edited, post_record, false, revisor)
+
+      expect(translation.reload.status).to eq("stale")
+      expect(Jobs::BabelReunited::DetectPostLanguageJob.jobs).to be_empty
+    end
+
     it "marks pre-translate-layer translations stale too when content changed" do
       # The post was English (es/zh-cn were its translations) and is rewritten
       # in Spanish. The old es translation is now both outdated and redundant:

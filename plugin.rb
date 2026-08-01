@@ -240,18 +240,33 @@ module ::BabelReunited
 
   def self.trigger_retranslation(post)
     return unless SiteSetting.babel_reunited_enabled
+    return if post.blank? || post.raw.blank?
+
+    content_changed = !detection_current?(post)
+
+    # When the content changed, the post may now be in a different language,
+    # so no split can be trusted and every completed translation is outdated.
+    # A metadata-only edit keeps the pre-translate layer, refreshed below.
+    eager =
+      if content_changed
+        []
+      else
+        auto_translate_languages - [detected_locale_for(post)].compact
+      end
+
+    # Invalidation is local bookkeeping and runs for every post, including the
+    # ones we will not send anywhere below: a hidden post whose content
+    # changed still has outdated translations, and they must not resurface as
+    # current when it becomes visible again.
+    outdated = post.post_translations.where(status: "completed")
+    outdated = outdated.where.not(language: eager) if eager.any?
+    outdated.update_all(status: "stale", updated_at: Time.current)
+
+    # Dispatching work, unlike invalidation, ships content to a third-party
+    # provider: deleted, hidden, and disabled-category posts stop here.
     return unless translatable_post?(post)
 
-    # Content changed since the last detection: the post may now be in a
-    # different language, so no split can be trusted. Every completed
-    # translation is outdated by definition (content stays readable while
-    # marked stale), and the fresh detection drives the fan-out.
-    unless detection_current?(post)
-      post
-        .post_translations
-        .where(status: "completed")
-        .update_all(status: "stale", updated_at: Time.current)
-
+    if content_changed
       Jobs.enqueue(
         Jobs::BabelReunited::DetectPostLanguageJob,
         post_id: post.id,
@@ -259,18 +274,6 @@ module ::BabelReunited
       )
       return
     end
-
-    # Metadata-only edit (the raw content still matches the detection): the
-    # pre-translate layer is refreshed immediately, everything else is marked
-    # stale and refreshes on next view or manual request rather than re-paying
-    # one LLM call per accumulated language.
-    eager = auto_translate_languages - [detected_locale_for(post)].compact
-
-    post
-      .post_translations
-      .where(status: "completed")
-      .where.not(language: eager)
-      .update_all(status: "stale", updated_at: Time.current)
 
     return if eager.empty?
 
