@@ -366,10 +366,7 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
         translated_content: "<p>old</p>"
       )
       expect(
-        BabelReunited::PostTranslation.claim_existing(
-          translation.id,
-          from: "completed"
-        )
+        BabelReunited::PostTranslation.claim_existing(translation)
       ).to be true
 
       BabelReunited::TranslationService.any_instance.expects(:call).never

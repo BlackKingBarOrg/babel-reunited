@@ -53,6 +53,17 @@ module ::BabelReunited
     translation_enabled_for_category?(post.topic&.category_id)
   end
 
+  # Worst case a single translation job can legitimately occupy: every chunk
+  # plus the title, each allowed a full provider timeout, with slack for
+  # cooking and persistence. Both the job's lock and the view lane's claim
+  # lease derive from this, so neither can cut off work that is still
+  # running — a fixed value would, since the timeout is configurable up to
+  # half an hour per request.
+  def self.max_translation_runtime
+    timeout = SiteSetting.babel_reunited_request_timeout_seconds.to_i
+    ((TranslationService::MAX_CHUNKS + 1) * timeout + 120).seconds
+  end
+
   def self.enqueue_translation_jobs(post, target_languages, force_update: false)
     return if target_languages.blank?
 

@@ -92,14 +92,17 @@ module BabelReunited
     end
 
     # A claim older than this is treated as abandoned: the worker died, the
-    # enqueue failed, or the job was dropped. Comfortably longer than the
-    # job's own 30-minute Redis lock, so a translation that is legitimately
-    # still running is never stolen. updated_at is the claim clock — every
-    # transition into "translating" refreshes it.
-    TRANSLATION_LEASE = 60.minutes
+    # enqueue failed, or the job was dropped. Twice the worst case a job can
+    # legitimately run, so a translation still calling the provider is never
+    # stolen — being slow to recover a stuck record is much cheaper than
+    # paying a provider twice for the same work. updated_at is the claim
+    # clock: every transition into "translating" refreshes it.
+    def self.translation_lease
+      BabelReunited.max_translation_runtime * 2
+    end
 
     def translation_lease_expired?
-      translating? && updated_at <= TRANSLATION_LEASE.ago
+      translating? && updated_at <= self.class.translation_lease.ago
     end
 
     def failed?
@@ -138,11 +141,18 @@ module BabelReunited
     # Atomic in-flight claims for the automated view lane: only one caller can
     # move a record into "translating" (or create it), so concurrent viewers
     # cannot stack duplicate jobs and fuse counts while a translation runs.
-    def self.claim_existing(id, from:)
-      where(id: id, status: from).update_all(
-        status: "translating",
-        updated_at: Time.current
-      ) == 1
+    # Compare-and-swap on the exact row the caller read: matching the status
+    # alone is not enough when re-claiming an expired lease, because the row
+    # is already "translating" and every concurrent caller would win. Pinning
+    # updated_at as well means the first claim moves the clock and the rest
+    # match nothing — and any other transition that landed in between (the
+    # job completing, say) also invalidates the claim.
+    def self.claim_existing(record)
+      where(
+        id: record.id,
+        status: record.status,
+        updated_at: record.updated_at
+      ).update_all(status: "translating", updated_at: Time.current) == 1
     end
 
     def self.claim_new(post_id, target_language)

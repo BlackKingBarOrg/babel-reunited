@@ -585,6 +585,63 @@ module(
       assert.dom(".cooked").hasText("日本語訳");
     });
 
+    test("a failing request does not cancel a newer pending one", async function (assert) {
+      let failJa;
+      const currentUser = getOwner(this).lookup("service:current-user");
+      currentUser.set("preferred_language", "ko");
+      currentUser.set("preferred_language_enabled", true);
+
+      this.set("post", createPost());
+      pretender.post(
+        `/babel-reunited/posts/${this.post.id}/translations`,
+        (request) => {
+          const body = new URLSearchParams(request.requestBody);
+          if (body.get("target_language") === "ja") {
+            return new Promise((resolve) => (failJa = resolve));
+          }
+          return response({ status: "queued" });
+        }
+      );
+
+      await render(
+        <template>
+          <LanguageTabsConnector @post={{this.post}}>
+            <div class="cooked">{{trustHTML this.post.cooked}}</div>
+          </LanguageTabsConnector>
+        </template>
+      );
+
+      // Ask for Japanese; the request stays in flight.
+      await openLanguageMenu();
+      await fillIn(".babel-language-picker__filter", "japanese");
+      const pendingJa = click(".babel-language-picker__item");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      // Change your mind and ask for Korean through the fixed preferred tab.
+      // Raw DOM click: the test helpers settle on the in-flight request.
+      document.querySelector(".ai-language-tabs button:nth-child(2)").click();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // The abandoned Japanese request now fails.
+      failJa(response(429, { errors: ["rate limited"] }));
+      await pendingJa;
+      await settled();
+
+      // Korean is still what the reader is waiting for, so its completion
+      // must still switch the view.
+      await publishToMessageBus(`/post-translations/${this.post.id}`, {
+        status: "completed",
+        language: "ko",
+        translation: {
+          language: "ko",
+          status: "completed",
+          translated_content: "<p>한국어 번역</p>",
+        },
+      });
+
+      assert.dom(".cooked").hasText("한국어 번역");
+    });
+
     test("manual request reverts optimistic state on error", async function (assert) {
       this.set("post", createPost());
       pretender.post(`/babel-reunited/posts/${this.post.id}/translations`, () => {

@@ -439,7 +439,7 @@ RSpec.describe BabelReunited::TranslationsController do
         )
       translation.update_columns(
         updated_at:
-          BabelReunited::PostTranslation::TRANSLATION_LEASE.ago - 1.minute
+          BabelReunited::PostTranslation.translation_lease.ago - 1.minute
       )
 
       view_trigger

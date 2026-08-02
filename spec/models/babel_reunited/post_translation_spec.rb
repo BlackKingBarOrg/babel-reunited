@@ -220,15 +220,36 @@ RSpec.describe BabelReunited::PostTranslation do
           status: "stale"
         )
 
-      expect(
-        described_class.claim_existing(translation.id, from: "stale")
-      ).to be true
+      # A second caller that read the row before the claim landed.
+      snapshot = described_class.find_translation(post.id, "es")
+
+      expect(described_class.claim_existing(translation)).to be true
       expect(translation.reload.status).to eq("translating")
       expect(translation.translated_content).to be_present
 
-      expect(
-        described_class.claim_existing(translation.id, from: "stale")
-      ).to be false
+      # Its snapshot is now out of date, so its claim finds nothing.
+      expect(described_class.claim_existing(snapshot)).to be false
+    end
+
+    it "lets only one caller re-claim the same expired lease" do
+      translation =
+        Fabricate(
+          :post_translation,
+          post: post,
+          language: "es",
+          status: "translating",
+          translated_content: ""
+        )
+      translation.update_columns(
+        updated_at: described_class.translation_lease.ago - 1.minute
+      )
+
+      # Two concurrent requests both read the row while its lease was expired.
+      first = described_class.find_translation(post.id, "es")
+      second = described_class.find_translation(post.id, "es")
+
+      expect(described_class.claim_existing(first)).to be true
+      expect(described_class.claim_existing(second)).to be false
     end
 
     it "claims a missing record exactly once" do
@@ -259,9 +280,29 @@ RSpec.describe BabelReunited::PostTranslation do
     it "is true once the claim outlives the lease" do
       record = translating_record
       record.update_columns(
-        updated_at: described_class::TRANSLATION_LEASE.ago - 1.minute
+        updated_at: described_class.translation_lease.ago - 1.minute
       )
       expect(record.reload.translation_lease_expired?).to be true
+    end
+
+    it "outlasts the worst case a job can legitimately run" do
+      SiteSetting.babel_reunited_request_timeout_seconds = 1800
+
+      # 5 chunks + title, each allowed a full timeout, is ~3 hours of
+      # legitimate work; the lease must never expire before that.
+      expect(described_class.translation_lease).to be >
+        BabelReunited.max_translation_runtime
+      expect(described_class.translation_lease).to be > 3.hours
+      expect(described_class.translation_lease).to be >
+        Jobs::BabelReunited::TranslatePostJob.lock_ttl.seconds
+    end
+
+    it "tracks the configured provider timeout" do
+      SiteSetting.babel_reunited_request_timeout_seconds = 60
+      short = described_class.translation_lease
+
+      SiteSetting.babel_reunited_request_timeout_seconds = 600
+      expect(described_class.translation_lease).to be > short
     end
 
     it "is false for records that are not translating" do

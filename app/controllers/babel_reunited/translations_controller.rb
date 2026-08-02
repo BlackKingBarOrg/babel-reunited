@@ -292,10 +292,7 @@ module BabelReunited
       # duplicate jobs and fuse counts for the same run.
       claimed =
         if translation
-          BabelReunited::PostTranslation.claim_existing(
-            translation.id,
-            from: translation.status
-          )
+          BabelReunited::PostTranslation.claim_existing(translation)
         else
           BabelReunited::PostTranslation.claim_new(@post.id, target_language)
         end

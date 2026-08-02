@@ -3,7 +3,12 @@
 require "digest/sha2"
 
 class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
-  LOCK_TTL = 1800 # 30 minutes — covers chunked translation (MAX_CHUNKS * request_timeout)
+  # Derived from the configured provider timeout rather than fixed: a lock
+  # shorter than the work it guards lets a second job start while the first
+  # is still calling the provider.
+  def self.lock_ttl
+    BabelReunited.max_translation_runtime.to_i
+  end
 
   sidekiq_options retry: 5
 
@@ -176,7 +181,13 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
   def with_translation_lock(post_id, language)
     lock_key = "babel_reunited:translate:#{post_id}:#{language}"
     lock_token = SecureRandom.hex(16)
-    acquired = Discourse.redis.set(lock_key, lock_token, nx: true, ex: LOCK_TTL)
+    acquired =
+      Discourse.redis.set(
+        lock_key,
+        lock_token,
+        nx: true,
+        ex: self.class.lock_ttl
+      )
     unless acquired
       log_skipped(post_id, language, "locked")
       return

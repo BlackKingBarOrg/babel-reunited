@@ -494,7 +494,11 @@ export default class LanguageTabsConnector extends Component {
         data: { target_language: languageCode },
       });
     } catch (error) {
-      this._pendingLanguage = null;
+      // Only retract our own claim: a failure here must not cancel a later
+      // request the reader is still waiting on.
+      if (this._pendingLanguage === languageCode) {
+        this._pendingLanguage = null;
+      }
       if (previous) {
         this.mergeState(languageCode, previous);
       } else {
