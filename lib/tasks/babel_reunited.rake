@@ -253,25 +253,25 @@ namespace :babel_reunited do
     # Posts without a detected locale are left alone.
     batch_size = (ENV["BATCH_SIZE"] || 500).to_i
 
-    candidate_ids =
-      BabelReunited::PostTranslation
-        .joins(
-          "INNER JOIN post_custom_fields pcf " \
-            "ON pcf.post_id = post_translations.post_id " \
-            "AND pcf.name = '#{BabelReunited::DETECTED_LOCALE_FIELD}'"
-        )
-        .where("post_translations.language = pcf.value")
-        .pluck(:id)
+    candidates =
+      BabelReunited::PostTranslation.joins(
+        "INNER JOIN post_custom_fields pcf " \
+          "ON pcf.post_id = post_translations.post_id " \
+          "AND pcf.name = '#{BabelReunited::DETECTED_LOCALE_FIELD}'"
+      ).where("post_translations.language = pcf.value")
 
-    redundant = []
+    total = 0
     skipped = 0
+    deleted = 0
+    samples = []
 
-    # Batched with a single custom-field preload per batch: legacy data can
-    # hold one same-language copy per post, and detection_current? would
-    # otherwise query custom fields once per record.
-    candidate_ids.each_slice(batch_size) do |ids|
-      records =
-        BabelReunited::PostTranslation.where(id: ids).includes(:post).to_a
+    # Fully streaming: legacy data can hold one same-language copy per post,
+    # so nothing accumulates across batches. Each batch preloads both
+    # detection custom fields once (detection_current? would otherwise query
+    # them per record) and, outside dry runs, deletes before moving on, which
+    # also keeps the verify-to-delete window inside a single batch.
+    candidates.in_batches(of: batch_size) do |batch|
+      records = batch.includes(:post).to_a
       posts = records.filter_map(&:post).uniq(&:id)
       Post.preload_custom_fields(
         posts,
@@ -281,19 +281,31 @@ namespace :babel_reunited do
         ]
       )
 
-      records.each do |t|
-        # A detection bound to older content proves nothing: the post may have
-        # been rewritten in another language, which makes this record the
-        # translation that is now needed rather than a redundant copy.
-        if t.post && BabelReunited.detection_current?(t.post)
-          redundant << { id: t.id, post_id: t.post_id, language: t.language }
-        else
-          skipped += 1
+      # A detection bound to older content proves nothing: the post may have
+      # been rewritten in another language, which makes this record the
+      # translation that is now needed rather than a redundant copy.
+      redundant =
+        records.select do |t|
+          t.post && BabelReunited.detection_current?(t.post)
         end
+
+      skipped += records.size - redundant.size
+      total += redundant.size
+
+      redundant
+        .first(10 - samples.size)
+        .each do |t|
+          samples << "  Translation ID: #{t.id}, Post ID: #{t.post_id}, Language: #{t.language}"
+        end
+
+      unless dry_run
+        deleted +=
+          BabelReunited::PostTranslation.where(
+            id: redundant.map(&:id)
+          ).delete_all
       end
     end
 
-    total = redundant.size
     puts "Found #{total} same-language translation records"
     if skipped > 0
       puts "Skipped #{skipped} records whose post changed after detection"
@@ -310,19 +322,9 @@ namespace :babel_reunited do
       puts "Use DRY_RUN=false to actually delete these records"
       puts ""
       puts "Sample records:"
-      redundant
-        .first(10)
-        .each do |r|
-          puts "  Translation ID: #{r[:id]}, Post ID: #{r[:post_id]}, Language: #{r[:language]}"
-        end
+      samples.each { |line| puts line }
       puts "  ... and #{total - 10} more" if total > 10
     else
-      deleted = 0
-      redundant
-        .map { |r| r[:id] }
-        .each_slice(batch_size) do |ids|
-          deleted += BabelReunited::PostTranslation.where(id: ids).delete_all
-        end
       puts "Deleted: #{deleted} records"
     end
   end

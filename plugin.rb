@@ -84,6 +84,10 @@ module ::BabelReunited
   end
 
   def self.translated_title_for(post, language)
+    # A translation into the post's own language is redundant and survives a
+    # rewrite as permanently stale content, so it must never supply a title.
+    return nil if language == current_detected_locale_for(post)
+
     translation = stream_translation_for(post, language)
 
     return nil if translation.blank? || translation.failed?

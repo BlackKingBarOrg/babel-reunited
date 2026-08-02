@@ -241,6 +241,36 @@ RSpec.describe BabelReunited::PostTranslation do
     end
   end
 
+  describe "#translation_lease_expired?" do
+    def translating_record
+      Fabricate(
+        :post_translation,
+        post: post,
+        language: "de",
+        status: "translating",
+        translated_content: ""
+      )
+    end
+
+    it "is false for a fresh claim" do
+      expect(translating_record.translation_lease_expired?).to be false
+    end
+
+    it "is true once the claim outlives the lease" do
+      record = translating_record
+      record.update_columns(
+        updated_at: described_class::TRANSLATION_LEASE.ago - 1.minute
+      )
+      expect(record.reload.translation_lease_expired?).to be true
+    end
+
+    it "is false for records that are not translating" do
+      record = Fabricate(:post_translation, post: post, language: "de")
+      record.update_columns(updated_at: 1.year.ago)
+      expect(record.reload.translation_lease_expired?).to be false
+    end
+  end
+
   describe "#stale?" do
     it "returns true when status is stale" do
       translation =

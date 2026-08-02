@@ -518,6 +518,16 @@ RSpec.describe BabelReunited do
       )
     end
 
+    it "never serves a title from a translation into the post's own language" do
+      # The post was rewritten in Spanish; its old es translation lingers as
+      # stale content that nothing will refresh.
+      BabelReunited.store_detected_locale(post_record, "es")
+
+      json =
+        ListableTopicSerializer.new(topic, scope: guardian, root: false).as_json
+      expect(json[:babel_translated_title]).to be_nil
+    end
+
     it "includes babel_translated_title in topic_view" do
       topic_view = TopicView.new(topic.id, user)
       json =

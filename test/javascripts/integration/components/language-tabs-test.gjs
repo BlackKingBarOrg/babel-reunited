@@ -1,6 +1,6 @@
 import { getOwner } from "@ember/owner";
 import { trustHTML } from "@ember/template";
-import { click, fillIn, render } from "@ember/test-helpers";
+import { click, fillIn, render, settled } from "@ember/test-helpers";
 import { module, test } from "qunit";
 // The ui-kit module path suggested by the lint rule is not resolvable in the
 // plugin runtime yet; the legacy path works through core's compatibility shim.
@@ -317,6 +317,90 @@ module(
 
       assert.dom(".cooked").hasText("中文翻译");
       assert.dom(".ai-language-tabs button").exists({ count: 3 });
+    });
+
+    test("a translation into the post's own language is never auto-selected", async function (assert) {
+      const currentUser = getOwner(this).lookup("service:current-user");
+      currentUser.set("preferred_language", "es");
+      currentUser.set("preferred_language_enabled", true);
+
+      // The post was rewritten in Spanish; the old es translation survives as
+      // stale content that nothing will ever refresh.
+      this.set(
+        "post",
+        createPost({
+          babel_detected_locale: "es",
+          babel_translations_meta: [
+            { language: "es", status: "stale", source_language: "en" },
+          ],
+          babel_preferred_translation: {
+            language: "es",
+            status: "stale",
+            translated_content: "<p>Contenido anterior a la edicion</p>",
+          },
+        })
+      );
+
+      await render(
+        <template>
+          <LanguageTabsConnector @post={{this.post}}>
+            <div class="cooked">{{trustHTML this.post.cooked}}</div>
+          </LanguageTabsConnector>
+        </template>
+      );
+
+      assert
+        .dom(".cooked")
+        .hasText("Original cooked content", "the original is the Spanish text");
+      assert
+        .dom(".babel-reunited-stale-notice")
+        .doesNotExist("no stale body is on screen");
+    });
+
+    test("a late fetch does not override a newer language choice", async function (assert) {
+      let resolveFetch;
+      this.set("post", createPost());
+      pretender.get(
+        `/babel-reunited/posts/${this.post.id}/translations/zh-cn.json`,
+        () => new Promise((resolve) => (resolveFetch = resolve))
+      );
+
+      await render(
+        <template>
+          <LanguageTabsConnector @post={{this.post}}>
+            <div class="cooked">{{trustHTML this.post.cooked}}</div>
+          </LanguageTabsConnector>
+        </template>
+      );
+
+      await openLanguageMenu();
+      await fillIn(".babel-language-picker__filter", "chinese");
+
+      // Deliberately not awaited: the test helpers settle on pending AJAX,
+      // which is exactly what this test keeps in flight. The switch below
+      // uses a raw DOM click for the same reason.
+      const pendingClick = click(".babel-language-picker__item.--translated");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      // The reader gives up waiting and goes back to the original.
+      document.querySelector(".ai-language-tabs button:first-child").click();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      resolveFetch(
+        response({
+          post_translation: {
+            language: "zh-cn",
+            status: "completed",
+            translated_content: "<p>中文翻译</p>",
+          },
+        })
+      );
+      await pendingClick;
+      await settled();
+
+      assert
+        .dom(".cooked")
+        .hasText("Original cooked content", "newer choice wins");
     });
 
     test("preferred tab is hidden when the post is already in that language", async function (assert) {

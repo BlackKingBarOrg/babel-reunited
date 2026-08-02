@@ -254,7 +254,10 @@ module BabelReunited
           target_language
         )
 
-      if translation&.translating?
+      # An expired claim falls through to be re-claimed below: without this a
+      # dispatch that failed after claiming would pin the record in
+      # "translating" forever, with every later view noop-ing on it.
+      if translation&.translating? && !translation.translation_lease_expired?
         return render_view_noop("already_translating")
       end
       if translation&.failed? && !translation.auto_retryable?

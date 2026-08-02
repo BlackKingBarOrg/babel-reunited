@@ -174,6 +174,15 @@ export default class LanguageTabsConnector extends Component {
       map[preferred.language] = { ...map[preferred.language], ...preferred };
     }
 
+    // A translation into the post's own language is redundant — the original
+    // view already is that language. Such a record outlives a rewrite as
+    // permanently stale content that nothing will refresh, so it must never
+    // be selectable. Requesting it explicitly still works (detection can be
+    // wrong): that merges a fresh record into _states.
+    if (this.detectedLocale) {
+      delete map[this.detectedLocale];
+    }
+
     return map;
   }
 
@@ -213,12 +222,10 @@ export default class LanguageTabsConnector extends Component {
       return;
     }
 
-    if (!this.currentUser?.preferred_language) {
-      return;
-    }
-
-    const preferredLanguage = this.currentUser.preferred_language;
-    if (this._hasDisplayableContent(preferredLanguage)) {
+    // preferredCode, not the raw preference: when the post is already in the
+    // reader's language the original tab covers it.
+    const preferredLanguage = this.preferredCode;
+    if (preferredLanguage && this._hasDisplayableContent(preferredLanguage)) {
       this.currentLanguage = preferredLanguage;
     }
   }
@@ -400,12 +407,16 @@ export default class LanguageTabsConnector extends Component {
 
   @action
   switchLanguage(languageCode) {
+    // Any deliberate switch supersedes whatever the reader was waiting for,
+    // so a late async response cannot override this newer choice.
     if (languageCode === "original") {
+      this._pendingLanguage = null;
       this.currentLanguage = languageCode;
       return;
     }
 
     if (this._hasDisplayableContent(languageCode)) {
+      this._pendingLanguage = null;
       this.currentLanguage = languageCode;
       if (this.getTranslationStatus(languageCode) === "stale") {
         this._refreshStaleTranslation(languageCode);
@@ -415,6 +426,7 @@ export default class LanguageTabsConnector extends Component {
 
     const status = this.getTranslationStatus(languageCode);
     if (status && status !== "failed") {
+      this._pendingLanguage = languageCode;
       // A record exists server-side (completed, stale, or re-translating with
       // an old body) but the body is not local; fetch it. Fresh translating
       // rows come back empty and simply keep their spinner.
@@ -434,7 +446,12 @@ export default class LanguageTabsConnector extends Component {
       const data = json?.post_translation || json;
       if (data?.language) {
         this.mergeState(languageCode, data);
-        if (data.translated_content) {
+        // The reader may have moved on while this was in flight.
+        if (
+          data.translated_content &&
+          this._pendingLanguage === languageCode
+        ) {
+          this._pendingLanguage = null;
           this.currentLanguage = languageCode;
           if (data.status === "stale") {
             this._refreshStaleTranslation(languageCode);

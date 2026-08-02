@@ -431,6 +431,32 @@ RSpec.describe BabelReunited::TranslationsController do
       expect_noop("source_language")
     end
 
+    it "re-claims a translating record whose lease expired" do
+      translation =
+        BabelReunited::PostTranslation.create_or_update_record(
+          post_record.id,
+          "es"
+        )
+      translation.update_columns(
+        updated_at:
+          BabelReunited::PostTranslation::TRANSLATION_LEASE.ago - 1.minute
+      )
+
+      view_trigger
+
+      expect(response.parsed_body["status"]).to eq("queued")
+      expect(
+        job_enqueued?(
+          job: Jobs::BabelReunited::TranslatePostJob,
+          args: {
+            post_id: post_record.id,
+            target_language: "es"
+          }
+        )
+      ).to be true
+      expect(translation.reload.updated_at).to be > 1.minute.ago
+    end
+
     it "noops while a translation is in flight" do
       BabelReunited::PostTranslation.create_or_update_record(
         post_record.id,

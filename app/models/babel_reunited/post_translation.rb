@@ -91,6 +91,17 @@ module BabelReunited
       status == "stale"
     end
 
+    # A claim older than this is treated as abandoned: the worker died, the
+    # enqueue failed, or the job was dropped. Comfortably longer than the
+    # job's own 30-minute Redis lock, so a translation that is legitimately
+    # still running is never stolen. updated_at is the claim clock — every
+    # transition into "translating" refreshes it.
+    TRANSLATION_LEASE = 60.minutes
+
+    def translation_lease_expired?
+      translating? && updated_at <= TRANSLATION_LEASE.ago
+    end
+
     def failed?
       status == "failed"
     end
