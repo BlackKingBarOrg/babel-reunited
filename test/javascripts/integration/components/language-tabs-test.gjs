@@ -67,7 +67,9 @@ module(
       // original + en + zh-cn + es + overflow menu
       assert.dom(".ai-language-tabs button").exists({ count: 5 });
       assert.dom(".ai-language-tabs button:nth-child(2)").hasText("English");
-      assert.dom(".ai-language-tabs button:nth-child(4)").includesText("Spanish");
+      assert
+        .dom(".ai-language-tabs button:nth-child(4)")
+        .includesText("Español");
     });
 
     test("the post's own language gets no tab of its own", async function (assert) {
@@ -94,9 +96,7 @@ module(
       assert
         .dom(".ai-language-tabs button:first-child")
         .includesText("English");
-      assert
-        .dom(".ai-language-tabs button:nth-child(2)")
-        .includesText("Chinese");
+      assert.dom(".ai-language-tabs button:nth-child(2)").includesText("中文");
     });
 
     test("a preferred language outside the pre-translate layer leads", async function (assert) {
@@ -117,7 +117,7 @@ module(
 
       // original + th + en + zh-cn + es + overflow menu
       assert.dom(".ai-language-tabs button").exists({ count: 6 });
-      assert.dom(".ai-language-tabs button:nth-child(2)").hasText("Thai");
+      assert.dom(".ai-language-tabs button:nth-child(2)").hasText("ไทย");
     });
 
     test("languages that already have a tab are not repeated in the menu", async function (assert) {
@@ -192,7 +192,62 @@ module(
       assert
         .dom(".babel-language-picker__item.--translated")
         .exists({ count: 2 }, "en and zh-cn are grouped as translated");
-      assert.dom(".babel-language-picker__hint").exists("hints on the rest");
+      assert
+        .dom(".babel-language-picker__note")
+        .exists("the on-demand caveat is stated once, not on every row");
+      assert
+        .dom(".babel-language-picker__hint")
+        .doesNotExist("no per-row hint when nothing is instant here");
+    });
+
+    test("languages are listed by their own name and found by it", async function (assert) {
+      this.set("post", createPost({ babel_translations_meta: [] }));
+      await render(
+        <template>
+          <LanguageTabsConnector @post={{this.post}}>
+            <div class="cooked">{{trustHTML this.post.cooked}}</div>
+          </LanguageTabsConnector>
+        </template>
+      );
+
+      await openLanguageMenu();
+
+      // A reader searching for their own language types it the way they write
+      // it, not the way the interface locale spells it.
+      await fillIn(".babel-language-picker__filter", "\u4e2d\u6587");
+      assert.dom(".babel-language-picker__item").exists();
+      assert
+        .dom(".babel-language-picker__secondary")
+        .exists("the interface-locale name stays visible");
+
+      // The interface-locale name and the code still work.
+      await fillIn(".babel-language-picker__filter", "Chinese (China)");
+      assert.dom(".babel-language-picker__item").exists({ count: 1 });
+
+      await fillIn(".babel-language-picker__filter", "zh-cn");
+      assert.dom(".babel-language-picker__item").exists({ count: 1 });
+    });
+
+    test("a language whose own name matches the interface locale shows once", async function (assert) {
+      this.set("post", createPost({ babel_translations_meta: [] }));
+      await render(
+        <template>
+          <LanguageTabsConnector @post={{this.post}}>
+            <div class="cooked">{{trustHTML this.post.cooked}}</div>
+          </LanguageTabsConnector>
+        </template>
+      );
+
+      await openLanguageMenu();
+      // "english" would also match en-us, en-gb and friends; fil is unique
+      // and its own name is the same as its English one.
+      await fillIn(".babel-language-picker__filter", "filipino");
+
+      assert.dom(".babel-language-picker__item").exists({ count: 1 });
+      assert.dom(".babel-language-picker__name").hasText("Filipino");
+      assert
+        .dom(".babel-language-picker__secondary")
+        .doesNotExist("no point repeating the same name twice");
     });
 
     test("menu search filters the language list", async function (assert) {
@@ -209,7 +264,7 @@ module(
       await fillIn(".babel-language-picker__filter", "thai");
 
       assert.dom(".babel-language-picker__item").exists({ count: 1 });
-      assert.dom(".babel-language-picker__item").includesText("Thai");
+      assert.dom(".babel-language-picker__item").includesText("ไทย");
     });
 
     test("picking a translated language fetches its body on demand", async function (assert) {
@@ -313,10 +368,13 @@ module(
           ],
         })
       );
-      pretender.post(`/babel-reunited/posts/${this.post.id}/translations`, () => {
-        assert.step("POST called");
-        return response({ status: "queued" });
-      });
+      pretender.post(
+        `/babel-reunited/posts/${this.post.id}/translations`,
+        () => {
+          assert.step("POST called");
+          return response({ status: "queued" });
+        }
+      );
       pretender.get(
         `/babel-reunited/posts/${this.post.id}/translations/vi.json`,
         () => {
@@ -366,10 +424,13 @@ module(
           },
         })
       );
-      pretender.post(`/babel-reunited/posts/${this.post.id}/translations`, () => {
-        assert.step("POST called");
-        return response({ status: "queued" });
-      });
+      pretender.post(
+        `/babel-reunited/posts/${this.post.id}/translations`,
+        () => {
+          assert.step("POST called");
+          return response({ status: "queued" });
+        }
+      );
 
       await render(
         <template>
@@ -455,9 +516,7 @@ module(
       assert
         .dom(".ai-language-tabs button")
         .exists({ count: 2 }, "only original and the overflow menu remain");
-      assert
-        .dom(".ai-language-tabs button:first-child")
-        .includesText("Chinese");
+      assert.dom(".ai-language-tabs button:first-child").includesText("中文");
     });
 
     test("a source_language refusal teaches the client and falls back to original", async function (assert) {
@@ -654,10 +713,13 @@ module(
           },
         })
       );
-      pretender.post(`/babel-reunited/posts/${this.post.id}/translations`, () => {
-        assert.step("refresh requested");
-        return response({ status: "queued" });
-      });
+      pretender.post(
+        `/babel-reunited/posts/${this.post.id}/translations`,
+        () => {
+          assert.step("refresh requested");
+          return response({ status: "queued" });
+        }
+      );
 
       await render(
         <template>
@@ -716,10 +778,13 @@ module(
       currentUser.set("preferred_language_enabled", true);
 
       this.set("post", createPost());
-      pretender.post(`/babel-reunited/posts/${this.post.id}/translations`, () => {
-        assert.step("POST called");
-        return response({ status: "queued" });
-      });
+      pretender.post(
+        `/babel-reunited/posts/${this.post.id}/translations`,
+        () => {
+          assert.step("POST called");
+          return response({ status: "queued" });
+        }
+      );
 
       await render(
         <template>
@@ -769,9 +834,12 @@ module(
 
     test("on-demand translation auto-switches on MessageBus completion", async function (assert) {
       this.set("post", createPost());
-      pretender.post(`/babel-reunited/posts/${this.post.id}/translations`, () => {
-        return response({ status: "queued" });
-      });
+      pretender.post(
+        `/babel-reunited/posts/${this.post.id}/translations`,
+        () => {
+          return response({ status: "queued" });
+        }
+      );
 
       await render(
         <template>
@@ -859,9 +927,12 @@ module(
 
     test("manual request reverts optimistic state on error", async function (assert) {
       this.set("post", createPost());
-      pretender.post(`/babel-reunited/posts/${this.post.id}/translations`, () => {
-        return response(429, { errors: ["rate limited"] });
-      });
+      pretender.post(
+        `/babel-reunited/posts/${this.post.id}/translations`,
+        () => {
+          return response(429, { errors: ["rate limited"] });
+        }
+      );
 
       await render(
         <template>

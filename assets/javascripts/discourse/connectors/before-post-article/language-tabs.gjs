@@ -17,7 +17,7 @@ import discourseLater from "discourse/lib/later";
 import { eq } from "discourse/truth-helpers";
 import { i18n } from "discourse-i18n";
 import BabelLanguagePicker from "../../components/babel-language-picker";
-import { languageDisplayName } from "../../lib/language-display-name";
+import { languageEndonym } from "../../lib/language-display-name";
 import { getSupportedLanguages } from "../../lib/supported-languages";
 
 const DISPLAYABLE_STATUSES = ["completed", "stale"];
@@ -296,7 +296,7 @@ export default class LanguageTabsConnector extends Component {
   get originalTabLabel() {
     if (this.detectedLocale) {
       return i18n("babel_reunited.language_tabs.original_with_language", {
-        language: languageDisplayName(this.detectedLocale),
+        language: languageEndonym(this.detectedLocale),
       });
     }
     return i18n("babel_reunited.language_tabs.original");
@@ -332,7 +332,7 @@ export default class LanguageTabsConnector extends Component {
 
   tabFor(code) {
     const status = this.getTranslationStatus(code);
-    const name = languageDisplayName(code);
+    const name = languageEndonym(code);
     let title;
     if (status === "failed") {
       title = i18n("babel_reunited.language_tabs.failed_retry");
@@ -380,7 +380,7 @@ export default class LanguageTabsConnector extends Component {
 
     return {
       code,
-      name: languageDisplayName(code),
+      name: languageEndonym(code),
       status: this.getTranslationStatus(code),
       tabClass: this.tabClass(code),
     };
@@ -441,7 +441,7 @@ export default class LanguageTabsConnector extends Component {
     if (this.currentLanguage === "original") {
       return i18n("babel_reunited.language_tabs.original");
     }
-    return languageDisplayName(this.currentLanguage);
+    return languageEndonym(this.currentLanguage);
   }
 
   @action

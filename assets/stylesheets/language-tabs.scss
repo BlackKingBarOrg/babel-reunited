@@ -148,3 +148,16 @@
   color: var(--primary-high);
   font-size: var(--font-down-2);
 }
+
+.babel-language-picker {
+  &__note {
+    padding: 0 var(--space-2) var(--space-1);
+    color: var(--primary-medium);
+    font-size: var(--font-down-3);
+  }
+
+  &__secondary {
+    color: var(--primary-medium);
+    font-size: var(--font-down-3);
+  }
+}

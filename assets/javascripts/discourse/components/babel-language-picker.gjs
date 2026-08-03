@@ -13,7 +13,10 @@ import icon from "discourse/helpers/d-icon";
 import { eq } from "discourse/truth-helpers";
 import { i18n } from "discourse-i18n";
 import { SUPPORTED_LOCALES } from "../lib/babel-locales";
-import { languageDisplayName } from "../lib/language-display-name";
+import {
+  languageDisplayName,
+  languageEndonym,
+} from "../lib/language-display-name";
 
 // Searchable language list shared by the post-level overflow menu and the
 // preference surfaces (modal + account page).
@@ -45,27 +48,47 @@ export default class BabelLanguagePicker extends Component {
 
     return codes
       .map((code) => {
-        const entry = { code, name: languageDisplayName(code) };
+        const name = languageEndonym(code);
+        const localized = languageDisplayName(code);
+        const entry = {
+          code,
+          name,
+          // Only worth showing when it says something the endonym does not.
+          secondary: localized === name ? null : localized,
+          sortKey: localized,
+        };
+
         if (code === this.args.sourceCode) {
           // The post's own language stays selectable so readers can override
           // a wrong detection; a right one just translates to itself once.
           entry.hint = i18n(
             "babel_reunited.language_tabs.source_language_hint"
           );
-        } else if (hinted && this.args.showHints) {
-          entry.hint = this.instantCodes.includes(code)
-            ? i18n("babel_reunited.language_tabs.instant_hint")
-            : i18n("babel_reunited.language_tabs.on_demand_hint");
+        } else if (
+          hinted &&
+          this.args.showHints &&
+          this.instantCodes.includes(code)
+        ) {
+          // Only the exception is badged: the rule ("first view takes a few
+          // seconds") is stated once above the list instead of on every row.
+          entry.hint = i18n("babel_reunited.language_tabs.instant_hint");
         }
         return entry;
       })
-      .filter(
-        (entry) =>
-          !filter ||
+      .filter((entry) => {
+        if (!filter) {
+          return true;
+        }
+        // Searchable by the language's own name, by its name in the viewer's
+        // interface locale, and by code: a reader typing 中文 finds it
+        // without knowing it is called "Chinese" here.
+        return (
           entry.code.toLowerCase().includes(filter) ||
-          entry.name.toLowerCase().includes(filter)
-      )
-      .sort((a, b) => a.name.localeCompare(b.name));
+          entry.name.toLowerCase().includes(filter) ||
+          (entry.secondary || "").toLowerCase().includes(filter)
+        );
+      })
+      .sort((a, b) => a.sortKey.localeCompare(b.sortKey));
   }
 
   get translatedEntries() {
@@ -105,6 +128,12 @@ export default class BabelLanguagePicker extends Component {
         {{on "input" this.updateFilter}}
       />
 
+      {{#if @showHints}}
+        <div class="babel-language-picker__note">
+          {{i18n "babel_reunited.language_tabs.on_demand_hint"}}
+        </div>
+      {{/if}}
+
       <div class="babel-language-picker__list">
         {{#if this.translatedEntries.length}}
           <div class="babel-language-picker__group-label">
@@ -121,6 +150,11 @@ export default class BabelLanguagePicker extends Component {
             >
               {{icon "check"}}
               <span class="babel-language-picker__name">{{entry.name}}</span>
+              {{#if entry.secondary}}
+                <span
+                  class="babel-language-picker__secondary"
+                >{{entry.secondary}}</span>
+              {{/if}}
             </button>
           {{/each}}
         {{/if}}
@@ -141,6 +175,11 @@ export default class BabelLanguagePicker extends Component {
               {{on "click" (fn this.select entry.code)}}
             >
               <span class="babel-language-picker__name">{{entry.name}}</span>
+              {{#if entry.secondary}}
+                <span
+                  class="babel-language-picker__secondary"
+                >{{entry.secondary}}</span>
+              {{/if}}
               {{#if entry.hint}}
                 <span class="babel-language-picker__hint">{{entry.hint}}</span>
               {{/if}}

@@ -40,13 +40,18 @@ module(
         </template>
       );
 
+      // The rule is stated once above the list; only the exception is badged.
+      assert
+        .dom(".babel-language-picker__note")
+        .hasText("First view takes a few seconds");
+
       await fillIn(".babel-language-picker__filter", "zh-cn");
       assert.dom(".babel-language-picker__hint").hasText("Instant");
 
       await fillIn(".babel-language-picker__filter", "thai");
       assert
         .dom(".babel-language-picker__hint")
-        .hasText("First view takes a few seconds");
+        .doesNotExist("on-demand languages carry no per-row hint");
     });
 
     test("selecting language sends POST to user-preferred-language", async function (assert) {
