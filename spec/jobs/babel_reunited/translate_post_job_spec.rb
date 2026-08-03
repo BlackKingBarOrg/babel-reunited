@@ -193,6 +193,36 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
       )
     end
 
+    it "re-announces the title when skipping an already completed translation" do
+      translation =
+        BabelReunited::PostTranslation.create_or_update_record(
+          post_record.id,
+          "es"
+        )
+      translation.update!(
+        status: "completed",
+        source_sha: described_class.content_sha(post_record),
+        translated_content: "<p>old</p>",
+        translated_title: "Titulo viejo",
+        metadata: {
+          "source_length" => post_record.raw.length
+        }
+      )
+
+      messages =
+        MessageBus.track_publish(
+          "/babel-translated-title/#{post_record.topic_id}"
+        ) do
+          described_class.new.execute(
+            post_id: post_record.id,
+            target_language: "es"
+          )
+        end
+
+      expect(messages.length).to eq(1)
+      expect(messages.first.data[:translated_title]).to eq("Titulo viejo")
+    end
+
     it "re-announces completion when skipping an already completed translation" do
       translation =
         BabelReunited::PostTranslation.create_or_update_record(
@@ -324,6 +354,77 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
           }
         )
       ).to be true
+    end
+  end
+
+  describe "redaction guard" do
+    it "records the length of what was translated, not what the post says after" do
+      # The author cuts the post down while the provider call is in flight.
+      job_result = success_result
+      fake = Object.new
+      target = post_record
+      original_length = post_record.raw.length
+      fake.define_singleton_method(:call) do
+        target.update_columns(raw: "redacted")
+        job_result
+      end
+      BabelReunited::TranslationService.stubs(:new).returns(fake)
+
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+
+      translation =
+        BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      expect(translation.metadata["source_length"]).to eq(original_length)
+      expect(translation.safe_to_display?(post_record.reload)).to be false
+    end
+
+    it "does not push a withheld body to open pages" do
+      job_result = success_result
+      fake = Object.new
+      target = post_record
+      fake.define_singleton_method(:call) do
+        target.update_columns(raw: "redacted")
+        job_result
+      end
+      BabelReunited::TranslationService.stubs(:new).returns(fake)
+
+      messages =
+        MessageBus.track_publish("/post-translations/#{post_record.id}") do
+          described_class.new.execute(
+            post_id: post_record.id,
+            target_language: "es"
+          )
+        end
+
+      expect(messages.length).to eq(1)
+      expect(messages.first.data[:status]).to eq("withheld")
+      expect(messages.first.data).not_to have_key(:translation)
+    end
+
+    it "does not push a withheld title either" do
+      job_result = success_result
+      fake = Object.new
+      target = post_record
+      fake.define_singleton_method(:call) do
+        target.update_columns(raw: "redacted")
+        job_result
+      end
+      BabelReunited::TranslationService.stubs(:new).returns(fake)
+
+      messages =
+        MessageBus.track_publish(
+          "/babel-translated-title/#{post_record.topic_id}"
+        ) do
+          described_class.new.execute(
+            post_id: post_record.id,
+            target_language: "es"
+          )
+        end
+
+      expect(messages).to be_empty
     end
   end
 

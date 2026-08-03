@@ -96,15 +96,18 @@ module BabelReunited
     # and the stale translation still carries whatever was removed.
     REDACTION_RATIO = 0.8
 
-    # Stale bodies stay readable while a re-translation catches up — except
-    # when the post got materially shorter, because then the old translation
-    # is the only place the removed text still exists.
+    # Withheld once the post got materially shorter than what this body was
+    # translated from, because the old translation is then the only place the
+    # removed text still exists.
+    #
+    # Deliberately keyed on content rather than on status: a stale row claimed
+    # into "translating" still carries the old body, and so does a failed one.
+    # Comparing lengths covers every such state, and costs nothing in the
+    # normal case where the post never shrank.
     #
     # This does not catch a same-length rewrite; for those the author or staff
     # can delete the translation outright (DELETE .../translations/:language).
     def safe_to_display?(post)
-      return true unless stale?
-
       original_length = (metadata || {})["source_length"].to_i
       return true if original_length.zero?
 

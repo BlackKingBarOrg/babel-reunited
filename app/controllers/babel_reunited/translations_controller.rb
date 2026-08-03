@@ -14,7 +14,10 @@ module BabelReunited
                   ]
 
     def index
-      translations = @post.post_translations.recent
+      # This is a public read endpoint, so it needs the same guard as show:
+      # otherwise it is a way around it.
+      translations =
+        @post.post_translations.recent.select { |t| t.safe_to_display?(@post) }
       render_serialized(translations, PostTranslationSerializer)
     end
 

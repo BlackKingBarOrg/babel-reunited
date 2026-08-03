@@ -290,7 +290,7 @@ RSpec.describe BabelReunited::PostTranslation do
       expect(t.safe_to_display?(post)).to be true
     end
 
-    it "never withholds a completed translation" do
+    it "serves a completed translation of an intact post" do
       t =
         Fabricate(
           :post_translation,
@@ -298,10 +298,32 @@ RSpec.describe BabelReunited::PostTranslation do
           language: "de",
           status: "completed",
           metadata: {
-            "source_length" => post.raw.length * 10
+            "source_length" => post.raw.length
           }
         )
       expect(t.safe_to_display?(post)).to be true
+    end
+
+    it "keys on content, not status, so a claimed row stays covered" do
+      # The view lane moves a stale row to "translating" while the old body is
+      # still there; a status-based guard would let it through.
+      %w[stale translating failed completed].each do |status|
+        t =
+          Fabricate(
+            :post_translation,
+            post: post,
+            language: "d#{status[0]}",
+            status: status,
+            translated_content: "<p>old</p>",
+            metadata: {
+              "source_length" => post.raw.length * 3
+            }
+          )
+        expect(t.safe_to_display?(post)).to(
+          be(false),
+          "#{status} row still carries the removed text"
+        )
+      end
     end
 
     it "serves records that predate the baseline" do

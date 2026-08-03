@@ -85,6 +85,40 @@ RSpec.describe BabelReunited::TranslationsController do
       get "/babel-reunited/posts/-1/translations.json"
       expect(response.status).to eq(404)
     end
+
+    it "withholds stale content whose source was cut back" do
+      Fabricate(
+        :post_translation,
+        post: post_record,
+        language: "de",
+        metadata: {
+          "source_length" => post_record.raw.length * 5
+        }
+      )
+
+      get "/babel-reunited/posts/#{post_record.id}/translations.json"
+
+      languages = response.parsed_body.map { |t| t["language"] }
+      expect(languages).to include("es")
+      expect(languages).not_to include("de")
+    end
+
+    it "is not a way around the guard for anonymous readers" do
+      Fabricate(
+        :post_translation,
+        post: post_record,
+        language: "de",
+        translated_content: "<p>Das Passwort lautet hunter2</p>",
+        metadata: {
+          "source_length" => post_record.raw.length * 5
+        }
+      )
+
+      get "/babel-reunited/posts/#{post_record.id}/translations.json"
+
+      expect(response.status).to eq(200)
+      expect(response.body).not_to include("hunter2")
+    end
   end
 
   describe "GET /babel-reunited/posts/:post_id/translations/:language" do

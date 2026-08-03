@@ -413,7 +413,7 @@ after_initialize do
             :metadata
           )
           .to_a
-    rows = rows.reject { |t| t.stale? && !t.safe_to_display?(object) }
+    rows = rows.reject { |t| !t.safe_to_display?(object) }
     rows.map do |t|
       {
         language: t.language,
