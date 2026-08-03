@@ -404,7 +404,10 @@ export default class LanguageTabsConnector extends Component {
   @action
   pickLanguage(closeFn, code, isSourceLanguage = false) {
     closeFn?.();
-    this.switchLanguage(code, { overrideSource: isSourceLanguage });
+    // Asking for the language the post is already written in is a request to
+    // read it in that language, and the original already is: show it rather
+    // than paying to translate the post into itself.
+    this.switchLanguage(isSourceLanguage ? "original" : code);
   }
 
   get currentContent() {
@@ -445,7 +448,7 @@ export default class LanguageTabsConnector extends Component {
   }
 
   @action
-  switchLanguage(languageCode, { overrideSource = false } = {}) {
+  switchLanguage(languageCode) {
     // Any deliberate switch supersedes whatever the reader was waiting for,
     // so a late async response cannot override this newer choice.
     if (languageCode === "original") {
@@ -471,7 +474,7 @@ export default class LanguageTabsConnector extends Component {
       // rows come back empty and simply keep their spinner.
       this._fetchTranslation(languageCode);
     } else if (this._pendingLanguage !== languageCode) {
-      this._requestTranslation(languageCode, { overrideSource });
+      this._requestTranslation(languageCode);
     }
   }
 
@@ -521,21 +524,16 @@ export default class LanguageTabsConnector extends Component {
     }
   }
 
-  async _requestTranslation(languageCode, { overrideSource = false } = {}) {
+  async _requestTranslation(languageCode) {
     this._pendingLanguage = languageCode;
 
     const previous = this.states[languageCode];
     this.mergeState(languageCode, { status: "translating" });
 
     try {
-      const data = { target_language: languageCode };
-      if (overrideSource) {
-        data.override_source = true;
-      }
-
       const result = await ajax(
         `/babel-reunited/posts/${this.post.id}/translations`,
-        { type: "POST", data }
+        { type: "POST", data: { target_language: languageCode } }
       );
 
       if (result?.reason === "source_language") {

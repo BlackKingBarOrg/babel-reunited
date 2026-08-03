@@ -333,13 +333,14 @@ RSpec.describe BabelReunited::TranslationsController do
       expect(BabelReunited::UsageFuse.site_count).to eq(0)
     end
 
-    it "allows a same-language request that explicitly overrides detection" do
+    it "lets staff force a same-language translation to correct detection" do
       BabelReunited.store_detected_locale(post_record, "zh-cn")
+      sign_in(admin)
 
       post "/babel-reunited/posts/#{post_record.id}/translations.json",
            params: {
              target_language: "zh-cn",
-             override_source: "true"
+             force_update: "true"
            }
 
       expect(response.parsed_body["status"]).to eq("queued")
@@ -348,7 +349,8 @@ RSpec.describe BabelReunited::TranslationsController do
           job: Jobs::BabelReunited::TranslatePostJob,
           args: {
             post_id: post_record.id,
-            target_language: "zh-cn"
+            target_language: "zh-cn",
+            force_update: true
           }
         )
       ).to be true

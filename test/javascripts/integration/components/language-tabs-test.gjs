@@ -328,37 +328,6 @@ module(
         .exists("shows spinner on the transient tab");
     });
 
-    test("the detected language stays selectable, tagged as source", async function (assert) {
-      this.set("post", createPost({ babel_detected_locale: "th" }));
-      pretender.post(
-        `/babel-reunited/posts/${this.post.id}/translations`,
-        (request) => {
-          const body = new URLSearchParams(request.requestBody);
-          assert.step(`POST target_language=${body.get("target_language")}`);
-          return response({ status: "queued" });
-        }
-      );
-
-      await render(
-        <template>
-          <LanguageTabsConnector @post={{this.post}}>
-            <div class="cooked">{{trustHTML this.post.cooked}}</div>
-          </LanguageTabsConnector>
-        </template>
-      );
-
-      await openLanguageMenu();
-      await fillIn(".babel-language-picker__filter", "thai");
-
-      assert
-        .dom(".babel-language-picker__hint")
-        .hasText("Source language", "entry is tagged instead of hidden");
-
-      // A reader can override a wrong detection by asking anyway.
-      await click(".babel-language-picker__item");
-      assert.verifySteps(["POST target_language=th"]);
-    });
-
     test("picking an in-flight language fetches but never re-requests", async function (assert) {
       this.set(
         "post",
@@ -563,17 +532,12 @@ module(
         .doesNotExist("no lingering spinner");
     });
 
-    test("picking the source language entry overrides detection explicitly", async function (assert) {
+    test("picking the source language shows the original, it does not translate", async function (assert) {
       this.set("post", createPost({ babel_detected_locale: "th" }));
       pretender.post(
         `/babel-reunited/posts/${this.post.id}/translations`,
-        (request) => {
-          const body = new URLSearchParams(request.requestBody);
-          assert.step(
-            `POST ${body.get("target_language")} override=${body.get(
-              "override_source"
-            )}`
-          );
+        () => {
+          assert.step("POST");
           return response({ status: "queued" });
         }
       );
@@ -588,9 +552,18 @@ module(
 
       await openLanguageMenu();
       await fillIn(".babel-language-picker__filter", "thai");
+
+      assert
+        .dom(".babel-language-picker__hint")
+        .hasText("Source language", "the entry is tagged, not hidden");
+
       await click(".babel-language-picker__item");
 
-      assert.verifySteps(["POST th override=true"]);
+      assert.verifySteps([], "asking for the post's own language costs nothing");
+      assert.dom(".cooked").hasText("Original cooked content");
+      assert
+        .dom(".ai-language-tabs .spinner.small")
+        .doesNotExist("no translation was started");
     });
 
     test("a translation into the post's own language is never auto-selected", async function (assert) {
