@@ -89,7 +89,10 @@ export default class BabelLanguagePicker extends Component {
 
   @action
   select(code) {
-    this.args.onSelect?.(code);
+    // Picking the entry tagged as the source language is the one deliberate
+    // way to ask for a same-language translation (when detection got it
+    // wrong), so the caller is told which entry this was.
+    this.args.onSelect?.(code, code === this.args.sourceCode);
   }
 
   <template>

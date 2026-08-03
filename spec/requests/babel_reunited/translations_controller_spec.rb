@@ -317,6 +317,58 @@ RSpec.describe BabelReunited::TranslationsController do
       expect(response.status).to eq(429)
     end
 
+    it "refuses a same-language manual request from a stale client" do
+      BabelReunited.store_detected_locale(post_record, "zh-cn")
+
+      post "/babel-reunited/posts/#{post_record.id}/translations.json",
+           params: {
+             target_language: "zh-cn"
+           }
+
+      expect(response.status).to eq(200)
+      expect(response.parsed_body["status"]).to eq("noop")
+      expect(response.parsed_body["reason"]).to eq("source_language")
+      expect(response.parsed_body["detected_locale"]).to eq("zh-cn")
+      expect(Jobs::BabelReunited::TranslatePostJob.jobs).to be_empty
+      expect(BabelReunited::UsageFuse.site_count).to eq(0)
+    end
+
+    it "allows a same-language request that explicitly overrides detection" do
+      BabelReunited.store_detected_locale(post_record, "zh-cn")
+
+      post "/babel-reunited/posts/#{post_record.id}/translations.json",
+           params: {
+             target_language: "zh-cn",
+             override_source: "true"
+           }
+
+      expect(response.parsed_body["status"]).to eq("queued")
+      expect(
+        job_enqueued?(
+          job: Jobs::BabelReunited::TranslatePostJob,
+          args: {
+            post_id: post_record.id,
+            target_language: "zh-cn"
+          }
+        )
+      ).to be true
+    end
+
+    it "still allows same-language requests when the detection is stale" do
+      BabelReunited.store_detected_locale(
+        post_record,
+        "zh-cn",
+        raw_sha: "0" * 64
+      )
+
+      post "/babel-reunited/posts/#{post_record.id}/translations.json",
+           params: {
+             target_language: "zh-cn"
+           }
+
+      expect(response.parsed_body["status"]).to eq("queued")
+    end
+
     it "records manual requests against the daily fuse" do
       post "/babel-reunited/posts/#{post_record.id}/translations.json",
            params: {

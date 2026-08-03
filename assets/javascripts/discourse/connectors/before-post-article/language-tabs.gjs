@@ -38,6 +38,7 @@ export default class LanguageTabsConnector extends Component {
   @tracked currentLanguage = "original";
   @tracked _states = null;
   @tracked _pendingLanguage = null;
+  @tracked _detectedLocale = null;
 
   constructor() {
     super(...arguments);
@@ -48,6 +49,12 @@ export default class LanguageTabsConnector extends Component {
 
     this._messageBusChannel = `/post-translations/${this.post.id}`;
     this._onTranslationUpdate = (data) => {
+      if (data.detected_locale) {
+        // Detection finished after this page rendered; adopting it drops any
+        // tab offering to translate the post into its own language.
+        this.applyDetectedLocale(data.detected_locale);
+        return;
+      }
       if (data.status === "completed" && data.translation) {
         // The payload status can be "stale" when the post changed while the
         // translation ran; the content is readable and a refresh follows.
@@ -266,7 +273,24 @@ export default class LanguageTabsConnector extends Component {
   }
 
   get detectedLocale() {
-    return this.post?.babel_detected_locale || null;
+    return this._detectedLocale ?? this.post?.babel_detected_locale ?? null;
+  }
+
+  // Detection can land (or be corrected by the server) after render, so it is
+  // tracked separately from the serialized value.
+  applyDetectedLocale(locale) {
+    if (!locale || this.detectedLocale === locale) {
+      return;
+    }
+
+    this._detectedLocale = locale;
+    if (this.currentLanguage === locale) {
+      // Whatever was on screen for that language is the post's own content.
+      this.currentLanguage = "original";
+    }
+    if (this._pendingLanguage === locale) {
+      this._pendingLanguage = null;
+    }
   }
 
   get originalTabLabel() {
@@ -363,9 +387,9 @@ export default class LanguageTabsConnector extends Component {
   }
 
   @action
-  pickLanguage(closeFn, code) {
+  pickLanguage(closeFn, code, isSourceLanguage = false) {
     closeFn?.();
-    this.switchLanguage(code);
+    this.switchLanguage(code, { overrideSource: isSourceLanguage });
   }
 
   get currentContent() {
@@ -406,7 +430,7 @@ export default class LanguageTabsConnector extends Component {
   }
 
   @action
-  switchLanguage(languageCode) {
+  switchLanguage(languageCode, { overrideSource = false } = {}) {
     // Any deliberate switch supersedes whatever the reader was waiting for,
     // so a late async response cannot override this newer choice.
     if (languageCode === "original") {
@@ -432,7 +456,7 @@ export default class LanguageTabsConnector extends Component {
       // rows come back empty and simply keep their spinner.
       this._fetchTranslation(languageCode);
     } else if (this._pendingLanguage !== languageCode) {
-      this._requestTranslation(languageCode);
+      this._requestTranslation(languageCode, { overrideSource });
     }
   }
 
@@ -482,17 +506,35 @@ export default class LanguageTabsConnector extends Component {
     }
   }
 
-  async _requestTranslation(languageCode) {
+  async _requestTranslation(languageCode, { overrideSource = false } = {}) {
     this._pendingLanguage = languageCode;
 
     const previous = this.states[languageCode];
     this.mergeState(languageCode, { status: "translating" });
 
     try {
-      await ajax(`/babel-reunited/posts/${this.post.id}/translations`, {
-        type: "POST",
-        data: { target_language: languageCode },
-      });
+      const data = { target_language: languageCode };
+      if (overrideSource) {
+        data.override_source = true;
+      }
+
+      const result = await ajax(
+        `/babel-reunited/posts/${this.post.id}/translations`,
+        { type: "POST", data }
+      );
+
+      if (result?.reason === "source_language") {
+        // Our detection data was stale: the post is already in this
+        // language. Adopt the server's answer and drop the optimistic state.
+        if (previous) {
+          this.mergeState(languageCode, previous);
+        } else {
+          this.removeState(languageCode);
+        }
+        this.applyDetectedLocale(result.detected_locale || languageCode);
+        this.currentLanguage = "original";
+        return;
+      }
     } catch (error) {
       // Only retract our own claim: a failure here must not cancel a later
       // request the reader is still waiting on.

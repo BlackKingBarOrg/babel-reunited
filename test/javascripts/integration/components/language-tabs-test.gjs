@@ -319,6 +319,118 @@ module(
       assert.dom(".ai-language-tabs button").exists({ count: 3 });
     });
 
+    test("a late detection removes the tab offering the post's own language", async function (assert) {
+      const currentUser = getOwner(this).lookup("service:current-user");
+      currentUser.set("preferred_language", "zh-cn");
+      currentUser.set("preferred_language_enabled", true);
+
+      // Rendered before detection finished, so the post's language is unknown
+      // and the preferred tab is offered as it would be for any post.
+      this.set(
+        "post",
+        createPost({
+          babel_detected_locale: null,
+          babel_translations_meta: [],
+        })
+      );
+
+      await render(
+        <template>
+          <LanguageTabsConnector @post={{this.post}}>
+            <div class="cooked">{{trustHTML this.post.cooked}}</div>
+          </LanguageTabsConnector>
+        </template>
+      );
+
+      assert.dom(".ai-language-tabs button").exists({ count: 3 });
+
+      await publishToMessageBus(`/post-translations/${this.post.id}`, {
+        post_id: this.post.id,
+        detected_locale: "zh-cn",
+      });
+
+      assert
+        .dom(".ai-language-tabs button")
+        .exists({ count: 2 }, "only original and the overflow menu remain");
+      assert
+        .dom(".ai-language-tabs button:first-child")
+        .includesText("Chinese");
+    });
+
+    test("a source_language refusal teaches the client and falls back to original", async function (assert) {
+      const currentUser = getOwner(this).lookup("service:current-user");
+      currentUser.set("preferred_language", "zh-cn");
+      currentUser.set("preferred_language_enabled", true);
+
+      this.set(
+        "post",
+        createPost({
+          babel_detected_locale: null,
+          babel_translations_meta: [],
+        })
+      );
+      pretender.post(
+        `/babel-reunited/posts/${this.post.id}/translations`,
+        () => {
+          assert.step("POST");
+          return response({
+            status: "noop",
+            reason: "source_language",
+            detected_locale: "zh-cn",
+          });
+        }
+      );
+
+      await render(
+        <template>
+          <LanguageTabsConnector @post={{this.post}}>
+            <div class="cooked">{{trustHTML this.post.cooked}}</div>
+          </LanguageTabsConnector>
+        </template>
+      );
+
+      await click(".ai-language-tabs button:nth-child(2)");
+
+      assert.verifySteps(["POST"]);
+      assert.dom(".cooked").hasText("Original cooked content");
+      assert
+        .dom(".ai-language-tabs button")
+        .exists({ count: 2 }, "the redundant tab is gone");
+      assert
+        .dom(".ai-language-tabs .spinner.small")
+        .doesNotExist("no lingering spinner");
+    });
+
+    test("picking the source language entry overrides detection explicitly", async function (assert) {
+      this.set("post", createPost({ babel_detected_locale: "th" }));
+      pretender.post(
+        `/babel-reunited/posts/${this.post.id}/translations`,
+        (request) => {
+          const body = new URLSearchParams(request.requestBody);
+          assert.step(
+            `POST ${body.get("target_language")} override=${body.get(
+              "override_source"
+            )}`
+          );
+          return response({ status: "queued" });
+        }
+      );
+
+      await render(
+        <template>
+          <LanguageTabsConnector @post={{this.post}}>
+            <div class="cooked">{{trustHTML this.post.cooked}}</div>
+          </LanguageTabsConnector>
+        </template>
+      );
+
+      await openLanguageMenu();
+      await fillIn(".babel-language-picker__filter", "thai");
+      await click(".babel-language-picker__item");
+
+      assert.verifySteps(["POST th override=true"]);
+    });
+
     test("a translation into the post's own language is never auto-selected", async function (assert) {
       const currentUser = getOwner(this).lookup("service:current-user");
       currentUser.set("preferred_language", "es");

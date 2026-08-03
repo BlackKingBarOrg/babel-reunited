@@ -45,6 +45,30 @@ RSpec.describe Jobs::BabelReunited::DetectPostLanguageJob do
     )
   end
 
+  it "publishes the detected locale so open pages stop offering it" do
+    stub_detection_success("zh-cn")
+
+    messages =
+      MessageBus.track_publish("/post-translations/#{post_record.id}") do
+        described_class.new.execute(post_id: post_record.id)
+      end
+
+    expect(messages.length).to eq(1)
+    expect(messages.first.data[:detected_locale]).to eq("zh-cn")
+    expect(messages.first.data[:post_id]).to eq(post_record.id)
+  end
+
+  it "does not publish when detection fails" do
+    stub_detection_failure
+
+    messages =
+      MessageBus.track_publish("/post-translations/#{post_record.id}") do
+        described_class.new.execute(post_id: post_record.id)
+      end
+
+    expect(messages).to be_empty
+  end
+
   it "does not re-detect when the detection is current" do
     BabelReunited.store_detected_locale(post_record, "th")
     BabelReunited::LanguageDetectionService.any_instance.expects(:call).never

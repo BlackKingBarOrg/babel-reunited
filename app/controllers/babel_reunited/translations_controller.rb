@@ -81,6 +81,26 @@ module BabelReunited
 
       return handle_view_trigger(target_language) if params[:trigger] == "view"
 
+      # Translating a post into the language it is already written in is only
+      # ever deliberate — overriding a wrong detection from the menu entry
+      # tagged as the source language. Any other same-language request comes
+      # from a client whose detection data is stale (detection lands seconds
+      # after a post is created), so refuse it and tell the client the truth
+      # instead of paying for a self-translation.
+      unless ActiveModel::Type::Boolean.new.cast(params[:override_source])
+        if BabelReunited.current_detected_locale_for(@post) == target_language
+          return(
+            render json: {
+                     status: "noop",
+                     reason: "source_language",
+                     post_id: @post.id,
+                     target_language: target_language,
+                     detected_locale: target_language
+                   }
+          )
+        end
+      end
+
       unless guardian.is_staff?
         if BabelReunited::UsageFuse.user_exhausted?(current_user)
           return(
