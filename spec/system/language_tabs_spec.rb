@@ -29,8 +29,8 @@ RSpec.describe "Language tabs" do
     visit "/t/#{topic.slug}/#{topic.id}"
 
     expect(page).to have_css("#post_1 .ai-language-tabs")
-    # original tab + preferred (es) tab + overflow menu trigger
-    expect(page).to have_css("#post_1 .babel-reunited-language-tab", count: 3)
+    # original + the three pre-translate languages + overflow menu trigger
+    expect(page).to have_css("#post_1 .babel-reunited-language-tab", count: 5)
     expect(page).to have_css("#post_1 .babel-reunited-language-tab.--menu")
   end
 
@@ -57,16 +57,17 @@ RSpec.describe "Language tabs" do
       expect(page).to have_css("#post_1 .cooked", count: 1)
     end
 
+    # zh-cn is a pre-translate language, so it has a fixed tab of its own
+    # (order: original, en, zh-cn, es, menu) and is not offered in the menu.
     def switch_to_translated
-      find("#post_1 .babel-reunited-language-tab.--menu").click
-      find(".babel-language-picker__item.--translated").click
+      find("#post_1 .ai-language-tabs button:nth-child(3)").click
     end
 
     it "decorates the translated view and never duplicates the post body" do
       visit "/t/#{topic.slug}/#{topic.id}"
       expect(page).to have_css("#post_1 .codeblock-button-wrapper", count: 1)
 
-      # Switch to zh-cn via the overflow menu (fetches the body on demand)
+      # Switch to zh-cn, which fetches the body on demand
       switch_to_translated
       expect(page).to have_css("#post_1 .cooked", text: "介绍段落")
       expect(page).to have_css("#post_1 .codeblock-button-wrapper", count: 1)

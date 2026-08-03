@@ -45,6 +45,109 @@ module(
   function (hooks) {
     setupRenderingTest(hooks);
 
+    // Most tests here exercise the menu, switching and async behavior, which
+    // is orthogonal to the pre-translate tab row. Emptying the setting keeps
+    // their tab arithmetic obvious; the row has its own tests below.
+    hooks.beforeEach(function () {
+      this.siteSettings.babel_reunited_auto_translate_languages = "";
+    });
+
+    test("pre-translate languages keep their own fixed tabs", async function (assert) {
+      this.siteSettings.babel_reunited_auto_translate_languages = "en,zh-cn,es";
+      this.set("post", createPost({ babel_translations_meta: [] }));
+
+      await render(
+        <template>
+          <LanguageTabsConnector @post={{this.post}}>
+            <div class="cooked">{{trustHTML this.post.cooked}}</div>
+          </LanguageTabsConnector>
+        </template>
+      );
+
+      // original + en + zh-cn + es + overflow menu
+      assert.dom(".ai-language-tabs button").exists({ count: 5 });
+      assert.dom(".ai-language-tabs button:nth-child(2)").hasText("English");
+      assert.dom(".ai-language-tabs button:nth-child(4)").includesText("Spanish");
+    });
+
+    test("the post's own language gets no tab of its own", async function (assert) {
+      this.siteSettings.babel_reunited_auto_translate_languages = "en,zh-cn,es";
+      this.set(
+        "post",
+        createPost({
+          babel_detected_locale: "en",
+          babel_translations_meta: [],
+        })
+      );
+
+      await render(
+        <template>
+          <LanguageTabsConnector @post={{this.post}}>
+            <div class="cooked">{{trustHTML this.post.cooked}}</div>
+          </LanguageTabsConnector>
+        </template>
+      );
+
+      // original (labeled English) + zh-cn + es + overflow menu: the English
+      // tab is gone because the original tab is already English
+      assert.dom(".ai-language-tabs button").exists({ count: 4 });
+      assert
+        .dom(".ai-language-tabs button:first-child")
+        .includesText("English");
+      assert
+        .dom(".ai-language-tabs button:nth-child(2)")
+        .includesText("Chinese");
+    });
+
+    test("a preferred language outside the pre-translate layer leads", async function (assert) {
+      this.siteSettings.babel_reunited_auto_translate_languages = "en,zh-cn,es";
+      const currentUser = getOwner(this).lookup("service:current-user");
+      currentUser.set("preferred_language", "th");
+      currentUser.set("preferred_language_enabled", true);
+
+      this.set("post", createPost({ babel_translations_meta: [] }));
+
+      await render(
+        <template>
+          <LanguageTabsConnector @post={{this.post}}>
+            <div class="cooked">{{trustHTML this.post.cooked}}</div>
+          </LanguageTabsConnector>
+        </template>
+      );
+
+      // original + th + en + zh-cn + es + overflow menu
+      assert.dom(".ai-language-tabs button").exists({ count: 6 });
+      assert.dom(".ai-language-tabs button:nth-child(2)").hasText("Thai");
+    });
+
+    test("languages that already have a tab are not repeated in the menu", async function (assert) {
+      this.siteSettings.babel_reunited_auto_translate_languages = "en,zh-cn,es";
+      this.set(
+        "post",
+        createPost({
+          babel_translations_meta: [
+            { language: "zh-cn", status: "completed", source_language: "en" },
+          ],
+        })
+      );
+
+      await render(
+        <template>
+          <LanguageTabsConnector @post={{this.post}}>
+            <div class="cooked">{{trustHTML this.post.cooked}}</div>
+          </LanguageTabsConnector>
+        </template>
+      );
+
+      await openLanguageMenu();
+      // Filter by the exact code: "chinese" would also match zh-tw and zh-hk.
+      await fillIn(".babel-language-picker__filter", "zh-cn");
+
+      assert
+        .dom(".babel-language-picker__item")
+        .doesNotExist("zh-cn is a tab, so the menu does not offer it again");
+    });
+
     test("renders the original tab and the overflow menu trigger", async function (assert) {
       this.set("post", createPost());
       await render(

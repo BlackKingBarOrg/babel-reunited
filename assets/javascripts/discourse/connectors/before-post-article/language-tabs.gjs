@@ -312,12 +312,25 @@ export default class LanguageTabsConnector extends Component {
     return code;
   }
 
-  get preferredTab() {
-    const code = this.preferredCode;
-    if (!code) {
-      return null;
+  // The pre-translate layer stays as fixed tabs: unlike the set of translated
+  // languages it is bounded by cost, so an admin keeps it small, and readers
+  // coming from the old three-button UI find the same buttons. The reader's
+  // own language leads when it is not already one of them, and the post's own
+  // language never appears — the original tab is that language.
+  get languageTabs() {
+    const codes = [];
+    if (this.preferredCode && !this.instantCodes.includes(this.preferredCode)) {
+      codes.push(this.preferredCode);
     }
+    for (const code of this.instantCodes) {
+      if (code !== this.detectedLocale && !codes.includes(code)) {
+        codes.push(code);
+      }
+    }
+    return codes.map((code) => this.tabFor(code));
+  }
 
+  tabFor(code) {
     const status = this.getTranslationStatus(code);
     const name = languageDisplayName(code);
     let title;
@@ -347,15 +360,16 @@ export default class LanguageTabsConnector extends Component {
   // A language picked from the overflow menu shows as a transient tab so the
   // reader can see what they are looking at and switch back.
   get ephemeralTab() {
+    const fixed = this.languageTabs.map((tab) => tab.code);
     let code = null;
     if (
       this.currentLanguage !== "original" &&
-      this.currentLanguage !== this.preferredCode
+      !fixed.includes(this.currentLanguage)
     ) {
       code = this.currentLanguage;
     } else if (
       this._pendingLanguage &&
-      this._pendingLanguage !== this.preferredCode
+      !fixed.includes(this._pendingLanguage)
     ) {
       code = this._pendingLanguage;
     }
@@ -378,8 +392,9 @@ export default class LanguageTabsConnector extends Component {
     );
   }
 
+  // Languages that already have their own tab need no menu entry.
   get pickerExcludeCodes() {
-    return [this.preferredCode];
+    return this.languageTabs.map((tab) => tab.code);
   }
 
   get instantCodes() {
@@ -567,27 +582,27 @@ export default class LanguageTabsConnector extends Component {
           {{this.originalTabLabel}}
         </button>
 
-        {{#if this.preferredTab}}
+        {{#each this.languageTabs as |tab|}}
           <button
             class={{concatClass
               "babel-reunited-language-tab"
-              this.preferredTab.tabClass
-              (if this.preferredTab.failed "--failed")
+              tab.tabClass
+              (if tab.failed "--failed")
             }}
-            title={{this.preferredTab.title}}
-            {{on "click" (fn this.switchLanguage this.preferredTab.code)}}
+            title={{tab.title}}
+            {{on "click" (fn this.switchLanguage tab.code)}}
           >
-            {{this.preferredTab.name}}
-            {{#if this.preferredTab.translating}}
+            {{tab.name}}
+            {{#if tab.translating}}
               <div class="spinner small"></div>
             {{/if}}
-            {{#if this.preferredTab.failed}}
+            {{#if tab.failed}}
               <span class="babel-reunited-retry-hint">
                 {{i18n "babel_reunited.language_tabs.retry"}}
               </span>
             {{/if}}
           </button>
-        {{/if}}
+        {{/each}}
 
         {{#if this.ephemeralTab}}
           <button
