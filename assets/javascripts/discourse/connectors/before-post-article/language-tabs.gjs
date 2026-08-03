@@ -3,7 +3,6 @@ import { tracked } from "@glimmer/tracking";
 import { fn } from "@ember/helper";
 import { on } from "@ember/modifier";
 import { action } from "@ember/object";
-import { cancel } from "@ember/runloop";
 import { service } from "@ember/service";
 import PostCookedHtml from "discourse/components/post/cooked-html";
 import DMenu from "discourse/float-kit/components/d-menu";
@@ -13,17 +12,18 @@ import DMenu from "discourse/float-kit/components/d-menu";
 import concatClass from "discourse/helpers/concat-class";
 import { ajax } from "discourse/lib/ajax";
 import { popupAjaxError } from "discourse/lib/ajax-error";
-import discourseLater from "discourse/lib/later";
 import { eq } from "discourse/truth-helpers";
 import { i18n } from "discourse-i18n";
 import BabelLanguagePicker from "../../components/babel-language-picker";
 import { languageEndonym } from "../../lib/language-display-name";
 import { getSupportedLanguages } from "../../lib/supported-languages";
+import BabelViewDwell from "../../modifiers/babel-view-dwell";
 
 const DISPLAYABLE_STATUSES = ["completed", "stale"];
 
-// Posts scrolled past render transiently (cloaking); only posts the reader
-// dwells on for this long fire an automatic translation request.
+// How long a post must stay visible before it counts as read. The post
+// stream uncloaks a full viewport beyond what is on screen, so being
+// rendered proves nothing; only intersection held this long does.
 const VIEW_TRIGGER_DWELL_MS = 500;
 
 // Session-level dedup: cloak/uncloak cycles recreate the component, but one
@@ -82,24 +82,18 @@ export default class LanguageTabsConnector extends Component {
       this._messageBusChannel,
       this._onTranslationUpdate
     );
-
-    this._viewTriggerTimer = discourseLater(
-      this,
-      this._maybeViewTrigger,
-      VIEW_TRIGGER_DWELL_MS
-    );
   }
 
   willDestroy() {
     super.willDestroy(...arguments);
-    cancel(this._viewTriggerTimer);
     this.messageBus?.unsubscribe(
       this._messageBusChannel,
       this._onTranslationUpdate
     );
   }
 
-  _maybeViewTrigger() {
+  @action
+  maybeViewTrigger() {
     if (this.isDestroying || this.isDestroyed) {
       return;
     }
@@ -569,7 +563,10 @@ export default class LanguageTabsConnector extends Component {
         {{i18n "babel_reunited.language_tabs.disabled_by_user"}}
       </div>
     {{else if this.translationEnabledForCategory}}
-      <div class="ai-language-tabs">
+      <div
+        class="ai-language-tabs"
+        {{BabelViewDwell this.maybeViewTrigger dwellMs=VIEW_TRIGGER_DWELL_MS}}
+      >
         <button
           class={{concatClass
             "babel-reunited-language-tab"

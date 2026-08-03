@@ -404,6 +404,53 @@ RSpec.describe BabelReunited do
       PostSerializer.new(a_post, scope: guardian, root: false).as_json
     end
 
+    it "withholds a stale translation once the post was cut back" do
+      Fabricate(
+        :user_preferred_language,
+        user: user,
+        language: "es",
+        enabled: true
+      )
+      Fabricate(
+        :post_translation,
+        post: post_record,
+        language: "es",
+        status: "stale",
+        metadata: {
+          "source_length" => post_record.raw.length * 5
+        }
+      )
+
+      json = serialize_post(post_record)
+
+      expect(json[:babel_preferred_translation]).to be_nil
+      expect(json[:babel_translations_meta]).to be_empty
+    end
+
+    it "still serves stale content after an ordinary edit" do
+      Fabricate(
+        :user_preferred_language,
+        user: user,
+        language: "es",
+        enabled: true
+      )
+      Fabricate(
+        :post_translation,
+        post: post_record,
+        language: "es",
+        status: "stale",
+        metadata: {
+          "source_length" => post_record.raw.length
+        }
+      )
+
+      json = serialize_post(post_record)
+
+      expect(
+        json[:babel_preferred_translation][:translated_content]
+      ).to be_present
+    end
+
     it "includes lightweight babel_translations_meta without bodies" do
       Fabricate(:post_translation, post: post_record, language: "es")
       json = serialize_post(post_record)

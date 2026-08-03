@@ -3,6 +3,64 @@
 require "webmock/rspec"
 
 RSpec.describe BabelReunited::TranslationService do
+  describe "error classification" do
+    # The job acts on error_kind, so each failure site must set one rather
+    # than leave callers to guess from the message.
+    it "marks content that can never fit as permanent" do
+      SiteSetting.babel_reunited_max_content_length = 100
+      SiteSetting.babel_reunited_preset_model = "custom"
+      SiteSetting.babel_reunited_custom_api_key = "k"
+      SiteSetting.babel_reunited_custom_base_url = "https://example.com"
+      SiteSetting.babel_reunited_custom_model_name = "m"
+      post_record.update_columns(raw: "x" * 5000)
+
+      result =
+        described_class.new(post: post_record, target_language: "es").call
+
+      expect(result.error).to include("too long")
+      expect(result.error_kind).to eq("permanent")
+    end
+
+    it "marks a missing target language as permanent" do
+      result = described_class.new(post: post_record, target_language: "").call
+      expect(result.error_kind).to eq("permanent")
+    end
+
+    it "marks configuration problems as transient" do
+      SiteSetting.babel_reunited_openai_api_key = ""
+
+      result =
+        described_class.new(post: post_record, target_language: "es").call
+
+      expect(result.error).to include("API key")
+      expect(result.error_kind).to eq("transient")
+    end
+
+    it "marks provider 400 as permanent and 500 as transient" do
+      stub_request(
+        :post,
+        "https://api.openai.com/v1/chat/completions"
+      ).to_return(status: 400, body: { error: { message: "nope" } }.to_json)
+      expect(
+        described_class
+          .new(post: post_record, target_language: "es")
+          .call
+          .error_kind
+      ).to eq("permanent")
+
+      stub_request(
+        :post,
+        "https://api.openai.com/v1/chat/completions"
+      ).to_return(status: 503)
+      expect(
+        described_class
+          .new(post: post_record, target_language: "es")
+          .call
+          .error_kind
+      ).to eq("transient")
+    end
+  end
+
   fab!(:user)
   fab!(:topic) { Fabricate(:topic, user: user, title: "Original Topic Title") }
   fab!(:post_record) do

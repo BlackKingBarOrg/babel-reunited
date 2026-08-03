@@ -32,8 +32,11 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
     )
   end
 
-  def failure_result(error: "API key not configured")
-    BabelReunited::TranslationService::Result.new(error: error)
+  def failure_result(error: "API key not configured", error_kind: "transient")
+    BabelReunited::TranslationService::Result.new(
+      error: error,
+      error_kind: error_kind
+    )
   end
 
   describe "argument validation" do
@@ -534,6 +537,51 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
       )
     end
 
+    it "publishes the translated title so open topics update live" do
+      BabelReunited::PostTranslation.create_or_update_record(
+        post_record.id,
+        "es"
+      )
+
+      messages =
+        MessageBus.track_publish(
+          "/babel-translated-title/#{post_record.topic_id}"
+        ) do
+          described_class.new.execute(
+            post_id: post_record.id,
+            target_language: "es"
+          )
+        end
+
+      expect(messages.length).to eq(1)
+      expect(messages.first.data[:language]).to eq("es")
+      expect(messages.first.data[:translated_title]).to eq("Titulo")
+    end
+
+    it "does not publish a title for replies" do
+      reply = Fabricate(:post, topic: topic, user: user)
+
+      messages =
+        MessageBus.track_publish("/babel-translated-title/#{topic.id}") do
+          described_class.new.execute(post_id: reply.id, target_language: "es")
+        end
+
+      expect(messages).to be_empty
+    end
+
+    it "records the source length as a redaction baseline" do
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+
+      translation =
+        BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      expect(translation.metadata["source_length"]).to eq(
+        post_record.raw.length
+      )
+    end
+
     it "stores the detected locale as source_language" do
       BabelReunited.store_detected_locale(post_record, "en")
 
@@ -733,11 +781,42 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
       expect(translation.metadata["failure_count"]).to eq(1)
     end
 
+    it "takes the classification from the service, not the message text" do
+      # A reworded provider error must not silently become retryable.
+      BabelReunited::TranslationService
+        .any_instance
+        .stubs(:call)
+        .returns(
+          failure_result(
+            error: "some wording nobody anticipated",
+            error_kind: "permanent"
+          )
+        )
+
+      BabelReunited::PostTranslation.create_or_update_record(
+        post_record.id,
+        "es"
+      )
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+
+      translation =
+        BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      expect(translation.metadata["error_kind"]).to eq("permanent")
+    end
+
     it "classifies content-too-long errors as permanent" do
       BabelReunited::TranslationService
         .any_instance
         .stubs(:call)
-        .returns(failure_result(error: "Content too long for translation"))
+        .returns(
+          failure_result(
+            error: "Content too long for translation",
+            error_kind: "permanent"
+          )
+        )
 
       BabelReunited::PostTranslation.create_or_update_record(
         post_record.id,

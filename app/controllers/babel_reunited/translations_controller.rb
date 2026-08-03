@@ -24,6 +24,10 @@ module BabelReunited
           @post.id,
           params[:language]
         )
+      # Stale content whose source was cut back is withheld here too, or the
+      # on-demand fetch would be a way around the serializer's guard.
+      translation = nil if translation && !translation.safe_to_display?(@post)
+
       unless translation
         return(
           render json: { error: "Translation not found" }, status: :not_found

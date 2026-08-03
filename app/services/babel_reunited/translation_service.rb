@@ -7,6 +7,9 @@ module BabelReunited
   class TranslationService
     MAX_CHUNKS = 5
 
+    # error_kind is set at every failure site so callers never classify by
+    # matching on the message text, which breaks the moment a provider
+    # rewords an error.
     Result =
       Struct.new(
         :translated_raw,
@@ -14,7 +17,8 @@ module BabelReunited
         :source_language,
         :ai_response,
         :error,
-        keyword_init: true,
+        :error_kind,
+        keyword_init: true
       ) do
         def success? = error.nil?
         def failure? = !success?
@@ -27,11 +31,22 @@ module BabelReunited
     end
 
     def call
-      return Result.new(error: "Post not found") if @post.blank?
-      return Result.new(error: "Target language not specified") if @target_language.blank?
+      if @post.blank?
+        return Result.new(error: "Post not found", error_kind: "permanent")
+      end
+      if @target_language.blank?
+        return(
+          Result.new(
+            error: "Target language not specified",
+            error_kind: "permanent"
+          )
+        )
+      end
 
       api_config = get_api_config
-      return Result.new(error: api_config[:error]) if api_config[:error]
+      if api_config[:error]
+        return(Result.new(error: api_config[:error], error_kind: "transient"))
+      end
 
       raw = @post.raw
       title = prepare_title
@@ -39,13 +54,26 @@ module BabelReunited
       total_length = raw.length
       total_length += title.length if title.present?
       max_length = get_max_content_length(api_config)
-      return Result.new(error: "Content too long for translation") if total_length > max_length
+      if total_length > max_length
+        return(
+          Result.new(
+            error: "Content too long for translation",
+            error_kind: "permanent"
+          )
+        )
+      end
 
-      chunks = ContentSplitter.split(content: raw, chunk_size: get_chunk_size(api_config))
+      chunks =
+        ContentSplitter.split(
+          content: raw,
+          chunk_size: get_chunk_size(api_config)
+        )
       if chunks.size > MAX_CHUNKS
         return(
           Result.new(
-            error: "Content too long for translation (#{chunks.size} chunks, max #{MAX_CHUNKS})",
+            error:
+              "Content too long for translation (#{chunks.size} chunks, max #{MAX_CHUNKS})",
+            error_kind: "permanent"
           )
         )
       end
@@ -62,30 +90,40 @@ module BabelReunited
           next
         end
         trailing_ws = chunk[/\s+\z/] || ""
-        core_chunk = chunk[leading_ws.length...(chunk.length - trailing_ws.length)]
+        core_chunk =
+          chunk[leading_ws.length...(chunk.length - trailing_ws.length)]
 
         protector = MarkdownProtector.new(core_chunk)
         protected_text, tokens = protector.protect
 
         prompt = build_prompt(protected_text, @target_language)
         response = make_llm_request(prompt, api_config)
-        return Result.new(error: response[:error]) if response[:error]
+        if response[:error]
+          return(
+            Result.new(
+              error: response[:error],
+              error_kind: response[:error_kind] || "transient"
+            )
+          )
+        end
 
         total_tokens_used += response[:tokens_used].to_i
         translated_text = strip_llm_wrapper(response[:text])
-        restored, missing_tokens = MarkdownProtector.restore_and_verify(translated_text, tokens)
+        restored, missing_tokens =
+          MarkdownProtector.restore_and_verify(translated_text, tokens)
 
         if missing_tokens.any?
           log_error(
             StandardError.new(
-              "LLM response dropped #{missing_tokens.size} protected placeholder(s)",
+              "LLM response dropped #{missing_tokens.size} protected placeholder(s)"
             ),
-            "token_restore",
+            "token_restore"
           )
           return(
             Result.new(
               error:
                 "Translation dropped #{missing_tokens.size} protected placeholder(s) (links/code/mentions)",
+              error_kind: "permanent"
             )
           )
         end
@@ -94,7 +132,8 @@ module BabelReunited
       end
 
       translated_raw = translated_chunks.join("")
-      translated_title = translate_title(title, @target_language, api_config) if title.present?
+      translated_title =
+        translate_title(title, @target_language, api_config) if title.present?
 
       Result.new(
         translated_raw: translated_raw,
@@ -105,9 +144,9 @@ module BabelReunited
           provider_info: {
             model: api_config[:model],
             tokens_used: total_tokens_used,
-            provider: api_config[:provider],
-          },
-        },
+            provider: api_config[:provider]
+          }
+        }
       )
     rescue BabelReunited::RateLimitError
       raise
@@ -120,10 +159,13 @@ module BabelReunited
         error: e,
         processing_time: 0,
         context: {
-          phase: "service_exception",
-        },
+          phase: "service_exception"
+        }
       )
-      Result.new(error: "Translation service temporarily unavailable")
+      Result.new(
+        error: "Translation service temporarily unavailable",
+        error_kind: "transient"
+      )
     end
 
     private
@@ -191,8 +233,8 @@ module BabelReunited
             timeout: timeout,
             open_timeout: timeout,
             read_timeout: timeout,
-            write_timeout: timeout,
-          },
+            write_timeout: timeout
+          }
         ) do |f|
           f.request :json
           f.response :json
@@ -211,12 +253,14 @@ module BabelReunited
           messages: [{ role: "user", content: prompt }],
           max_tokens: max_tokens,
           token_param: token_param,
-          supports_temperature: api_config[:supports_temperature],
+          supports_temperature: api_config[:supports_temperature]
         )
 
       response =
         conn.post(provider.endpoint_path) do |req|
-          provider.headers(api_config[:api_key]).each { |k, v| req.headers[k] = v }
+          provider
+            .headers(api_config[:api_key])
+            .each { |k, v| req.headers[k] = v }
           req.body = request_body.to_json
         end
 
@@ -230,26 +274,41 @@ module BabelReunited
     rescue Faraday::Error => e
       Rails.logger.error("Network error: #{e.message}")
       log_error(e, "network_error")
-      { error: "Network error: #{e.message}" }
+      { error: "Network error: #{e.message}", error_kind: "transient" }
     end
 
     def get_api_config
       config = BabelReunited::ModelConfig.get_config
       if config.nil?
-        return { error: "Invalid preset model: #{SiteSetting.babel_reunited_preset_model}" }
+        return(
+          {
+            error:
+              "Invalid preset model: #{SiteSetting.babel_reunited_preset_model}"
+          }
+        )
       end
 
       api_key = config[:api_key]
-      return { error: "API key not configured for provider #{config[:provider]}" } if api_key.blank?
+      if api_key.blank?
+        return(
+          { error: "API key not configured for provider #{config[:provider]}" }
+        )
+      end
 
       base_url = config[:base_url]
       if base_url.blank?
-        return { error: "Base URL not configured for provider #{config[:provider]}" }
+        return(
+          { error: "Base URL not configured for provider #{config[:provider]}" }
+        )
       end
 
       model_name = config[:model_name]
       if model_name.blank?
-        return { error: "Model name not configured for provider #{config[:provider]}" }
+        return(
+          {
+            error: "Model name not configured for provider #{config[:provider]}"
+          }
+        )
       end
 
       {
@@ -262,7 +321,7 @@ module BabelReunited
         provider: config[:provider],
         max_tokens_for_length: config[:max_tokens],
         output_token_param: config[:output_token_param] || :max_tokens,
-        supports_temperature: config.fetch(:supports_temperature, true),
+        supports_temperature: config.fetch(:supports_temperature, true)
       }
     end
 
@@ -281,7 +340,9 @@ module BabelReunited
     end
 
     def get_max_content_length(api_config)
-      return SiteSetting.babel_reunited_max_content_length if api_config[:provider] == "custom"
+      if api_config[:provider] == "custom"
+        return SiteSetting.babel_reunited_max_content_length
+      end
 
       max_tokens = api_config[:max_tokens_for_length]
       return SiteSetting.babel_reunited_max_content_length unless max_tokens
@@ -311,15 +372,23 @@ module BabelReunited
 
       case response.status
       when 401
-        { error: "Invalid API key" }
+        # An admin can fix the key; the work itself is still possible.
+        { error: "Invalid API key", error_kind: "transient" }
       when 429
-        { error: "Rate limit exceeded. Please try again later." }
+        {
+          error: "Rate limit exceeded. Please try again later.",
+          error_kind: "transient"
+        }
       when 400
-        { error: "Bad request: #{error_message}" }
+        # The request itself is unacceptable to the provider.
+        { error: "Bad request: #{error_message}", error_kind: "permanent" }
       when 500..599
-        { error: "Translation service temporarily unavailable" }
+        {
+          error: "Translation service temporarily unavailable",
+          error_kind: "transient"
+        }
       else
-        { error: "API error: #{error_message}" }
+        { error: "API error: #{error_message}", error_kind: "transient" }
       end
     end
 
@@ -342,7 +411,7 @@ module BabelReunited
         status: response.status,
         body: body_for_log[0, 4000],
         phase: "post_chat_completions",
-        provider: api_config[:provider],
+        provider: api_config[:provider]
       )
     rescue StandardError
       # best-effort logging
@@ -355,8 +424,8 @@ module BabelReunited
         error: error,
         processing_time: 0,
         context: {
-          phase: phase,
-        },
+          phase: phase
+        }
       )
     rescue StandardError
       # best-effort logging

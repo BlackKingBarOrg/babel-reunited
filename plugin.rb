@@ -94,12 +94,22 @@ module ::BabelReunited
     BabelReunited::PostTranslation.find_translation(post.id, language)
   end
 
+  # Every path that hands a translation body to a reader goes through here,
+  # so a stale translation of content that has since been cut never escapes.
+  def self.displayable_translation_for(post, language)
+    translation = stream_translation_for(post, language)
+    return nil if translation.blank?
+    return nil unless translation.safe_to_display?(post)
+
+    translation
+  end
+
   def self.translated_title_for(post, language)
     # A translation into the post's own language is redundant and survives a
     # rewrite as permanently stale content, so it must never supply a title.
     return nil if language == current_detected_locale_for(post)
 
-    translation = stream_translation_for(post, language)
+    translation = displayable_translation_for(post, language)
 
     return nil if translation.blank? || translation.failed?
     return nil if translation.translated_title.blank?
@@ -144,6 +154,9 @@ module ::BabelReunited
           :language,
           :status,
           :source_language,
+          # Small JSON, unlike the body columns this preload exists to avoid;
+          # safe_to_display? needs the redaction baseline it carries.
+          :metadata,
           :created_at
         )
         .order(created_at: :desc)
@@ -391,8 +404,16 @@ after_initialize do
       preloaded ||
         object
           .post_translations
-          .select(:id, :post_id, :language, :status, :source_language)
+          .select(
+            :id,
+            :post_id,
+            :language,
+            :status,
+            :source_language,
+            :metadata
+          )
           .to_a
+    rows = rows.reject { |t| t.stale? && !t.safe_to_display?(object) }
     rows.map do |t|
       {
         language: t.language,
@@ -462,7 +483,7 @@ after_initialize do
     include_condition: translated_title_condition
   ) do
     language = BabelReunited.preferred_language_for(scope&.user)
-    translation = BabelReunited.stream_translation_for(object, language)
+    translation = BabelReunited.displayable_translation_for(object, language)
     if translation
       BabelReunited::PostTranslationSerializer.new(
         translation,

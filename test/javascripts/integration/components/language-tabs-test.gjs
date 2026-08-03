@@ -40,6 +40,14 @@ async function openLanguageMenu() {
   await click(".babel-reunited-language-tab.--menu");
 }
 
+// The view trigger waits for the element to intersect the viewport and hold.
+// IntersectionObserver delivers outside the runloop, so settled() alone does
+// not cover it.
+async function waitForViewTrigger() {
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  await settled();
+}
+
 module(
   "Discourse Babel Reunited | Integration | Component | language-tabs",
   function (hooks) {
@@ -760,6 +768,7 @@ module(
           </LanguageTabsConnector>
         </template>
       );
+      await waitForViewTrigger();
 
       assert.verifySteps(["POST th trigger=view"]);
       assert
@@ -789,6 +798,7 @@ module(
           </LanguageTabsConnector>
         </template>
       );
+      await waitForViewTrigger();
 
       assert.verifySteps([]);
     });
@@ -813,6 +823,7 @@ module(
           </LanguageTabsConnector>
         </template>
       );
+      await waitForViewTrigger();
       assert.verifySteps(["POST called"]);
 
       // Re-render the same post (cloak/uncloak cycle)
@@ -824,6 +835,7 @@ module(
           </LanguageTabsConnector>
         </template>
       );
+      await waitForViewTrigger();
 
       assert.verifySteps([], "no second request for the same pair");
     });

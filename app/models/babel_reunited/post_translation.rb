@@ -91,6 +91,26 @@ module BabelReunited
       status == "stale"
     end
 
+    # How much the source may shrink before stale content stops being served.
+    # An edit that removes a meaningful chunk is the shape a redaction takes,
+    # and the stale translation still carries whatever was removed.
+    REDACTION_RATIO = 0.8
+
+    # Stale bodies stay readable while a re-translation catches up — except
+    # when the post got materially shorter, because then the old translation
+    # is the only place the removed text still exists.
+    #
+    # This does not catch a same-length rewrite; for those the author or staff
+    # can delete the translation outright (DELETE .../translations/:language).
+    def safe_to_display?(post)
+      return true unless stale?
+
+      original_length = (metadata || {})["source_length"].to_i
+      return true if original_length.zero?
+
+      post.raw.to_s.length >= original_length * REDACTION_RATIO
+    end
+
     # A claim older than this is treated as abandoned: the worker died, the
     # enqueue failed, or the job was dropped. Twice the worst case a job can
     # legitimately run, so a translation still calling the provider is never

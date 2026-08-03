@@ -62,7 +62,12 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
     /\ATarget language not specified\z/
   ].freeze
 
-  def self.error_kind_for(message)
+  # The service classifies its own failures; this only covers the callers
+  # that raise or return a bare message (post/category guards, unexpected
+  # exceptions), where there is no structured kind to read.
+  def self.error_kind_for(message, kind = nil)
+    return kind if kind.present?
+
     if PERMANENT_ERROR_PATTERNS.any? { |p| message.to_s.match?(p) }
       "permanent"
     else
@@ -253,11 +258,11 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
     ).merge(extra)
   end
 
-  def failure_metadata(translation, message, **extra)
+  def failure_metadata(translation, message, kind: nil, **extra)
     meta = translation.metadata || {}
     meta.merge(
       error: message,
-      error_kind: self.class.error_kind_for(message),
+      error_kind: self.class.error_kind_for(message, kind),
       failure_count: meta["failure_count"].to_i + 1,
       failed_at: Time.current
     ).merge(extra)
@@ -324,6 +329,8 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
           translation,
           confidence: result.ai_response[:confidence],
           provider_info: result.ai_response[:provider_info],
+          # Baseline for spotting a later edit that removed content.
+          source_length: post.raw.to_s.length,
           translated_at: Time.current,
           completed_at: Time.current
         )
@@ -346,6 +353,7 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
       translation: translation,
       result: result
     )
+    publish_translated_title(post, translation)
 
     if final_status == "stale"
       log_skipped(post.id, target_language, "content_changed_midflight")
@@ -367,7 +375,8 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
   )
     translation.update!(
       status: "failed",
-      metadata: failure_metadata(translation, result.error)
+      metadata:
+        failure_metadata(translation, result.error, kind: result.error_kind)
     )
 
     ::BabelReunited::TranslationLogger.log_translation_error(
@@ -456,6 +465,24 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
     payload[:error] = error if error
 
     MessageBus.publish("/post-translations/#{post.id}", payload, **audience)
+  end
+
+  # The title lives outside the post stream, so the body swapping in over
+  # MessageBus leaves it in the original language until a reload. Topic-level
+  # channel because that is the id the title component reliably has.
+  def publish_translated_title(post, translation)
+    return unless post.post_number == 1
+    return if translation.translated_title.blank?
+
+    MessageBus.publish(
+      "/babel-translated-title/#{post.topic_id}",
+      {
+        topic_id: post.topic_id,
+        language: translation.language,
+        translated_title: translation.translated_title
+      },
+      **::BabelReunited::MessageBusAudience.options_for(post)
+    )
   end
 
   def log_skipped(post_id, target_language, reason)

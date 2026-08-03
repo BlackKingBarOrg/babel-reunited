@@ -262,6 +262,54 @@ RSpec.describe BabelReunited::PostTranslation do
     end
   end
 
+  describe "#safe_to_display?" do
+    def stale_translation(source_length)
+      Fabricate(
+        :post_translation,
+        post: post,
+        language: "de",
+        status: "stale",
+        metadata: {
+          "source_length" => source_length
+        }
+      )
+    end
+
+    it "serves stale content when the post is intact" do
+      t = stale_translation(post.raw.length)
+      expect(t.safe_to_display?(post)).to be true
+    end
+
+    it "withholds stale content once the post was materially cut back" do
+      t = stale_translation(post.raw.length * 3)
+      expect(t.safe_to_display?(post)).to be false
+    end
+
+    it "tolerates a small edit" do
+      t = stale_translation((post.raw.length / 0.95).to_i)
+      expect(t.safe_to_display?(post)).to be true
+    end
+
+    it "never withholds a completed translation" do
+      t =
+        Fabricate(
+          :post_translation,
+          post: post,
+          language: "de",
+          status: "completed",
+          metadata: {
+            "source_length" => post.raw.length * 10
+          }
+        )
+      expect(t.safe_to_display?(post)).to be true
+    end
+
+    it "serves records that predate the baseline" do
+      t = stale_translation(nil)
+      expect(t.safe_to_display?(post)).to be true
+    end
+  end
+
   describe "#translation_lease_expired?" do
     def translating_record
       Fabricate(

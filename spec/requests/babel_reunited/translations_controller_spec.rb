@@ -103,6 +103,21 @@ RSpec.describe BabelReunited::TranslationsController do
       get "/babel-reunited/posts/#{post_record.id}/translations/fr.json"
       expect(response.status).to eq(404)
     end
+
+    it "withholds stale content whose source was cut back" do
+      Fabricate(
+        :post_translation,
+        post: post_record,
+        language: "de",
+        status: "stale",
+        metadata: {
+          "source_length" => post_record.raw.length * 5
+        }
+      )
+
+      get "/babel-reunited/posts/#{post_record.id}/translations/de.json"
+      expect(response.status).to eq(404)
+    end
   end
 
   describe "POST /babel-reunited/posts/:post_id/translations" do
