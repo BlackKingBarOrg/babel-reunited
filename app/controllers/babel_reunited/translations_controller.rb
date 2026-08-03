@@ -165,6 +165,9 @@ module BabelReunited
       end
 
       translation.destroy!
+      # Deleting a bad translation is the escape hatch for a bad banner, so it
+      # has to reach the banner cache too.
+      BabelReunited.clear_banner_cache_for(@post)
       render json: { message: "Translation deleted" }
     end
 

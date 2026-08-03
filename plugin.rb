@@ -221,6 +221,17 @@ module ::BabelReunited
     translation_enabled_for_post?(post)
   end
 
+  # The banner payload is cached process-wide and no post-level event
+  # invalidates it, so a translation that lands (or is deleted) after the
+  # banner was first rendered would otherwise never reach readers. Core clears
+  # the whole cache rather than single keys, so this does the same.
+  def self.clear_banner_cache_for(post)
+    return if post.blank? || post.post_number != 1
+    return unless post.topic&.archetype == Archetype.banner
+
+    ApplicationLayoutPreloader.banner_json_cache.clear
+  end
+
   def self.store_detected_locale(post, locale, raw_sha: nil)
     return if post.blank? || locale.blank?
     post.custom_fields[DETECTED_LOCALE_FIELD] = locale
@@ -315,6 +326,9 @@ end
 require_relative "lib/babel_reunited/engine"
 require_relative "lib/babel_reunited/locales"
 require_relative "lib/babel_reunited/usage_fuse"
+require_relative "lib/babel_reunited/banner_translator"
+require_relative "lib/babel_reunited/topic_extension"
+require_relative "lib/babel_reunited/layout_preloader_extension"
 
 # Load models BEFORE after_initialize
 require_relative "app/models/babel_reunited/post_translation"
@@ -390,6 +404,13 @@ after_initialize do
               class_name: "BabelReunited::UserPreferredLanguage",
               dependent: :destroy
     end
+  end
+
+  # The banner renders outside the post stream, so no connector or serializer
+  # can reach it. These two are the only seams that exist.
+  reloadable_patch do
+    Topic.prepend(BabelReunited::TopicExtension)
+    ApplicationLayoutPreloader.prepend(BabelReunited::LayoutPreloaderExtension)
   end
 
   plugin_enabled_condition = -> { SiteSetting.babel_reunited_enabled }

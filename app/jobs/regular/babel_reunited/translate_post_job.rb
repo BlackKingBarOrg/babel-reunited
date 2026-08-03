@@ -141,6 +141,7 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
           metadata: success_metadata(translation)
         )
         log_skipped(post_id, target_language, "content_unchanged_heal")
+        BabelReunited.clear_banner_cache_for(post)
         publish_status(
           post,
           target_language,
@@ -346,6 +347,8 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
           completed_at: Time.current
         )
     )
+
+    BabelReunited.clear_banner_cache_for(post)
 
     ::BabelReunited::TranslationLogger.log_translation_success(
       post_id: post.id,
