@@ -250,6 +250,29 @@ module(
         .doesNotExist("no point repeating the same name twice");
     });
 
+    test("country-level variants are not offered", async function (assert) {
+      this.set("post", createPost({ babel_translations_meta: [] }));
+      await render(
+        <template>
+          <LanguageTabsConnector @post={{this.post}}>
+            <div class="cooked">{{trustHTML this.post.cooked}}</div>
+          </LanguageTabsConnector>
+        </template>
+      );
+
+      await openLanguageMenu();
+      await fillIn(".babel-language-picker__filter", "english");
+
+      // Only "English": American/British/Australian... translate to the same
+      // text at N times the price and fragment the cache.
+      assert.dom(".babel-language-picker__item").exists({ count: 1 });
+      assert.dom(".babel-language-picker__name").hasText("English");
+
+      // A script difference is a real difference and stays on offer.
+      await fillIn(".babel-language-picker__filter", "zh-");
+      assert.dom(".babel-language-picker__item").exists({ count: 2 });
+    });
+
     test("menu search filters the language list", async function (assert) {
       this.set("post", createPost());
       await render(

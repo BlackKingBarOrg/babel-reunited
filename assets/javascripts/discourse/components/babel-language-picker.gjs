@@ -12,7 +12,7 @@ import concatClass from "discourse/helpers/concat-class";
 import icon from "discourse/helpers/d-icon";
 import { eq } from "discourse/truth-helpers";
 import { i18n } from "discourse-i18n";
-import { SUPPORTED_LOCALES } from "../lib/babel-locales";
+import { SELECTABLE_LOCALES } from "../lib/babel-locales";
 import {
   languageDisplayName,
   languageEndonym,
@@ -100,7 +100,7 @@ export default class BabelLanguagePicker extends Component {
   get otherEntries() {
     const skip = new Set([...this.translatedCodes, ...this.excludeCodes]);
     return this.entriesFor(
-      SUPPORTED_LOCALES.filter((code) => !skip.has(code)),
+      SELECTABLE_LOCALES.filter((code) => !skip.has(code)),
       { hinted: true }
     );
   }

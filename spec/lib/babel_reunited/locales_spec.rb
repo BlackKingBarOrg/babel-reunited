@@ -64,13 +64,50 @@ RSpec.describe BabelReunited::Locales do
     end
 
     it "stays in sync with the client-side mirror" do
-      js_path =
-        File.expand_path(
-          "../../../assets/javascripts/discourse/lib/babel-locales.js",
-          __dir__
+      js = File.read(js_mirror_path)
+      supported = js[/SUPPORTED_LOCALES = \[(.*?)\];/m, 1]
+      legacy = js[/LEGACY_VARIANTS = new Set\(\[(.*?)\]\);/m, 1]
+
+      expect(supported.scan(/"([a-z-]+)"/).flatten).to eq(
+        described_class::SUPPORTED
+      )
+      expect(legacy.scan(/"([a-z-]+)"/).flatten).to eq(
+        described_class::LEGACY_VARIANTS
+      )
+    end
+
+    def js_mirror_path
+      File.expand_path(
+        "../../../assets/javascripts/discourse/lib/babel-locales.js",
+        __dir__
+      )
+    end
+  end
+
+  describe "selectable list" do
+    it "offers no country-level variant" do
+      described_class::LEGACY_VARIANTS.each do |code|
+        expect(described_class.selectable?(code)).to be false
+        expect(described_class.valid?(code)).to(
+          be(true),
+          "#{code} must stay valid so existing records keep working"
         )
-      js_codes = File.read(js_path).scan(/^\s+"([a-z-]+)",$/).flatten
-      expect(js_codes).to eq(described_class::SUPPORTED)
+      end
+    end
+
+    it "keeps script-level distinctions selectable" do
+      # Simplified and Traditional are different writing systems; Cantonese
+      # has its own code, so zh-hk adds nothing over zh-tw.
+      %w[zh-cn zh-tw yue].each do |code|
+        expect(described_class.selectable?(code)).to be true
+      end
+      expect(described_class.selectable?("zh-hk")).to be false
+    end
+
+    it "differs from the supported list only by those variants" do
+      expect(described_class::SUPPORTED - described_class::SELECTABLE).to eq(
+        described_class::LEGACY_VARIANTS
+      )
     end
   end
 end
