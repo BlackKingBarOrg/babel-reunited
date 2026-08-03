@@ -138,16 +138,18 @@ module BabelReunited
 
     SUPPORTED_SET = SUPPORTED.to_set.freeze
 
-    # Country-level variants stay valid so records and preferences that
-    # predate the curated list keep working, but they are not offered for
-    # selection: an LLM translating into "American English" rather than
-    # "English" produces the same text at twice the price, and readers
-    # spreading across variants fragment the cache the lazy layer depends on.
+    # Variants distinguished by place rather than by script. They stay valid,
+    # so records and preferences that predate the curated list keep working,
+    # but they are not offered: an LLM translating into "American English"
+    # rather than "English" produces the same text at twice the price, and
+    # readers spreading across variants fragment the cache the lazy layer
+    # depends on.
     #
-    # Script differences are the exception and stay selectable — zh-cn and
-    # zh-tw are genuinely different writing systems. zh-hk is not one: written
-    # Hong Kong Chinese is close to zh-tw, and Cantonese has its own code.
-    LEGACY_VARIANTS = %w[
+    # A different script is a real difference and stays on offer, which is why
+    # zh-cn and zh-tw survive here (shown as Simplified/Traditional, not by
+    # country). zh-hk is not a script difference: written Hong Kong Chinese is
+    # close to zh-tw, and Cantonese has its own code.
+    PLACE_VARIANTS = %w[
       de-at
       de-ch
       en-au
@@ -161,11 +163,12 @@ module BabelReunited
       fr-ch
       it-ch
       nl-be
+      pt-br
       pt-pt
       zh-hk
     ].freeze
 
-    SELECTABLE = (SUPPORTED - LEGACY_VARIANTS).freeze
+    SELECTABLE = (SUPPORTED - PLACE_VARIANTS).freeze
 
     def self.valid?(code)
       code.present? && SUPPORTED_SET.include?(code)

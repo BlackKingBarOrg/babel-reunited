@@ -130,12 +130,12 @@ export const SUPPORTED_LOCALES = [
   "zu",
 ];
 
-// Country-level variants stay valid server-side so pre-existing records and
-// preferences keep working, but they are not offered for selection: the
-// translation is the same text at twice the price, and readers spreading
-// across variants fragment the cache. Script differences are the exception
-// and stay selectable (zh-cn vs zh-tw).
-const LEGACY_VARIANTS = new Set([
+// Variants distinguished by place rather than by script. They stay valid
+// server-side so pre-existing records and preferences keep working, but they
+// are not offered: the translation is the same text at N times the price and
+// fragments the cache. A different script is a real difference, which is why
+// zh-cn and zh-tw survive (shown as Simplified/Traditional, not by country).
+const PLACE_VARIANTS = new Set([
   "de-at",
   "de-ch",
   "en-au",
@@ -149,10 +149,11 @@ const LEGACY_VARIANTS = new Set([
   "fr-ch",
   "it-ch",
   "nl-be",
+  "pt-br",
   "pt-pt",
   "zh-hk",
 ]);
 
 export const SELECTABLE_LOCALES = SUPPORTED_LOCALES.filter(
-  (code) => !LEGACY_VARIANTS.has(code)
+  (code) => !PLACE_VARIANTS.has(code)
 );

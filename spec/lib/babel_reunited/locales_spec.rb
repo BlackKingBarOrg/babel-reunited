@@ -66,13 +66,13 @@ RSpec.describe BabelReunited::Locales do
     it "stays in sync with the client-side mirror" do
       js = File.read(js_mirror_path)
       supported = js[/SUPPORTED_LOCALES = \[(.*?)\];/m, 1]
-      legacy = js[/LEGACY_VARIANTS = new Set\(\[(.*?)\]\);/m, 1]
+      legacy = js[/PLACE_VARIANTS = new Set\(\[(.*?)\]\);/m, 1]
 
       expect(supported.scan(/"([a-z-]+)"/).flatten).to eq(
         described_class::SUPPORTED
       )
       expect(legacy.scan(/"([a-z-]+)"/).flatten).to eq(
-        described_class::LEGACY_VARIANTS
+        described_class::PLACE_VARIANTS
       )
     end
 
@@ -86,13 +86,20 @@ RSpec.describe BabelReunited::Locales do
 
   describe "selectable list" do
     it "offers no country-level variant" do
-      described_class::LEGACY_VARIANTS.each do |code|
+      described_class::PLACE_VARIANTS.each do |code|
         expect(described_class.selectable?(code)).to be false
         expect(described_class.valid?(code)).to(
           be(true),
           "#{code} must stay valid so existing records keep working"
         )
       end
+    end
+
+    it "offers no variant distinguished by place" do
+      # Every remaining selectable code with a region subtag is one whose
+      # distinction is the script, shown as Simplified/Traditional.
+      region_tagged = described_class::SELECTABLE.select { |c| c.include?("-") }
+      expect(region_tagged).to contain_exactly("zh-cn", "zh-tw")
     end
 
     it "keeps script-level distinctions selectable" do
@@ -106,7 +113,7 @@ RSpec.describe BabelReunited::Locales do
 
     it "differs from the supported list only by those variants" do
       expect(described_class::SUPPORTED - described_class::SELECTABLE).to eq(
-        described_class::LEGACY_VARIANTS
+        described_class::PLACE_VARIANTS
       )
     end
   end

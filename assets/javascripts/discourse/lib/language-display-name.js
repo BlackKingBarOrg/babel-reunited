@@ -7,6 +7,15 @@ import I18n from "discourse-i18n";
 // their own language recognizes, so it leads in the UI. The name in the
 // viewer's interface locale stays available as a secondary label, which is
 // what makes an unfamiliar script identifiable to an admin.
+// What makes these two worth offering separately is the script, not the
+// place, so they are displayed by their script subtag: "Simplified Chinese"
+// rather than "Chinese (China)". The stored codes stay as they are — they
+// identify existing translations, preferences and settings.
+const DISPLAY_CODE = {
+  "zh-cn": "zh-Hans",
+  "zh-tw": "zh-Hant",
+};
+
 const cache = new Map();
 
 function buildDisplayNames(locale) {
@@ -45,7 +54,8 @@ export function languageDisplayName(code) {
   }
 
   const locale = (I18n.currentLocale() || "en").replace(/_/g, "-");
-  return nameIn(locale, code) || code;
+  const displayCode = DISPLAY_CODE[code] || code;
+  return nameIn(locale, displayCode) || code;
 }
 
 export function languageEndonym(code) {
@@ -53,5 +63,6 @@ export function languageEndonym(code) {
     return code;
   }
 
-  return capitalize(nameIn(code, code)) || code;
+  const displayCode = DISPLAY_CODE[code] || code;
+  return capitalize(nameIn(displayCode, displayCode)) || code;
 }

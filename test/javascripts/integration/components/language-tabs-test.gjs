@@ -221,7 +221,7 @@ module(
         .exists("the interface-locale name stays visible");
 
       // The interface-locale name and the code still work.
-      await fillIn(".babel-language-picker__filter", "Chinese (China)");
+      await fillIn(".babel-language-picker__filter", "Simplified Chinese");
       assert.dom(".babel-language-picker__item").exists({ count: 1 });
 
       await fillIn(".babel-language-picker__filter", "zh-cn");
