@@ -152,6 +152,26 @@ RSpec.describe BabelReunited::LanguageDetectionService do
       expect(user).not_to include("example.com")
       expect(user).to include("A sentence long enough to sample.")
     end
+
+    # The translation path tokenizes these before the provider sees them, so
+    # detection must not be the looser door into the same content.
+    it "strips BBCode blocks the translation path never sends" do
+      post_record.update_columns(
+        raw:
+          "A sentence long enough to sample the language of this post.\n" \
+            "[code]\nAWS_SECRET_ACCESS_KEY=leaked-from-detection\n[/code]\n" \
+            "[details=\"logs\"]\nstack trace with tokens\n[/details]\n" \
+            "[quote=\"someone said\"]\nquoted material\n[/quote]\n" \
+            "More prose so the sample is not just markup."
+      )
+
+      body = last_request_body
+      user = body["messages"].last["content"]
+      expect(user).not_to include("leaked-from-detection")
+      expect(user).not_to include("stack trace with tokens")
+      expect(user).not_to include("quoted material")
+      expect(user).to include("A sentence long enough to sample")
+    end
   end
 
   describe "retryability" do

@@ -94,12 +94,17 @@ module BabelReunited
       # Code blocks carry no language signal and can contain secrets that
       # have no business reaching the provider; URLs can dominate short
       # posts. Both are removed before sampling.
-      @post
-        .raw
-        .to_s
-        .gsub(/^```[\s\S]*?^```/m, " ")
-        .gsub(/`[^`\n]+`/, " ")
-        .gsub(%r{https?://\S+}, " ")[
+      #
+      # The block patterns come from MarkdownProtector rather than a second
+      # list of our own: the translation path never shows a provider what
+      # those blocks hold, and detection must not be the looser door. That
+      # shared set is what covers BBCode [code], [quote] and [details].
+      sample = @post.raw.to_s
+      BabelReunited::MarkdownProtector::BLOCK_PATTERNS.each do |pattern|
+        sample = sample.gsub(pattern, " ")
+      end
+
+      sample.gsub(/`[^`\n]+`/, " ").gsub(%r{https?://\S+}, " ")[
         0,
         SAMPLE_LENGTH
       ].to_s
