@@ -169,6 +169,73 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
       lock_key = "babel_reunited:translate:#{post_record.id}:es"
       expect(Discourse.redis.exists?(lock_key)).to be false
     end
+
+    # Dropping a request while another job holds the lock is only safe because
+    # that job's result satisfies it. When the holder discards its result
+    # instead — the row was deliberately deleted mid-flight — the dropped
+    # request has to come back, or the reader waits forever on a "queued" that
+    # nothing will ever complete.
+    it "hands a request dropped on the lock back to the releasing job" do
+      lock_key = "babel_reunited:translate:#{post_record.id}:es"
+      Discourse.redis.set(lock_key, "1", ex: 300)
+
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+
+      expect(
+        Discourse.redis.get(described_class.rerun_key(post_record.id, "es"))
+      ).to eq("0")
+
+      Discourse.redis.del(lock_key)
+      BabelReunited::TranslationService
+        .any_instance
+        .stubs(:call)
+        .returns(success_result)
+
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+
+      expect(
+        job_enqueued?(
+          job: described_class,
+          args: {
+            post_id: post_record.id,
+            target_language: "es",
+            force_update: false
+          }
+        )
+      ).to be true
+      expect(
+        Discourse.redis.get(described_class.rerun_key(post_record.id, "es"))
+      ).to be_nil
+    end
+
+    it "leaves no marker when nothing contended for the lock" do
+      BabelReunited::TranslationService
+        .any_instance
+        .stubs(:call)
+        .returns(success_result)
+
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+
+      expect(
+        job_enqueued?(
+          job: described_class,
+          args: {
+            post_id: post_record.id,
+            target_language: "es",
+            force_update: false
+          }
+        )
+      ).to be false
+    end
   end
 
   describe "source_sha check" do
@@ -501,6 +568,38 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
 
       expect(
         BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      ).to be_nil
+    end
+
+    # The check before the write cannot see a deletion that lands while the
+    # INSERT is in flight; without the second check that INSERT silently
+    # resurrects the row a person just removed.
+    it "removes a row it inserted while the deletion was landing" do
+      target_post_id = post_record.id
+      BabelReunited::TranslationService
+        .any_instance
+        .stubs(:call)
+        .returns(success_result)
+
+      # False on the pre-write check, true afterwards: the deletion lands in
+      # between, which is exactly the window under test.
+      seq = sequence("tombstone")
+      BabelReunited
+        .expects(:translation_tombstoned_since?)
+        .returns(false)
+        .in_sequence(seq)
+      BabelReunited
+        .expects(:translation_tombstoned_since?)
+        .returns(true)
+        .in_sequence(seq)
+
+      described_class.new.execute(
+        post_id: target_post_id,
+        target_language: "es"
+      )
+
+      expect(
+        BabelReunited::PostTranslation.find_translation(target_post_id, "es")
       ).to be_nil
     end
 

@@ -98,7 +98,11 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
     # after this moment wins over this job, one before it does not.
     @job_started_at = Time.current
 
-    with_translation_lock(post_id, target_language) do
+    with_translation_lock(
+      post_id,
+      target_language,
+      force_update: force_update
+    ) do
       post = find_post(post_id, target_language)
       return unless post
 
@@ -192,7 +196,7 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
 
   private
 
-  def with_translation_lock(post_id, language)
+  def with_translation_lock(post_id, language, force_update: false)
     lock_key = "babel_reunited:translate:#{post_id}:#{language}"
     lock_token = SecureRandom.hex(16)
     acquired =
@@ -203,6 +207,15 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
         ex: self.class.lock_ttl
       )
     unless acquired
+      # Dropping this request is right as long as the holder's result will
+      # satisfy it. A holder that discards its own result — a translation
+      # deleted mid-flight — leaves it unserved forever instead, so leave a
+      # marker the holder picks up when it releases the lock.
+      Discourse.redis.setex(
+        self.class.rerun_key(post_id, language),
+        self.class.lock_ttl,
+        force_update ? "1" : "0"
+      )
       log_skipped(post_id, language, "locked")
       return
     end
@@ -217,7 +230,32 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
         keys: [namespaced_key],
         argv: [lock_token]
       )
+      hand_off_pending_request(post_id, language)
     end
+  end
+
+  def self.rerun_key(post_id, language)
+    "babel_reunited:rerun:#{post_id}:#{language}"
+  end
+
+  # Re-enqueues a request that arrived while this job held the lock. Costs
+  # nothing in the common case: the follow-up job finds the translation this
+  # one just wrote and returns on the source_unchanged path. It only does real
+  # work when this job produced nothing usable.
+  def hand_off_pending_request(post_id, language)
+    key = self.class.rerun_key(post_id, language)
+    pending = Discourse.redis.get(key)
+    return if pending.nil?
+    # Taking the marker atomically keeps concurrent releases from each
+    # enqueueing their own follow-up.
+    return unless Discourse.redis.del(key) == 1
+
+    Jobs.enqueue(
+      self.class,
+      post_id: post_id,
+      target_language: language,
+      force_update: pending == "1"
+    )
   end
 
   def find_post(post_id, target_language)
@@ -287,11 +325,7 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
   # already paid for would be dropped without a trace. Writing through a
   # fresh lookup puts it back instead.
   def write_result!(post, target_language, attrs)
-    if BabelReunited.translation_tombstoned_since?(
-         post.id,
-         target_language,
-         @job_started_at
-       )
+    if deletion_won?(post.id, target_language)
       log_skipped(post.id, target_language, "deleted_while_translating")
       return nil
     end
@@ -303,7 +337,7 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
       )
     record.assign_attributes(attrs)
     record.save!
-    record
+    discard_if_deleted(record, target_language)
   rescue ActiveRecord::RecordNotUnique, ActiveRecord::RecordInvalid
     # Re-created between the lookup and the insert; that row is as good as
     # this one, so write into it.
@@ -314,7 +348,27 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
       )
     raise if record.nil?
     record.update!(attrs)
-    record
+    discard_if_deleted(record, target_language)
+  end
+
+  # The check before the write leaves a window of its own: a deletion landing
+  # between it and the INSERT would be undone by that INSERT. Checking again
+  # afterwards closes it, because nothing writes after this point — a deletion
+  # arriving later finds the row and removes it the ordinary way.
+  def discard_if_deleted(record, target_language)
+    return record unless deletion_won?(record.post_id, target_language)
+
+    record.destroy
+    log_skipped(record.post_id, target_language, "deleted_while_translating")
+    nil
+  end
+
+  def deletion_won?(post_id, target_language)
+    BabelReunited.translation_tombstoned_since?(
+      post_id,
+      target_language,
+      @job_started_at
+    )
   end
 
   def ensure_translation_record(post, target_language)
