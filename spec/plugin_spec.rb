@@ -151,6 +151,44 @@ RSpec.describe BabelReunited do
       ).to be false
     end
 
+    # Invalidation compares each row's fingerprint against the current
+    # content instead of blanket-staling: an edit that leaves the translated
+    # content identical (a category or tag change) must not discard rows.
+    it "keeps a completed translation whose fingerprint still matches" do
+      translation =
+        Fabricate(
+          :post_translation,
+          post: post_record,
+          language: "de",
+          source_sha:
+            Jobs::BabelReunited::TranslatePostJob.content_sha(post_record)
+        )
+
+      revisor = OpenStruct.new(topic_diff: {})
+      DiscourseEvent.trigger(:post_edited, post_record, false, revisor)
+
+      expect(translation.reload.status).to eq("completed")
+    end
+
+    # The fingerprint includes the topic title for the first post, so a
+    # title-only edit outdates lazy rows even though the raw is unchanged.
+    it "marks lazy rows stale on a title-only edit" do
+      translation =
+        Fabricate(
+          :post_translation,
+          post: post_record,
+          language: "de",
+          source_sha:
+            Jobs::BabelReunited::TranslatePostJob.content_sha(post_record)
+        )
+
+      post_record.topic.update_columns(title: "A freshly retitled topic")
+      revisor = OpenStruct.new(topic_diff: {})
+      DiscourseEvent.trigger(:post_edited, post_record.reload, false, revisor)
+
+      expect(translation.reload.status).to eq("stale")
+    end
+
     it "keeps lazy translated_content readable after being marked stale" do
       translation =
         Fabricate(
@@ -424,7 +462,11 @@ RSpec.describe BabelReunited do
       json = serialize_post(post_record)
 
       expect(json[:babel_preferred_translation]).to be_nil
-      expect(json[:babel_translations_meta]).to be_empty
+      # The body is withheld, but the row's status stays visible so the
+      # client can render progress instead of re-enqueueing.
+      expect(
+        json[:babel_translations_meta].map { |t| t[:status] }
+      ).to contain_exactly("stale")
     end
 
     # An edit moves every completed translation to stale, and the edit that
@@ -448,7 +490,32 @@ RSpec.describe BabelReunited do
       json = serialize_post(post_record)
 
       expect(json[:babel_preferred_translation]).to be_nil
-      expect(json[:babel_translations_meta]).to be_empty
+      expect(
+        json[:babel_translations_meta].map { |t| t[:status] }
+      ).to contain_exactly("stale")
+    end
+
+    it "keeps translating and failed rows visible in the metadata" do
+      Fabricate(
+        :post_translation,
+        post: post_record,
+        language: "es",
+        status: "translating",
+        translated_content: ""
+      )
+      Fabricate(
+        :post_translation,
+        post: post_record,
+        language: "ja",
+        status: "failed",
+        translated_content: ""
+      )
+
+      json = serialize_post(post_record)
+
+      expect(
+        json[:babel_translations_meta].map { |t| t[:status] }
+      ).to contain_exactly("translating", "failed")
     end
 
     it "includes lightweight babel_translations_meta without bodies" do
@@ -905,6 +972,36 @@ RSpec.describe BabelReunited do
   end
 
   describe "BabelReunited module methods" do
+    describe ".same_language?" do
+      it "matches identical codes" do
+        expect(BabelReunited.same_language?("es", "es")).to be true
+      end
+
+      it "collapses regional variants of the same base language" do
+        expect(BabelReunited.same_language?("en-us", "en")).to be true
+        expect(BabelReunited.same_language?("en-gb", "en-us")).to be true
+        expect(BabelReunited.same_language?("pt-pt", "pt")).to be true
+      end
+
+      it "never collapses Chinese variants (distinct scripts)" do
+        expect(BabelReunited.same_language?("zh-cn", "zh-tw")).to be false
+        expect(BabelReunited.same_language?("zh-cn", "zh-cn")).to be true
+      end
+
+      it "is case-insensitive" do
+        expect(BabelReunited.same_language?("EN-US", "en")).to be true
+      end
+
+      it "treats different languages as different" do
+        expect(BabelReunited.same_language?("es", "en")).to be false
+      end
+
+      it "returns false when either side is blank" do
+        expect(BabelReunited.same_language?(nil, "en")).to be false
+        expect(BabelReunited.same_language?("en", "")).to be false
+      end
+    end
+
     describe ".preferred_language_for" do
       it "returns language when user has enabled preference" do
         Fabricate(

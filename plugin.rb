@@ -53,6 +53,24 @@ module ::BabelReunited
     translation_enabled_for_category?(post.topic&.category_id)
   end
 
+  # Regional variants (en-us, pt-pt) translate identically to their base
+  # language, so treating them as different languages would re-open
+  # self-translation for readers with legacy regional preferences. Chinese
+  # variants are distinct scripts and are never collapsed.
+  def self.same_language?(a, b)
+    return false if a.blank? || b.blank?
+
+    a = a.to_s.downcase
+    b = b.to_s.downcase
+    return true if a == b
+
+    primary_a = a.split("-").first
+    primary_b = b.split("-").first
+    return false if primary_a == "zh" || primary_b == "zh"
+
+    primary_a == primary_b
+  end
+
   # Worst case a single translation job can legitimately occupy: every chunk
   # plus the title, each allowed a full provider timeout, with slack for
   # cooking and persistence. Both the job's lock and the view lane's claim
@@ -99,7 +117,7 @@ module ::BabelReunited
   # Same-language records are legacy data (fanout no longer creates them) and
   # can be LLM answer-mode artifacts, so they never reach a reader either.
   def self.displayable_translation_for(post, language)
-    return nil if language == current_detected_locale_for(post)
+    return nil if same_language?(language, current_detected_locale_for(post))
 
     translation = stream_translation_for(post, language)
     return nil if translation.blank?
@@ -111,7 +129,7 @@ module ::BabelReunited
   def self.translated_title_for(post, language)
     # A translation into the post's own language is redundant and survives a
     # rewrite as permanently stale content, so it must never supply a title.
-    return nil if language == current_detected_locale_for(post)
+    return nil if same_language?(language, current_detected_locale_for(post))
 
     translation = displayable_translation_for(post, language)
 
@@ -300,8 +318,9 @@ module ::BabelReunited
     return unless SiteSetting.babel_reunited_enabled
     return unless translatable_post?(post)
 
+    detected = current_detected_locale_for(post)
     languages =
-      auto_translate_languages - [current_detected_locale_for(post)].compact
+      auto_translate_languages.reject { |l| same_language?(l, detected) }
     return if languages.empty?
 
     languages.each do |language|
@@ -334,14 +353,25 @@ module ::BabelReunited
       if content_changed
         []
       else
-        auto_translate_languages - [detected_locale_for(post)].compact
+        auto_translate_languages.reject do |l|
+          same_language?(l, detected_locale_for(post))
+        end
       end
 
     # Invalidation is local bookkeeping and runs for every post, including the
     # ones we will not send anywhere below: a hidden post whose content
     # changed still has outdated translations, and they must not resurface as
-    # current when it becomes visible again.
-    outdated = post.post_translations.where(status: "completed")
+    # current when it becomes visible again. Rows are compared against the
+    # translation fingerprint (which includes the title), not the raw-only
+    # detection sha, so a title-only edit invalidates lazy rows too.
+    current_sha = Jobs::BabelReunited::TranslatePostJob.content_sha(post)
+    # IS DISTINCT FROM: legacy rows with a NULL source_sha are outdated too;
+    # where.not would skip them under SQL NULL semantics.
+    outdated =
+      post
+        .post_translations
+        .where(status: "completed")
+        .where("source_sha IS DISTINCT FROM ?", current_sha)
     outdated = outdated.where.not(language: eager) if eager.any?
     outdated.update_all(status: "stale", updated_at: Time.current)
 
@@ -483,10 +513,16 @@ after_initialize do
           .post_translations
           .select(:id, :post_id, :language, :status, :source_language)
           .to_a
-    rows = rows.select(&:safe_to_display?)
-    # Legacy same-language records must not surface as switchable languages
+    # Every status ships: the client's state machine needs translating rows
+    # to keep showing progress across reloads (and not re-enqueue, burning
+    # fuse quota) and failed rows to offer a retry. Bodies stay guarded by
+    # displayable_translation_for / the show endpoint; metadata is harmless.
+    # Same-language records must not surface as switchable languages though.
     detected = BabelReunited.current_detected_locale_for(object)
-    rows = rows.reject { |t| t.language == detected } if detected
+    if detected
+      rows =
+        rows.reject { |t| BabelReunited.same_language?(t.language, detected) }
+    end
     rows.map do |t|
       {
         language: t.language,
