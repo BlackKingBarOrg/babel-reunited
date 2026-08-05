@@ -27,15 +27,11 @@ module BabelReunited
         # Chinese they asked for.
         return nil if language == detected
 
+        # displayable_translation_for already applies the display guard, so
+        # anything that reaches here is a translation of the post's current
+        # content. A blank body is a claim that has not produced one yet.
         translation = BabelReunited.displayable_translation_for(post, language)
-        next if translation.blank?
-
-        # Status is deliberately not consulted. Content is only ever written on
-        # a successful translation, so any non-blank body was complete once;
-        # stale, failed and re-claimed records all carry one, and showing it
-        # beats falling back to a language the reader did not ask for. Content
-        # that outlived a redacting edit is already filtered out above.
-        next if translation.translated_content.blank?
+        next if translation.blank? || translation.translated_content.blank?
 
         return translation.translated_content
       end

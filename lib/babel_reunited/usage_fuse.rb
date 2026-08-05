@@ -27,34 +27,43 @@ module BabelReunited
       Discourse.redis.get(user_key(user)).to_i
     end
 
-    def self.site_exhausted?
-      limit = SiteSetting.babel_reunited_daily_translation_limit
-      return false if limit <= 0
+    # Reserves one translation against both daily fuses. Returns nil when the
+    # request is admitted, or the name of the fuse that rejected it.
+    #
+    # Counting and checking are one step on purpose. Reading the counter and
+    # incrementing it separately lets every concurrent request see the same
+    # under-limit value and pass together, so the fuse leaks precisely when it
+    # is under load — the case it exists for. INCR returns the value after
+    # incrementing, so the caller that pushes the counter past the limit is
+    # the one rejected, and no two callers can be handed the same slot.
+    #
+    # The user fuse is charged first: someone already over their own limit
+    # must not spend site quota to find that out. A rejected request leaves
+    # its increment behind, which only makes a tripped fuse slightly stickier
+    # until the key expires — the safe direction for a circuit breaker.
+    def self.admit(user)
+      if user.present?
+        limit = SiteSetting.babel_reunited_user_daily_translation_limit
+        return "user_daily_limit" unless claim(user_key(user), limit)
+      end
 
-      count = site_count
-      return false if count < limit
+      limit = SiteSetting.babel_reunited_daily_translation_limit
+      return "site_daily_limit" unless claim(site_key, limit)
+
+      nil
+    end
+
+    def self.claim(key, limit)
+      return true if limit.to_i <= 0
+
+      count = Discourse.redis.incr(key)
+      Discourse.redis.expire(key, TTL) if count == 1
+      return true if count <= limit
 
       Rails.logger.warn(
-        "BabelReunited: site daily translation fuse tripped (#{count}/#{limit})"
+        "BabelReunited: daily translation fuse tripped (#{key} #{count}/#{limit})"
       )
-      true
-    end
-
-    def self.user_exhausted?(user)
-      limit = SiteSetting.babel_reunited_user_daily_translation_limit
-      return false if limit <= 0 || user.blank?
-
-      user_count(user) >= limit
-    end
-
-    def self.record!(user)
-      count = Discourse.redis.incr(site_key)
-      Discourse.redis.expire(site_key, TTL) if count == 1
-
-      return if user.blank?
-
-      user_counter = Discourse.redis.incr(user_key(user))
-      Discourse.redis.expire(user_key(user), TTL) if user_counter == 1
+      false
     end
   end
 end

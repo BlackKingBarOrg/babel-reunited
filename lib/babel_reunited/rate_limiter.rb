@@ -4,6 +4,11 @@ module BabelReunited
   class RateLimitError < StandardError
   end
 
+  # A detection attempt that another try could resolve. Raised so sidekiq
+  # retries instead of fanning out on an unknown source language.
+  class DetectionError < StandardError
+  end
+
   class RateLimiter
     DAILY_CALLS_TTL = 2.days
 

@@ -533,13 +533,19 @@ export default class LanguageTabsConnector extends Component {
       if (result?.reason === "source_language") {
         // Our detection data was stale: the post is already in this
         // language. Adopt the server's answer and drop the optimistic state.
+        const stillWaiting = this._pendingLanguage === languageCode;
         if (previous) {
           this.mergeState(languageCode, previous);
         } else {
           this.removeState(languageCode);
         }
         this.applyDetectedLocale(result.detected_locale || languageCode);
-        this.currentLanguage = "original";
+        // Only move the reader if they are still waiting on this request; by
+        // now they may have picked another language.
+        if (stillWaiting) {
+          this._pendingLanguage = null;
+          this.currentLanguage = "original";
+        }
         return;
       }
     } catch (error) {

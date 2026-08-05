@@ -16,8 +16,7 @@ module BabelReunited
     def index
       # This is a public read endpoint, so it needs the same guard as show:
       # otherwise it is a way around it.
-      translations =
-        @post.post_translations.recent.select { |t| t.safe_to_display?(@post) }
+      translations = @post.post_translations.recent.select(&:safe_to_display?)
       render_serialized(translations, PostTranslationSerializer)
     end
 
@@ -27,9 +26,9 @@ module BabelReunited
           @post.id,
           params[:language]
         )
-      # Stale content whose source was cut back is withheld here too, or the
-      # on-demand fetch would be a way around the serializer's guard.
-      translation = nil if translation && !translation.safe_to_display?(@post)
+      # The display guard applies here too, or the on-demand fetch would be a
+      # way around the serializer's.
+      translation = nil if translation && !translation.safe_to_display?
 
       unless translation
         return(
@@ -108,25 +107,6 @@ module BabelReunited
         end
       end
 
-      unless guardian.is_staff?
-        if BabelReunited::UsageFuse.user_exhausted?(current_user)
-          return(
-            render json: {
-                     error: "Daily translation limit reached"
-                   },
-                   status: :too_many_requests
-          )
-        end
-        if BabelReunited::UsageFuse.site_exhausted?
-          return(
-            render json: {
-                     error: "Site-wide daily translation limit reached"
-                   },
-                   status: :too_many_requests
-          )
-        end
-      end
-
       ::RateLimiter.new(
         current_user,
         "babel-reunited-translate",
@@ -134,7 +114,20 @@ module BabelReunited
         1.minute
       ).performed!
 
-      BabelReunited::UsageFuse.record!(current_user) unless guardian.is_staff?
+      # After the rate limiter, so a request that never gets through does not
+      # spend a daily slot.
+      unless guardian.is_staff?
+        fuse = BabelReunited::UsageFuse.admit(current_user)
+        if fuse
+          message =
+            if fuse == "site_daily_limit"
+              "Site-wide daily translation limit reached"
+            else
+              "Daily translation limit reached"
+            end
+          return render json: { error: message }, status: :too_many_requests
+        end
+      end
 
       BabelReunited.enqueue_translation_jobs(
         @post,
@@ -294,15 +287,6 @@ module BabelReunited
         return render_view_noop("failed_not_retryable")
       end
 
-      unless guardian.is_staff?
-        if BabelReunited::UsageFuse.user_exhausted?(current_user)
-          return render_view_noop("user_daily_limit")
-        end
-        if BabelReunited::UsageFuse.site_exhausted?
-          return render_view_noop("site_daily_limit")
-        end
-      end
-
       ::RateLimiter.new(
         current_user,
         "babel-reunited-view-translate",
@@ -317,9 +301,18 @@ module BabelReunited
         return render_view_queued(target_language)
       end
 
-      # Atomic claim: the first viewer moves the record into "translating"
-      # (old content stays readable); everyone else noops instead of stacking
-      # duplicate jobs and fuse counts for the same run.
+      # After the rate limiter, so a request that never gets through does not
+      # spend a daily slot; before the claim, so a rejected request leaves no
+      # record to unwind.
+      unless guardian.is_staff?
+        fuse = BabelReunited::UsageFuse.admit(current_user)
+        return render_view_noop(fuse) if fuse
+      end
+
+      # Atomic claim: the first viewer moves the record into "translating";
+      # everyone else noops instead of stacking duplicate jobs for the same
+      # run.
+      previous_status = translation&.status
       claimed =
         if translation
           BabelReunited::PostTranslation.claim_existing(translation)
@@ -328,9 +321,18 @@ module BabelReunited
         end
       return render_view_noop("already_translating") unless claimed
 
-      BabelReunited::UsageFuse.record!(current_user) unless guardian.is_staff?
-
-      BabelReunited.enqueue_translation_jobs(@post, [target_language])
+      begin
+        BabelReunited.enqueue_translation_jobs(@post, [target_language])
+      rescue StandardError
+        # A claim with no job behind it would pin the record in "translating"
+        # for a full lease, and every later view would noop on it.
+        BabelReunited::PostTranslation.release_claim(
+          @post.id,
+          target_language,
+          previous_status
+        )
+        raise
+      end
 
       render_view_queued(target_language)
     end

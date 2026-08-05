@@ -86,14 +86,12 @@ RSpec.describe BabelReunited::TranslationsController do
       expect(response.status).to eq(404)
     end
 
-    it "withholds stale content whose source was cut back" do
+    it "withholds a body produced from content the post no longer has" do
       Fabricate(
         :post_translation,
         post: post_record,
         language: "de",
-        metadata: {
-          "source_length" => post_record.raw.length * 5
-        }
+        status: "stale"
       )
 
       get "/babel-reunited/posts/#{post_record.id}/translations.json"
@@ -108,10 +106,8 @@ RSpec.describe BabelReunited::TranslationsController do
         :post_translation,
         post: post_record,
         language: "de",
-        translated_content: "<p>Das Passwort lautet hunter2</p>",
-        metadata: {
-          "source_length" => post_record.raw.length * 5
-        }
+        status: "stale",
+        translated_content: "<p>Das Passwort lautet hunter2</p>"
       )
 
       get "/babel-reunited/posts/#{post_record.id}/translations.json"
@@ -138,15 +134,12 @@ RSpec.describe BabelReunited::TranslationsController do
       expect(response.status).to eq(404)
     end
 
-    it "withholds stale content whose source was cut back" do
+    it "withholds a body produced from content the post no longer has" do
       Fabricate(
         :post_translation,
         post: post_record,
         language: "de",
-        status: "stale",
-        metadata: {
-          "source_length" => post_record.raw.length * 5
-        }
+        status: "stale"
       )
 
       get "/babel-reunited/posts/#{post_record.id}/translations/de.json"
@@ -433,7 +426,7 @@ RSpec.describe BabelReunited::TranslationsController do
 
     it "rejects manual requests once the user daily fuse trips" do
       SiteSetting.babel_reunited_user_daily_translation_limit = 1
-      BabelReunited::UsageFuse.record!(user)
+      BabelReunited::UsageFuse.admit(user)
 
       post "/babel-reunited/posts/#{post_record.id}/translations.json",
            params: {
@@ -449,7 +442,7 @@ RSpec.describe BabelReunited::TranslationsController do
 
     it "rejects manual requests once the site daily fuse trips" do
       SiteSetting.babel_reunited_daily_translation_limit = 1
-      BabelReunited::UsageFuse.record!(Fabricate(:user))
+      BabelReunited::UsageFuse.admit(Fabricate(:user))
 
       post "/babel-reunited/posts/#{post_record.id}/translations.json",
            params: {
@@ -462,7 +455,7 @@ RSpec.describe BabelReunited::TranslationsController do
 
     it "exempts staff from the daily fuses" do
       SiteSetting.babel_reunited_daily_translation_limit = 1
-      BabelReunited::UsageFuse.record!(Fabricate(:user))
+      BabelReunited::UsageFuse.admit(Fabricate(:user))
       sign_in(admin)
 
       post "/babel-reunited/posts/#{post_record.id}/translations.json",
@@ -676,7 +669,7 @@ RSpec.describe BabelReunited::TranslationsController do
 
     it "leaves stale records unclaimed when the fuse rejects the request" do
       SiteSetting.babel_reunited_daily_translation_limit = 1
-      BabelReunited::UsageFuse.record!(Fabricate(:user))
+      BabelReunited::UsageFuse.admit(Fabricate(:user))
       translation =
         Fabricate(
           :post_translation,
@@ -691,16 +684,51 @@ RSpec.describe BabelReunited::TranslationsController do
       expect(translation.reload.status).to eq("stale")
     end
 
+    # The regression this guards: a claim with no job behind it pins the
+    # record in "translating" for a full lease — an hour on defaults, six at
+    # the maximum configured provider timeout — and every later view noops
+    # on it.
+    it "releases a claim it could not turn into a job" do
+      BabelReunited.expects(:enqueue_translation_jobs).raises(
+        Redis::CannotConnectError.new("down")
+      )
+      translation =
+        Fabricate(
+          :post_translation,
+          post: post_record,
+          language: "es",
+          status: "stale"
+        )
+
+      view_trigger
+
+      expect(response.status).to eq(500)
+      expect(translation.reload.status).to eq("stale")
+    end
+
+    it "removes a claim it created when the job could not be enqueued" do
+      BabelReunited.expects(:enqueue_translation_jobs).raises(
+        Redis::CannotConnectError.new("down")
+      )
+
+      view_trigger
+
+      expect(response.status).to eq(500)
+      expect(
+        BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      ).to be_nil
+    end
+
     it "noops when the user daily fuse trips" do
       SiteSetting.babel_reunited_user_daily_translation_limit = 1
-      BabelReunited::UsageFuse.record!(user)
+      BabelReunited::UsageFuse.admit(user)
       view_trigger
       expect_noop("user_daily_limit")
     end
 
     it "noops when the site daily fuse trips" do
       SiteSetting.babel_reunited_daily_translation_limit = 1
-      BabelReunited::UsageFuse.record!(Fabricate(:user))
+      BabelReunited::UsageFuse.admit(Fabricate(:user))
       view_trigger
       expect_noop("site_daily_limit")
     end
@@ -708,7 +736,7 @@ RSpec.describe BabelReunited::TranslationsController do
     it "exempts staff from fuses and trust level" do
       SiteSetting.babel_reunited_view_trigger_min_trust_level = 4
       SiteSetting.babel_reunited_daily_translation_limit = 1
-      BabelReunited::UsageFuse.record!(Fabricate(:user))
+      BabelReunited::UsageFuse.admit(Fabricate(:user))
       sign_in(admin)
 
       view_trigger

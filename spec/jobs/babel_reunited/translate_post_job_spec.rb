@@ -342,8 +342,12 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
       expect(translation.status).to eq("stale")
       expect(translation.translated_content).to include("Hola mundo")
 
+      # Stale means the body describes content the post no longer has, so it
+      # is not pushed to open pages; the follow-up job below supplies one that
+      # matches.
       expect(messages.length).to eq(1)
-      expect(messages.first.data[:translation][:status]).to eq("stale")
+      expect(messages.first.data[:status]).to eq("withheld")
+      expect(messages.first.data[:translation]).to be_nil
 
       expect(
         job_enqueued?(
@@ -358,12 +362,12 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
   end
 
   describe "redaction guard" do
-    it "records the length of what was translated, not what the post says after" do
-      # The author cuts the post down while the provider call is in flight.
+    it "withholds a result whose source changed while the provider ran" do
+      # The author cuts the post down while the provider call is in flight, so
+      # the finished translation describes text the post no longer has.
       job_result = success_result
       fake = Object.new
       target = post_record
-      original_length = post_record.raw.length
       fake.define_singleton_method(:call) do
         target.update_columns(raw: "redacted")
         job_result
@@ -377,8 +381,8 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
 
       translation =
         BabelReunited::PostTranslation.find_translation(post_record.id, "es")
-      expect(translation.metadata["source_length"]).to eq(original_length)
-      expect(translation.safe_to_display?(post_record.reload)).to be false
+      expect(translation.status).to eq("stale")
+      expect(translation.safe_to_display?).to be false
     end
 
     it "does not push a withheld body to open pages" do
@@ -668,19 +672,6 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
         end
 
       expect(messages).to be_empty
-    end
-
-    it "records the source length as a redaction baseline" do
-      described_class.new.execute(
-        post_id: post_record.id,
-        target_language: "es"
-      )
-
-      translation =
-        BabelReunited::PostTranslation.find_translation(post_record.id, "es")
-      expect(translation.metadata["source_length"]).to eq(
-        post_record.raw.length
-      )
     end
 
     it "stores the detected locale as source_language" do

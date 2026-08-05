@@ -427,7 +427,10 @@ RSpec.describe BabelReunited do
       expect(json[:babel_translations_meta]).to be_empty
     end
 
-    it "still serves stale content after an ordinary edit" do
+    # An edit moves every completed translation to stale, and the edit that
+    # matters is the one that removed something. The old body is withheld
+    # until it has been re-translated rather than shown with a notice.
+    it "withholds a stale body after an edit" do
       Fabricate(
         :user_preferred_language,
         user: user,
@@ -439,16 +442,13 @@ RSpec.describe BabelReunited do
         post: post_record,
         language: "es",
         status: "stale",
-        metadata: {
-          "source_length" => post_record.raw.length
-        }
+        translated_content: "<p>Das Passwort lautet hunter2</p>"
       )
 
       json = serialize_post(post_record)
 
-      expect(
-        json[:babel_preferred_translation][:translated_content]
-      ).to be_present
+      expect(json[:babel_preferred_translation]).to be_nil
+      expect(json[:babel_translations_meta]).to be_empty
     end
 
     it "includes lightweight babel_translations_meta without bodies" do
@@ -933,7 +933,7 @@ RSpec.describe BabelReunited do
         expect(BabelReunited.translated_title_for(post_record, "es")).to be_nil
       end
 
-      it "returns prior title when re-translating (status=translating with old title)" do
+      it "returns nil when re-translating, even with an old title present" do
         Fabricate(
           :post_translation,
           post: post_record,
@@ -943,9 +943,7 @@ RSpec.describe BabelReunited do
           status: "translating"
         )
 
-        expect(BabelReunited.translated_title_for(post_record, "es")).to eq(
-          "Titulo antiguo"
-        )
+        expect(BabelReunited.translated_title_for(post_record, "es")).to be_nil
       end
 
       it "returns nil for failed translations even if an old title is present" do
@@ -967,6 +965,74 @@ RSpec.describe BabelReunited do
 
       it "returns nil for blank language" do
         expect(BabelReunited.translated_title_for(post_record, nil)).to be_nil
+      end
+    end
+
+    describe ".trigger_retranslation" do
+      # The regression this guards: a failure verdict outliving the content
+      # that caused it. A post that failed as "content too long" and was then
+      # shortened could never be translated again, because auto_retryable?
+      # stayed false and every view trigger noop-ed on failed_not_retryable.
+      it "clears a permanent failure when the content changes" do
+        translation =
+          Fabricate(
+            :post_translation,
+            post: post_record,
+            language: "es",
+            status: "failed",
+            metadata: {
+              "error" => "Content too long",
+              "error_kind" => "permanent",
+              "failure_count" => 3,
+              "failed_at" => 1.minute.ago.iso8601
+            }
+          )
+        expect(translation.auto_retryable?).to be false
+
+        post_record.update_columns(raw: "Completely different, much shorter")
+        BabelReunited.trigger_retranslation(post_record)
+
+        expect(translation.reload.auto_retryable?).to be true
+      end
+
+      it "leaves a failure alone when only metadata changed" do
+        BabelReunited.store_detected_locale(post_record, "en")
+        translation =
+          Fabricate(
+            :post_translation,
+            post: post_record,
+            language: "es",
+            status: "failed",
+            metadata: {
+              "error_kind" => "permanent",
+              "failure_count" => 1
+            }
+          )
+
+        BabelReunited.trigger_retranslation(post_record)
+
+        expect(translation.reload.metadata["error_kind"]).to eq("permanent")
+      end
+    end
+
+    describe ".preload_detection_fields" do
+      # Both fields, or detection_current? raises NotPreloadedError on the sha
+      # once anything hands it a post with a preloaded custom-field proxy.
+      it "preloads both detection fields in one query" do
+        BabelReunited.store_detected_locale(post_record, "en")
+        fresh = Post.find(post_record.id)
+
+        BabelReunited.preload_detection_fields([fresh])
+
+        expect(fresh.custom_fields_preloaded?).to be true
+        expect(BabelReunited.detection_current?(fresh)).to be true
+      end
+
+      it "tolerates an empty list" do
+        expect { BabelReunited.preload_detection_fields([]) }.not_to raise_error
+        expect {
+          BabelReunited.preload_detection_fields(nil)
+        }.not_to raise_error
       end
     end
   end

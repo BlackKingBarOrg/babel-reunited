@@ -91,27 +91,24 @@ module BabelReunited
       status == "stale"
     end
 
-    # How much the source may shrink before stale content stops being served.
-    # An edit that removes a meaningful chunk is the shape a redaction takes,
-    # and the stale translation still carries whatever was removed.
-    REDACTION_RATIO = 0.8
-
-    # Withheld once the post got materially shorter than what this body was
-    # translated from, because the old translation is then the only place the
-    # removed text still exists.
+    # Whether this body may be shown to a reader.
     #
-    # Deliberately keyed on content rather than on status: a stale row claimed
-    # into "translating" still carries the old body, and so does a failed one.
-    # Comparing lengths covers every such state, and costs nothing in the
-    # normal case where the post never shrank.
+    # Only a translation of the post's current content qualifies. Every other
+    # status — stale, failed, or a stale row re-claimed into translating —
+    # carries a body produced from text the author has since changed, and the
+    # change that matters is a redaction: an API key, a phone number, a name
+    # pasted by mistake. In a long post that is a handful of characters, so no
+    # length or ratio test can see it. Only "the content this was translated
+    # from is still the content" can, and status is exactly that record: an
+    # edit moves every completed translation off completed (see
+    # BabelReunited.trigger_retranslation), and a translation that finished
+    # against content which moved under it is saved as stale, never completed.
     #
-    # This does not catch a same-length rewrite; for those the author or staff
-    # can delete the translation outright (DELETE .../translations/:language).
-    def safe_to_display?(post)
-      original_length = (metadata || {})["source_length"].to_i
-      return true if original_length.zero?
-
-      post.raw.to_s.length >= original_length * REDACTION_RATIO
+    # The cost is that an edit hides a translation until it is redone. The
+    # pre-translate layer redoes it at once; the lazy layer redoes it on next
+    # view. Showing the original in the meantime is the safe direction.
+    def safe_to_display?
+      completed?
     end
 
     # A claim older than this is treated as abandoned: the worker died, the
@@ -134,6 +131,23 @@ module BabelReunited
 
     AUTO_RETRY_COOLDOWN = 30.minutes
     MAX_AUTO_RETRIES = 5
+
+    FAILURE_METADATA_KEYS = %w[
+      error
+      error_class
+      error_kind
+      failure_count
+      failed_at
+    ].freeze
+
+    # Auto-retry eligibility tracks consecutive failures against one body of
+    # content, so anything that replaces the content clears the verdict.
+    # Without this a post that failed permanently ("content too long") and was
+    # then shortened can never be translated again: auto_retryable? stays
+    # false and every view trigger noops on failed_not_retryable.
+    def clear_failure_metadata!
+      update!(metadata: (metadata || {}).except(*FAILURE_METADATA_KEYS))
+    end
 
     # Whether an automated (view-triggered) request may re-enqueue this failed
     # translation. Manual retries are always allowed and bypass this check.
@@ -196,6 +210,24 @@ module BabelReunited
     rescue ActiveRecord::RecordInvalid => e
       raise unless e.record.errors.of_kind?(:post_id, :taken)
       false
+    end
+
+    # Undoes a claim that never became work — the enqueue raised, or a guard
+    # after the claim rejected the request. Without it the record sits in
+    # "translating" until its lease expires (an hour on defaults, six at the
+    # maximum configured provider timeout) while every later view noops on it.
+    #
+    # previous_status is nil when the claim created the row, so there is
+    # nothing to revert to and the placeholder goes away entirely.
+    def self.release_claim(post_id, target_language, previous_status)
+      record = find_translation(post_id, target_language)
+      return if record.nil? || !record.translating?
+
+      if previous_status.nil?
+        record.destroy
+      else
+        record.update_columns(status: previous_status, updated_at: Time.current)
+      end
     end
 
     def self.create_or_update_record(post_id, target_language)

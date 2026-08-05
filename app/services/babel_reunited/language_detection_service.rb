@@ -26,10 +26,17 @@ module BabelReunited
       "tl" => "fil"
     }.freeze
 
+    # retryable separates failures another attempt could resolve (network,
+    # provider status, a garbled answer) from ones that will fail identically
+    # forever (content too short, missing configuration). The caller needs
+    # the distinction: fanning out with no detection result pays to translate
+    # a post into the language it is already written in, and that record then
+    # looks completed to everything downstream.
     Result =
-      Struct.new(:locale, :error, keyword_init: true) do
+      Struct.new(:locale, :error, :retryable, keyword_init: true) do
         def success? = error.nil?
         def failure? = !success?
+        def retryable? = !!retryable
       end
 
     def initialize(post:)
@@ -52,7 +59,9 @@ module BabelReunited
       end
 
       response = request_detection(sample, config)
-      return Result.new(error: response[:error]) if response[:error]
+      if response[:error]
+        return Result.new(error: response[:error], retryable: true)
+      end
 
       locale = normalize_locale(response[:text])
       if locale
@@ -60,16 +69,17 @@ module BabelReunited
       else
         Result.new(
           error:
-            "Unrecognized detection response: #{response[:text].to_s.strip[0, 40]}"
+            "Unrecognized detection response: #{response[:text].to_s.strip[0, 40]}",
+          retryable: true
         )
       end
     rescue BabelReunited::RateLimitError
       raise
     rescue Faraday::Error => e
-      Result.new(error: "Network error: #{e.message}")
+      Result.new(error: "Network error: #{e.message}", retryable: true)
     rescue => e
       Rails.logger.warn("BabelReunited language detection error: #{e.message}")
-      Result.new(error: e.message)
+      Result.new(error: e.message, retryable: true)
     end
 
     private

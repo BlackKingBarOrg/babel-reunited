@@ -263,72 +263,31 @@ RSpec.describe BabelReunited::PostTranslation do
   end
 
   describe "#safe_to_display?" do
-    def stale_translation(source_length)
+    def record(status)
       Fabricate(
         :post_translation,
         post: post,
-        language: "de",
-        status: "stale",
-        metadata: {
-          "source_length" => source_length
-        }
+        language: "d#{status[0]}",
+        status: status,
+        translated_content: "<p>old</p>"
       )
     end
 
-    it "serves stale content when the post is intact" do
-      t = stale_translation(post.raw.length)
-      expect(t.safe_to_display?(post)).to be true
+    it "serves a completed translation" do
+      expect(record("completed").safe_to_display?).to be true
     end
 
-    it "withholds stale content once the post was materially cut back" do
-      t = stale_translation(post.raw.length * 3)
-      expect(t.safe_to_display?(post)).to be false
-    end
-
-    it "tolerates a small edit" do
-      t = stale_translation((post.raw.length / 0.95).to_i)
-      expect(t.safe_to_display?(post)).to be true
-    end
-
-    it "serves a completed translation of an intact post" do
-      t =
-        Fabricate(
-          :post_translation,
-          post: post,
-          language: "de",
-          status: "completed",
-          metadata: {
-            "source_length" => post.raw.length
-          }
-        )
-      expect(t.safe_to_display?(post)).to be true
-    end
-
-    it "keys on content, not status, so a claimed row stays covered" do
-      # The view lane moves a stale row to "translating" while the old body is
-      # still there; a status-based guard would let it through.
-      %w[stale translating failed completed].each do |status|
-        t =
-          Fabricate(
-            :post_translation,
-            post: post,
-            language: "d#{status[0]}",
-            status: status,
-            translated_content: "<p>old</p>",
-            metadata: {
-              "source_length" => post.raw.length * 3
-            }
-          )
-        expect(t.safe_to_display?(post)).to(
+    # A redaction is usually a few characters in a long post -- an API key, a
+    # phone number. No length or ratio test can see that, so every body
+    # produced from content the post no longer has is withheld, whatever
+    # state the record is in.
+    it "withholds every body that is not a translation of the current content" do
+      %w[stale translating failed].each do |status|
+        expect(record(status).safe_to_display?).to(
           be(false),
-          "#{status} row still carries the removed text"
+          "#{status} row still carries text the post may no longer have"
         )
       end
-    end
-
-    it "serves records that predate the baseline" do
-      t = stale_translation(nil)
-      expect(t.safe_to_display?(post)).to be true
     end
   end
 

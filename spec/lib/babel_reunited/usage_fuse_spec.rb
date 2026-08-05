@@ -6,53 +6,75 @@ RSpec.describe BabelReunited::UsageFuse do
   before do
     enable_current_plugin
     Discourse.redis.flushdb
+    SiteSetting.babel_reunited_daily_translation_limit = 100
+    SiteSetting.babel_reunited_user_daily_translation_limit = 100
   end
 
-  describe ".record! and counters" do
-    it "increments site and user counters together" do
-      described_class.record!(user)
-      described_class.record!(user)
+  describe ".admit" do
+    it "counts site and user together" do
+      2.times { expect(described_class.admit(user)).to be_nil }
 
       expect(described_class.site_count).to eq(2)
       expect(described_class.user_count(user)).to eq(2)
     end
-  end
 
-  describe ".site_exhausted?" do
-    it "returns false below the limit" do
+    it "admits up to the site limit and rejects after it" do
       SiteSetting.babel_reunited_daily_translation_limit = 2
-      described_class.record!(user)
-      expect(described_class.site_exhausted?).to be false
+
+      expect(described_class.admit(user)).to be_nil
+      expect(described_class.admit(user)).to be_nil
+      expect(described_class.admit(user)).to eq("site_daily_limit")
     end
 
-    it "returns true at the limit" do
-      SiteSetting.babel_reunited_daily_translation_limit = 2
-      2.times { described_class.record!(user) }
-      expect(described_class.site_exhausted?).to be true
+    it "admits up to the user limit and rejects after it" do
+      SiteSetting.babel_reunited_user_daily_translation_limit = 1
+
+      expect(described_class.admit(user)).to be_nil
+      expect(described_class.admit(user)).to eq("user_daily_limit")
     end
 
-    it "is disabled when the limit is 0" do
-      SiteSetting.babel_reunited_daily_translation_limit = 0
-      10.times { described_class.record!(user) }
-      expect(described_class.site_exhausted?).to be false
-    end
-  end
-
-  describe ".user_exhausted?" do
     it "tracks per-user counts independently" do
       SiteSetting.babel_reunited_user_daily_translation_limit = 1
       other_user = Fabricate(:user)
 
-      described_class.record!(user)
-
-      expect(described_class.user_exhausted?(user)).to be true
-      expect(described_class.user_exhausted?(other_user)).to be false
+      expect(described_class.admit(user)).to be_nil
+      expect(described_class.admit(user)).to eq("user_daily_limit")
+      expect(described_class.admit(other_user)).to be_nil
     end
 
-    it "is disabled when the limit is 0" do
+    it "charges the user fuse first, so an exhausted user spends no site quota" do
+      SiteSetting.babel_reunited_user_daily_translation_limit = 1
+
+      described_class.admit(user)
+      described_class.admit(user)
+
+      expect(described_class.site_count).to eq(1)
+    end
+
+    it "still counts an anonymous-free call against the site fuse" do
+      expect(described_class.admit(nil)).to be_nil
+      expect(described_class.site_count).to eq(1)
+      expect(described_class.user_count(nil)).to eq(0)
+    end
+
+    it "is disabled when a limit is 0" do
+      SiteSetting.babel_reunited_daily_translation_limit = 0
       SiteSetting.babel_reunited_user_daily_translation_limit = 0
-      5.times { described_class.record!(user) }
-      expect(described_class.user_exhausted?(user)).to be false
+
+      10.times { expect(described_class.admit(user)).to be_nil }
+    end
+
+    # The regression this guards: a separate "check the counter" step let
+    # every concurrent caller read the same under-limit value and pass, so
+    # the fuse leaked exactly when it was under load.
+    it "hands the last slot to exactly one of two concurrent callers" do
+      SiteSetting.babel_reunited_daily_translation_limit = 1
+      SiteSetting.babel_reunited_user_daily_translation_limit = 100
+
+      results = [described_class.admit(user), described_class.admit(user)]
+
+      expect(results.count(nil)).to eq(1)
+      expect(results).to include("site_daily_limit")
     end
   end
 end

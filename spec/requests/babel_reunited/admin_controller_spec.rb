@@ -46,8 +46,8 @@ RSpec.describe BabelReunited::AdminController do
     it "reports fuse usage, provider calls, and limits" do
       Discourse.redis.flushdb
       SiteSetting.babel_reunited_daily_translation_limit = 1234
-      BabelReunited::UsageFuse.record!(user)
-      BabelReunited::UsageFuse.record!(user)
+      BabelReunited::UsageFuse.admit(user)
+      BabelReunited::UsageFuse.admit(user)
       3.times { BabelReunited::RateLimiter.perform_request_if_allowed }
 
       get "/babel-reunited/admin/stats.json"

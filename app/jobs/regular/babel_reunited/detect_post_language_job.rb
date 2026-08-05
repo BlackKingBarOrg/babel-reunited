@@ -58,11 +58,19 @@ class Jobs::BabelReunited::DetectPostLanguageJob < ::Jobs::Base
           target_language: "detect",
           reason: "detection_failed: #{result.error}"
         )
+
+        # Fanning out with no result costs a full translation into the post's
+        # own language, and that record then looks completed forever. A
+        # transient failure is worth retrying first; sidekiq_retries_exhausted
+        # above is the fan-out fallback once retries really are spent.
+        if result.retryable?
+          raise BabelReunited::DetectionError, result.error.to_s
+        end
       end
     end
 
     BabelReunited.fanout_translations(post) if then_fanout
-  rescue BabelReunited::RateLimitError
+  rescue BabelReunited::RateLimitError, BabelReunited::DetectionError
     raise
   end
 

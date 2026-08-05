@@ -103,11 +103,6 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
       end
 
       source_sha = self.class.content_sha(post)
-      # Captured here, not after the call: this is the length of the content
-      # actually sent to the provider. Reading it later would record a
-      # redaction that happened mid-flight as the baseline, and the guard
-      # would then judge the pre-redaction translation safe.
-      source_length = post.raw.to_s.length
       translation = ensure_translation_record(post, target_language)
 
       # Skip if source unchanged and not force_update
@@ -170,7 +165,6 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
           post,
           target_language,
           source_sha,
-          source_length,
           translation,
           processing_time,
           force_update
@@ -260,11 +254,7 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
   # consecutive failures, not lifetime totals.
   def success_metadata(translation, extra = {})
     (translation.metadata || {}).except(
-      "error",
-      "error_class",
-      "error_kind",
-      "failure_count",
-      "failed_at"
+      *::BabelReunited::PostTranslation::FAILURE_METADATA_KEYS
     ).merge(extra)
   end
 
@@ -293,7 +283,6 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
     post,
     target_language,
     source_sha,
-    source_length,
     translation,
     processing_time,
     force_update
@@ -340,9 +329,6 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
           translation,
           confidence: result.ai_response[:confidence],
           provider_info: result.ai_response[:provider_info],
-          # Baseline for spotting an edit that removed content, measured on
-          # what was translated rather than on what the post says now.
-          source_length: source_length,
           translated_at: Time.current,
           completed_at: Time.current
         )
@@ -460,8 +446,7 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
 
     # Pushing the body to open pages bypasses the serializer and the
     # controller, so the same guard has to hold here or it holds nowhere.
-    if status == "completed" && translation &&
-         !translation.safe_to_display?(post)
+    if status == "completed" && translation && !translation.safe_to_display?
       MessageBus.publish(
         "/post-translations/#{post.id}",
         { post_id: post.id, language: language, status: "withheld" },
@@ -476,8 +461,6 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
         translated_content: translation.translated_content,
         translated_title: translation.translated_title,
         source_language: translation.source_language,
-        # The record can be "stale" when the post changed mid-translation;
-        # clients keep it readable and expect the follow-up refresh.
         status: translation.status,
         metadata: {
           confidence: result&.ai_response&.dig(:confidence),
@@ -499,7 +482,7 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
   def publish_translated_title(post, translation)
     return unless post.post_number == 1
     return if translation.translated_title.blank?
-    return unless translation.safe_to_display?(post)
+    return unless translation.safe_to_display?
 
     MessageBus.publish(
       "/babel-translated-title/#{post.topic_id}",

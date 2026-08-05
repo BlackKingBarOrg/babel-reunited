@@ -73,18 +73,8 @@ RSpec.describe BabelReunited::BannerTranslator do
     expect(described_class.cooked_for(post_record, guardian)).to be_nil
   end
 
-  it "serves a stale translation rather than a language the reader did not ask for" do
+  it "skips a stale translation, since the post changed after it was made" do
     translation("es", status: "stale")
-    translation("en")
-    prefer("es")
-
-    expect(described_class.cooked_for(post_record, guardian)).to eq(
-      "<p>es body</p>"
-    )
-  end
-
-  it "skips a record that has been claimed but has no body yet" do
-    translation("es", status: "translating", translated_content: "")
     translation("en")
     prefer("es")
 
@@ -93,14 +83,8 @@ RSpec.describe BabelReunited::BannerTranslator do
     )
   end
 
-  it "skips a translation whose source was cut back after it was made" do
-    translation(
-      "es",
-      status: "stale",
-      metadata: {
-        source_length: post_record.raw.length * 10
-      }
-    )
+  it "skips a record that has been claimed but has no body yet" do
+    translation("es", status: "translating", translated_content: "")
     translation("en")
     prefer("es")
 

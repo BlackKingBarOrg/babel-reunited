@@ -99,7 +99,7 @@ module ::BabelReunited
   def self.displayable_translation_for(post, language)
     translation = stream_translation_for(post, language)
     return nil if translation.blank?
-    return nil unless translation.safe_to_display?(post)
+    return nil unless translation.safe_to_display?
 
     translation
   end
@@ -154,9 +154,6 @@ module ::BabelReunited
           :language,
           :status,
           :source_language,
-          # Small JSON, unlike the body columns this preload exists to avoid;
-          # safe_to_display? needs the redaction baseline it carries.
-          :metadata,
           :created_at
         )
         .order(created_at: :desc)
@@ -168,6 +165,20 @@ module ::BabelReunited
         grouped[post.id] || []
       )
     end
+  end
+
+  # Detection lives in post custom fields, and every translated title on a
+  # list page consults it (a translation into the post's own language must
+  # never supply a title). Without this each row costs its own custom-field
+  # query.
+  def self.preload_detection_fields(posts)
+    posts = Array(posts).compact
+    return if posts.empty?
+
+    Post.preload_custom_fields(
+      posts,
+      [DETECTED_LOCALE_FIELD, DETECTED_SHA_FIELD]
+    )
   end
 
   def self.preloaded_all_translations(post)
@@ -301,6 +312,18 @@ module ::BabelReunited
     outdated = outdated.where.not(language: eager) if eager.any?
     outdated.update_all(status: "stale", updated_at: Time.current)
 
+    # A failure verdict describes the content that produced it, so new content
+    # deserves a fresh attempt. Without this a translation that failed
+    # permanently — "content too long", say — can never run again even after
+    # the author shortens the post: auto_retryable? stays false forever and
+    # every view trigger noops on failed_not_retryable.
+    if content_changed
+      post
+        .post_translations
+        .where(status: "failed")
+        .find_each(&:clear_failure_metadata!)
+    end
+
     # Dispatching work, unlike invalidation, ships content to a third-party
     # provider: deleted, hidden, and disabled-category posts stop here.
     return unless translatable_post?(post)
@@ -346,7 +369,12 @@ after_initialize do
     :string,
     max_length: 64
   )
+  # Both fields, not just the locale: detection_current? reads the sha to
+  # decide whether the locale still describes the post, and PreloadedProxy
+  # raises NotPreloadedError on a field left out of this list rather than
+  # falling back to a query.
   TopicView.default_post_custom_fields << BabelReunited::DETECTED_LOCALE_FIELD
+  TopicView.default_post_custom_fields << BabelReunited::DETECTED_SHA_FIELD
 
   register_editable_user_custom_field(BabelReunited::PREFERRED_LANGUAGE_FIELD)
   register_editable_user_custom_field(BabelReunited::PREFERRED_ENABLED_FIELD)
@@ -425,16 +453,9 @@ after_initialize do
       preloaded ||
         object
           .post_translations
-          .select(
-            :id,
-            :post_id,
-            :language,
-            :status,
-            :source_language,
-            :metadata
-          )
+          .select(:id, :post_id, :language, :status, :source_language)
           .to_a
-    rows = rows.reject { |t| !t.safe_to_display?(object) }
+    rows = rows.select(&:safe_to_display?)
     rows.map do |t|
       {
         language: t.language,
@@ -578,6 +599,9 @@ after_initialize do
     # is distinct from its stream copy and needs its own preload ivar.
     targets = (posts.to_a + [topic_view.topic&.first_post]).compact
     BabelReunited.preload_post_translations(targets, language)
+    # default_post_custom_fields only covers the stream copies; the topic's
+    # own first_post is a separate object and feeds the translated title.
+    BabelReunited.preload_detection_fields([topic_view.topic&.first_post])
   end
 
   TopicList.on_preload do |topics, topic_list|
@@ -588,6 +612,7 @@ after_initialize do
 
     first_posts = topics.map(&:first_post).compact
     BabelReunited.preload_post_translations(first_posts, language)
+    BabelReunited.preload_detection_fields(first_posts)
   end
 
   # Event handlers for automatic translation
