@@ -862,6 +862,41 @@ RSpec.describe BabelReunited::TranslationsController do
     end
   end
 
+  # The category setting scopes the whole feature: excluded categories serve
+  # no stored translations, so the read endpoints match the hidden UI, the
+  # withheld serializer payloads, and the blocked generation.
+  describe "category whitelist" do
+    fab!(:allowed_category, :category)
+
+    before do
+      Fabricate(:post_translation, post: post_record, language: "es")
+      SiteSetting.babel_reunited_enabled_categories = allowed_category.id.to_s
+    end
+
+    it "does not serve stored translations from an excluded category" do
+      get "/babel-reunited/posts/#{post_record.id}/translations.json"
+      expect(response.status).to eq(403)
+
+      get "/babel-reunited/posts/#{post_record.id}/translations/es.json"
+      expect(response.status).to eq(403)
+
+      get "/babel-reunited/posts/#{post_record.id}/translations/translation_status.json"
+      expect(response.status).to eq(403)
+    end
+
+    # Removing stock data is cleanup, not a translation feature: it must not
+    # require re-enabling the category first.
+    it "still allows deleting a translation in an excluded category" do
+      sign_in(admin)
+
+      delete "/babel-reunited/posts/#{post_record.id}/translations/es.json"
+      expect(response.status).to eq(200)
+      expect(
+        BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      ).to be_nil
+    end
+  end
+
   describe "GET /babel-reunited/user-preferred-language" do
     before { sign_in(user) }
 

@@ -533,6 +533,10 @@ after_initialize do
     :babel_translations_meta,
     include_condition: plugin_enabled_condition
   ) do
+    # The category setting scopes the whole feature: an excluded category
+    # ships no translation data at all, matching the gated read endpoints.
+    next nil unless BabelReunited.translation_enabled_for_post?(object)
+
     preloaded = BabelReunited.preloaded_all_translations(object)
     rows =
       preloaded ||
@@ -583,7 +587,11 @@ after_initialize do
     :post,
     :babel_detected_locale,
     include_condition: plugin_enabled_condition
-  ) { BabelReunited.current_detected_locale_for(object) }
+  ) do
+    next nil unless BabelReunited.translation_enabled_for_post?(object)
+
+    BabelReunited.current_detected_locale_for(object)
+  end
 
   add_to_serializer(
     :current_user,
@@ -618,6 +626,8 @@ after_initialize do
     :babel_preferred_translation,
     include_condition: translated_title_condition
   ) do
+    next nil unless BabelReunited.translation_enabled_for_post?(object)
+
     language = BabelReunited.preferred_language_for(scope&.user)
     translation = BabelReunited.displayable_translation_for(object, language)
     if translation

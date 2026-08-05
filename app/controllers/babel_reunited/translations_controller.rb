@@ -12,6 +12,11 @@ module BabelReunited
                     set_user_preferred_language
                     get_user_preferred_language
                   ]
+    # The category setting scopes the whole feature, not just generation: an
+    # excluded category serves no stored translations either. destroy stays
+    # available — removing stock data is cleanup, not a translation feature.
+    before_action :ensure_category_enabled,
+                  only: %i[index show create translation_status]
 
     def index
       # This is a public read endpoint, so it needs the same guard as show:
@@ -40,14 +45,6 @@ module BabelReunited
     end
 
     def create
-      unless BabelReunited.translation_enabled_for_post?(@post)
-        raise Discourse::InvalidAccess.new(
-                nil,
-                nil,
-                custom_message: "babel_reunited.errors.category_not_enabled"
-              )
-      end
-
       target_language = params[:target_language]&.downcase
       force_update =
         ActiveModel::Type::Boolean.new.cast(params[:force_update]) || false
@@ -256,6 +253,16 @@ module BabelReunited
     end
 
     private
+
+    def ensure_category_enabled
+      return if BabelReunited.translation_enabled_for_post?(@post)
+
+      raise Discourse::InvalidAccess.new(
+              nil,
+              nil,
+              custom_message: "babel_reunited.errors.category_not_enabled"
+            )
+    end
 
     # The automated lane. Fire-and-forget from the client: every rejection is
     # a silent 200 noop (the reader already sees the original or stale

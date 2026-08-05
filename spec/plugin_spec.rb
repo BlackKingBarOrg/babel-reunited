@@ -969,6 +969,39 @@ RSpec.describe BabelReunited do
         expect(json[:babel_translated_title]).to be_nil
       end
     end
+
+    # The category setting scopes the whole feature: a post in an excluded
+    # category ships no translation payloads, matching the gated endpoints.
+    describe "post translation payloads with category whitelist" do
+      let(:guardian) { Guardian.new(user) }
+
+      it "ships no metadata, body, or detected locale for an excluded category" do
+        topic_in_blocked =
+          Fabricate(:topic, user: user, category: blocked_category)
+        blocked_post = Fabricate(:post, topic: topic_in_blocked, user: user)
+        Fabricate(
+          :post_translation,
+          post: blocked_post,
+          language: "es",
+          status: "completed"
+        )
+        BabelReunited.store_detected_locale(blocked_post, "en")
+        Fabricate(
+          :user_preferred_language,
+          user: user,
+          language: "es",
+          enabled: true
+        )
+
+        SiteSetting.babel_reunited_enabled_categories = allowed_category.id.to_s
+
+        json =
+          PostSerializer.new(blocked_post, scope: guardian, root: false).as_json
+        expect(json[:babel_translations_meta]).to be_nil
+        expect(json[:babel_preferred_translation]).to be_nil
+        expect(json[:babel_detected_locale]).to be_nil
+      end
+    end
   end
 
   describe "BabelReunited module methods" do
