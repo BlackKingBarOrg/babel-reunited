@@ -167,18 +167,43 @@ module ::BabelReunited
     end
   end
 
-  # Detection lives in post custom fields, and every translated title on a
-  # list page consults it (a translation into the post's own language must
-  # never supply a title). Without this each row costs its own custom-field
-  # query.
+  DETECTION_PRELOAD_IVAR = :@babel_detection_fields
+
+  # Detection lives in post custom fields, and both the original tab's label
+  # and every translated title consult it, so without a preload each post in
+  # a stream or a list costs its own custom-field query.
+  #
+  # TopicView.default_post_custom_fields does not help here: it only fills
+  # TopicView's own sideload hash, never Post#custom_fields, which is what
+  # this plugin reads.
+  #
+  # Deliberately not Post.preload_custom_fields either — that installs a
+  # proxy which raises NotPreloadedError for any field outside the list, so
+  # preloading two fields would turn every unrelated custom-field read on the
+  # same objects into a 500. A private ivar cannot break anyone else's access.
   def self.preload_detection_fields(posts)
     posts = Array(posts).compact
     return if posts.empty?
 
-    Post.preload_custom_fields(
-      posts,
-      [DETECTED_LOCALE_FIELD, DETECTED_SHA_FIELD]
-    )
+    grouped = Hash.new { |h, k| h[k] = {} }
+    PostCustomField
+      .where(
+        post_id: posts.map(&:id),
+        name: [DETECTED_LOCALE_FIELD, DETECTED_SHA_FIELD]
+      )
+      .pluck(:post_id, :name, :value)
+      .each { |post_id, name, value| grouped[post_id][name] = value }
+
+    posts.each do |post|
+      post.instance_variable_set(DETECTION_PRELOAD_IVAR, grouped[post.id])
+    end
+  end
+
+  def self.detection_field(post, name)
+    preloaded = post.instance_variable_get(DETECTION_PRELOAD_IVAR)
+    return preloaded[name] if preloaded
+
+    post.custom_fields[name]
   end
 
   def self.preloaded_all_translations(post)
@@ -201,7 +226,7 @@ module ::BabelReunited
 
   def self.detected_locale_for(post)
     return nil if post.blank?
-    post.custom_fields[DETECTED_LOCALE_FIELD].presence
+    detection_field(post, DETECTED_LOCALE_FIELD).presence
   end
 
   # Detection is bound to the raw content it sampled: a post rewritten in
@@ -213,7 +238,7 @@ module ::BabelReunited
   def self.detection_current?(post)
     return false if post.blank?
     detected_locale_for(post).present? &&
-      post.custom_fields[DETECTED_SHA_FIELD] == detection_raw_sha(post)
+      detection_field(post, DETECTED_SHA_FIELD) == detection_raw_sha(post)
   end
 
   # The only detection result callers may act on. A result bound to older
@@ -248,6 +273,10 @@ module ::BabelReunited
     post.custom_fields[DETECTED_LOCALE_FIELD] = locale
     post.custom_fields[DETECTED_SHA_FIELD] = raw_sha || detection_raw_sha(post)
     post.save_custom_fields
+    # A preload taken before this write would now be wrong.
+    if post.instance_variable_defined?(DETECTION_PRELOAD_IVAR)
+      post.remove_instance_variable(DETECTION_PRELOAD_IVAR)
+    end
   end
 
   # Lazy convergence for posts created before detection existed. Deduplicated
@@ -369,12 +398,6 @@ after_initialize do
     :string,
     max_length: 64
   )
-  # Both fields, not just the locale: detection_current? reads the sha to
-  # decide whether the locale still describes the post, and PreloadedProxy
-  # raises NotPreloadedError on a field left out of this list rather than
-  # falling back to a query.
-  TopicView.default_post_custom_fields << BabelReunited::DETECTED_LOCALE_FIELD
-  TopicView.default_post_custom_fields << BabelReunited::DETECTED_SHA_FIELD
 
   register_editable_user_custom_field(BabelReunited::PREFERRED_LANGUAGE_FIELD)
   register_editable_user_custom_field(BabelReunited::PREFERRED_ENABLED_FIELD)
@@ -590,6 +613,13 @@ after_initialize do
     posts = topic_view.posts
     BabelReunited.preload_all_post_translations(posts) if posts.present?
 
+    # Ahead of the preferred-language check: babel_detected_locale is
+    # serialized for every reader, including those with no preference, and
+    # topic.first_post is a separate object from its stream copy.
+    BabelReunited.preload_detection_fields(
+      posts.to_a + [topic_view.topic&.first_post]
+    )
+
     language = BabelReunited.preferred_language_for(topic_view.guardian&.user)
     next if language.blank?
 
@@ -599,20 +629,32 @@ after_initialize do
     # is distinct from its stream copy and needs its own preload ivar.
     targets = (posts.to_a + [topic_view.topic&.first_post]).compact
     BabelReunited.preload_post_translations(targets, language)
-    # default_post_custom_fields only covers the stream copies; the topic's
-    # own first_post is a separate object and feeds the translated title.
-    BabelReunited.preload_detection_fields([topic_view.topic&.first_post])
   end
 
   TopicList.on_preload do |topics, topic_list|
     next unless SiteSetting.babel_reunited_enabled
 
+    # Only the translated title consults detection here, so this can sit
+    # behind the preference check — but the check has to come after the
+    # first_posts load either way.
     language = BabelReunited.preferred_language_for(topic_list.current_user)
     next if language.blank?
 
     first_posts = topics.map(&:first_post).compact
     BabelReunited.preload_post_translations(first_posts, language)
     BabelReunited.preload_detection_fields(first_posts)
+  end
+
+  # The banner payload is cached with whatever these settings allowed when it
+  # was built, and nothing else invalidates it, so turning the plugin off or
+  # narrowing the enabled categories would otherwise keep serving the
+  # translation until some unrelated event cleared the cache.
+  on(:site_setting_changed) do |name, _old_value, _new_value|
+    if %i[babel_reunited_enabled babel_reunited_enabled_categories].include?(
+         name.to_sym
+       )
+      ApplicationLayoutPreloader.banner_json_cache.clear
+    end
   end
 
   # Event handlers for automatic translation

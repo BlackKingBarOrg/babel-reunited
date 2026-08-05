@@ -175,7 +175,8 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
           post_id,
           target_language,
           translation,
-          processing_time
+          processing_time,
+          source_sha
         )
       end
     end
@@ -371,8 +372,24 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
     post_id,
     target_language,
     translation,
-    processing_time
+    processing_time,
+    source_sha
   )
+    post = Post.find_by(id: post_id)
+
+    # A verdict describes the content that produced it. If the post changed
+    # while this ran, the verdict says nothing about what the post holds now,
+    # and recording it as permanent would strand the language forever:
+    # trigger_retranslation only clears records that were already failed when
+    # the edit landed, so this one would never be reached and every later view
+    # would noop on failed_not_retryable.
+    if post && self.class.content_sha(post) != source_sha
+      translation.update!(status: "failed", metadata: void_verdict(translation))
+      log_skipped(post_id, target_language, "failed_against_stale_content")
+      publish_status(post, target_language, "failed", error: result.error)
+      return
+    end
+
     translation.update!(
       status: "failed",
       metadata:
@@ -392,8 +409,14 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
       "Translation failed for post #{post_id}: #{result.error}"
     )
 
-    post = Post.find_by(id: post_id)
     publish_status(post, target_language, "failed", error: result.error) if post
+  end
+
+  # Failed, but with no verdict attached, so auto_retryable? says yes.
+  def void_verdict(translation)
+    (translation.metadata || {}).except(
+      *::BabelReunited::PostTranslation::FAILURE_METADATA_KEYS
+    )
   end
 
   def handle_unexpected_error(error, post_id, target_language)

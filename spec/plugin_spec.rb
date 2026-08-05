@@ -1016,16 +1016,37 @@ RSpec.describe BabelReunited do
     end
 
     describe ".preload_detection_fields" do
-      # Both fields, or detection_current? raises NotPreloadedError on the sha
-      # once anything hands it a post with a preloaded custom-field proxy.
-      it "preloads both detection fields in one query" do
+      it "answers both detection reads without going back to the post" do
         BabelReunited.store_detected_locale(post_record, "en")
         fresh = Post.find(post_record.id)
 
         BabelReunited.preload_detection_fields([fresh])
+        fresh.expects(:custom_fields).never
 
-        expect(fresh.custom_fields_preloaded?).to be true
+        expect(BabelReunited.detected_locale_for(fresh)).to eq("en")
         expect(BabelReunited.detection_current?(fresh)).to be true
+      end
+
+      it "records a miss, so an undetected post does not fall back to a query" do
+        fresh = Post.find(post_record.id)
+
+        BabelReunited.preload_detection_fields([fresh])
+        fresh.expects(:custom_fields).never
+
+        expect(BabelReunited.detected_locale_for(fresh)).to be_nil
+      end
+
+      # Post.preload_custom_fields would install a proxy that raises
+      # NotPreloadedError for anything outside the preloaded list, turning an
+      # unrelated custom-field read on the same object into a 500.
+      it "leaves other custom fields readable" do
+        post_record.custom_fields["some_other_plugin_field"] = "value"
+        post_record.save_custom_fields
+        fresh = Post.find(post_record.id)
+
+        BabelReunited.preload_detection_fields([fresh])
+
+        expect(fresh.custom_fields["some_other_plugin_field"]).to eq("value")
       end
 
       it "tolerates an empty list" do

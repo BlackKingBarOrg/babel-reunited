@@ -109,6 +109,15 @@ RSpec.describe BabelReunited::BannerTranslator do
     expect(described_class.cooked_for(post_record, anonymous)).to be_nil
   end
 
+  # The post stream honors the category allowlist by hiding the tabs. The
+  # banner has no tabs, so it has to honor it by showing the original.
+  it "keeps the original when the category is no longer enabled" do
+    translation("en")
+    SiteSetting.babel_reunited_enabled_categories = Fabricate(:category).id.to_s
+
+    expect(described_class.cooked_for(post_record, anonymous)).to be_nil
+  end
+
   describe ".cache_key_suffix" do
     it "is the preferred language" do
       prefer("es")

@@ -16,6 +16,11 @@ module BabelReunited
     def self.cooked_for(post, guardian)
       return nil unless SiteSetting.babel_reunited_enabled
       return nil if post.blank?
+      # An admin narrowing the enabled categories is saying "no machine
+      # translation here". The post stream honors that by hiding the tabs;
+      # the banner has no tabs, so it has to honor it by showing the
+      # original. Existing translations are not deleted, just not served.
+      return nil unless BabelReunited.translation_enabled_for_post?(post)
 
       detected = BabelReunited.current_detected_locale_for(post)
 

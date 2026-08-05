@@ -385,6 +385,54 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
       expect(translation.safe_to_display?).to be false
     end
 
+    # The regression this guards: a permanent verdict recorded against content
+    # the post no longer has. trigger_retranslation only clears records that
+    # were already failed when the edit landed, so a translation still running
+    # at that moment would land as permanently failed and the language would
+    # noop on failed_not_retryable forever.
+    it "voids a failure verdict when the post changed while the job ran" do
+      fake = Object.new
+      target = post_record
+      fake.define_singleton_method(:call) do
+        target.update_columns(raw: "Completely different content now")
+        BabelReunited::TranslationService::Result.new(
+          error: "Content too long",
+          error_kind: "permanent"
+        )
+      end
+      BabelReunited::TranslationService.stubs(:new).returns(fake)
+
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+
+      translation =
+        BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      expect(translation.status).to eq("failed")
+      expect(translation.metadata["error_kind"]).to be_nil
+      expect(translation.auto_retryable?).to be true
+    end
+
+    it "keeps a permanent verdict when the post did not change" do
+      BabelReunited::TranslationService
+        .any_instance
+        .stubs(:call)
+        .returns(
+          failure_result(error: "Content too long", error_kind: "permanent")
+        )
+
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+
+      translation =
+        BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      expect(translation.metadata["error_kind"]).to eq("permanent")
+      expect(translation.auto_retryable?).to be false
+    end
+
     it "does not push a withheld body to open pages" do
       job_result = success_result
       fake = Object.new

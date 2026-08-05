@@ -301,18 +301,12 @@ module BabelReunited
         return render_view_queued(target_language)
       end
 
-      # After the rate limiter, so a request that never gets through does not
-      # spend a daily slot; before the claim, so a rejected request leaves no
-      # record to unwind.
-      unless guardian.is_staff?
-        fuse = BabelReunited::UsageFuse.admit(current_user)
-        return render_view_noop(fuse) if fuse
-      end
-
       # Atomic claim: the first viewer moves the record into "translating";
       # everyone else noops instead of stacking duplicate jobs for the same
-      # run.
-      previous_status = translation&.status
+      # run. It comes before the fuse so that only the caller that actually
+      # got the work charges a daily slot — with the fuse first, every viewer
+      # who lost this race would pay for a translation someone else is doing.
+      snapshot = BabelReunited::PostTranslation.claim_snapshot(translation)
       claimed =
         if translation
           BabelReunited::PostTranslation.claim_existing(translation)
@@ -322,19 +316,33 @@ module BabelReunited
       return render_view_noop("already_translating") unless claimed
 
       begin
+        # After the rate limiter, so a request that never gets through does
+        # not spend a daily slot.
+        unless guardian.is_staff?
+          fuse = BabelReunited::UsageFuse.admit(current_user)
+          if fuse
+            release_view_claim(target_language, snapshot)
+            return render_view_noop(fuse)
+          end
+        end
+
         BabelReunited.enqueue_translation_jobs(@post, [target_language])
       rescue StandardError
         # A claim with no job behind it would pin the record in "translating"
         # for a full lease, and every later view would noop on it.
-        BabelReunited::PostTranslation.release_claim(
-          @post.id,
-          target_language,
-          previous_status
-        )
+        release_view_claim(target_language, snapshot)
         raise
       end
 
       render_view_queued(target_language)
+    end
+
+    def release_view_claim(target_language, snapshot)
+      BabelReunited::PostTranslation.release_claim(
+        @post.id,
+        target_language,
+        snapshot
+      )
     end
 
     def render_view_queued(target_language)

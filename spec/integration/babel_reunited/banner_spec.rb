@@ -113,6 +113,18 @@ RSpec.describe "banner translation" do
       expect(banner_json_for(spanish_reader)).not_to include("Thai body")
     end
 
+    # Narrowing the enabled categories has to reach a banner that was already
+    # rendered and cached with a translation in it.
+    it "clears the cache when the enabled categories change" do
+      prefer(spanish_reader, "es")
+      expect(banner_json_for(spanish_reader)).to include("Hola mundo")
+
+      SiteSetting.babel_reunited_enabled_categories =
+        Fabricate(:category).id.to_s
+
+      expect(banner_json_for(spanish_reader)).to include(banner_post.cooked)
+    end
+
     it "ignores a reply inside the banner topic" do
       banner_json_for(spanish_reader)
       add_thai_translation

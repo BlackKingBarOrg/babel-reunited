@@ -60,7 +60,9 @@ module BabelReunited
 
       response = request_detection(sample, config)
       if response[:error]
-        return Result.new(error: response[:error], retryable: true)
+        return(
+          Result.new(error: response[:error], retryable: response[:retryable])
+        )
       end
 
       locale = normalize_locale(response[:text])
@@ -105,6 +107,15 @@ module BabelReunited
       code = text.to_s.strip.downcase.gsub(/\A["'`\s]+|["'`.\s]+\z/, "")
       code = LOCALE_ALIASES.fetch(code, code)
       BabelReunited::Locales.valid?(code) ? code : nil
+    end
+
+    # Only statuses another attempt could clear. A 400/401/403 means the
+    # request or the configuration is wrong, and retrying it three times just
+    # delays the fan-out that has to happen anyway.
+    RETRYABLE_STATUSES = [408, 429].freeze
+
+    def retryable_status?(status)
+      RETRYABLE_STATUSES.include?(status) || status >= 500
     end
 
     def api_config
@@ -161,7 +172,10 @@ module BabelReunited
       if response.success?
         provider.parse_response(response.body)
       else
-        { error: "Detection request failed with status #{response.status}" }
+        {
+          error: "Detection request failed with status #{response.status}",
+          retryable: retryable_status?(response.status)
+        }
       end
     end
   end

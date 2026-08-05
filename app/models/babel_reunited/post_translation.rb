@@ -212,21 +212,35 @@ module BabelReunited
       false
     end
 
+    # The state a claim replaced, so release_claim can put it back exactly.
+    def self.claim_snapshot(record)
+      return nil if record.nil?
+
+      { status: record.status, updated_at: record.updated_at }
+    end
+
     # Undoes a claim that never became work — the enqueue raised, or a guard
     # after the claim rejected the request. Without it the record sits in
     # "translating" until its lease expires (an hour on defaults, six at the
     # maximum configured provider timeout) while every later view noops on it.
     #
-    # previous_status is nil when the claim created the row, so there is
-    # nothing to revert to and the placeholder goes away entirely.
-    def self.release_claim(post_id, target_language, previous_status)
+    # updated_at is restored, not refreshed: this row may be an expired lease
+    # that was re-claimed, and stamping the clock forward would lock it for
+    # another full lease — the exact state the rollback exists to undo.
+    #
+    # A nil snapshot means the claim created the row, so there is nothing to
+    # revert to and the placeholder goes away entirely.
+    def self.release_claim(post_id, target_language, snapshot)
       record = find_translation(post_id, target_language)
       return if record.nil? || !record.translating?
 
-      if previous_status.nil?
+      if snapshot.nil?
         record.destroy
       else
-        record.update_columns(status: previous_status, updated_at: Time.current)
+        record.update_columns(
+          status: snapshot[:status],
+          updated_at: snapshot[:updated_at]
+        )
       end
     end
 

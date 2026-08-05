@@ -91,4 +91,51 @@ RSpec.describe BabelReunited::LanguageDetectionService do
     expect(result.failure?).to be true
     expect(result.error).to include("status 500")
   end
+
+  describe "retryability" do
+    def status_result(status)
+      stub_request(
+        :post,
+        "https://api.openai.com/v1/chat/completions"
+      ).to_return(status: status)
+      described_class.new(post: post_record).call
+    end
+
+    it "retries statuses another attempt could clear" do
+      [408, 429, 500, 503].each do |status|
+        expect(status_result(status).retryable?).to(
+          be(true),
+          "#{status} should be retryable"
+        )
+      end
+    end
+
+    # Retrying a wrong request or a wrong key three times just delays the
+    # fan-out that has to happen anyway.
+    it "does not retry a request or configuration error" do
+      [400, 401, 403, 404].each do |status|
+        expect(status_result(status).retryable?).to(
+          be(false),
+          "#{status} should not be retryable"
+        )
+      end
+    end
+
+    it "retries a network error" do
+      stub_request(
+        :post,
+        "https://api.openai.com/v1/chat/completions"
+      ).to_timeout
+
+      expect(described_class.new(post: post_record).call.retryable?).to be true
+    end
+
+    it "does not retry content that is too short to detect" do
+      post_record.update_columns(raw: "hi")
+
+      result = described_class.new(post: post_record).call
+      expect(result.failure?).to be true
+      expect(result.retryable?).to be false
+    end
+  end
 end

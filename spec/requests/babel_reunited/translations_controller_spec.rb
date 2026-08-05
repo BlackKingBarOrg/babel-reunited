@@ -706,6 +706,60 @@ RSpec.describe BabelReunited::TranslationsController do
       expect(translation.reload.status).to eq("stale")
     end
 
+    # The regression this guards: rolling an expired lease back with a fresh
+    # updated_at restarted the lease, locking the record for another full
+    # one — the exact state the rollback exists to undo.
+    it "restores an expired lease as expired, not as a fresh claim" do
+      BabelReunited.expects(:enqueue_translation_jobs).raises(
+        Redis::CannotConnectError.new("down")
+      )
+      expired_at = BabelReunited::PostTranslation.translation_lease.ago - 1.hour
+      translation =
+        Fabricate(
+          :post_translation,
+          post: post_record,
+          language: "es",
+          status: "translating"
+        )
+      translation.update_columns(updated_at: expired_at)
+
+      view_trigger
+
+      translation.reload
+      expect(translation.status).to eq("translating")
+      expect(translation.updated_at).to be_within(1.second).of(expired_at)
+      expect(translation.translation_lease_expired?).to be true
+    end
+
+    # The regression this guards: charging the fuse before the claim made
+    # every viewer who lost the race pay for a translation someone else runs.
+    it "charges no daily slot to a request that loses the claim race" do
+      Fabricate(
+        :post_translation,
+        post: post_record,
+        language: "es",
+        status: "translating"
+      )
+
+      view_trigger
+
+      expect_noop("already_translating")
+      expect(BabelReunited::UsageFuse.site_count).to eq(0)
+      expect(BabelReunited::UsageFuse.user_count(user)).to eq(0)
+    end
+
+    it "releases the claim when the fuse rejects the winner" do
+      SiteSetting.babel_reunited_daily_translation_limit = 1
+      BabelReunited::UsageFuse.admit(Fabricate(:user))
+
+      view_trigger
+
+      expect_noop("site_daily_limit")
+      expect(
+        BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      ).to be_nil
+    end
+
     it "removes a claim it created when the job could not be enqueued" do
       BabelReunited.expects(:enqueue_translation_jobs).raises(
         Redis::CannotConnectError.new("down")
