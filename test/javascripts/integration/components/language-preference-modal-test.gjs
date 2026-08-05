@@ -27,7 +27,7 @@ module(
       assert.dom(".disable-btn").exists();
     });
 
-    test("hints mark pre-translate languages as instant", async function (assert) {
+    test("groups the pre-translate layer above everything else", async function (assert) {
       this.siteSettings.babel_reunited_auto_translate_languages = "en,zh-cn,es";
 
       this.set("closeModal", () => {});
@@ -40,18 +40,66 @@ module(
         </template>
       );
 
-      // The rule is stated once above the list; only the exception is badged.
-      assert
-        .dom(".babel-language-picker__note")
-        .hasText("First view takes a few seconds");
+      const labels = [
+        ...document.querySelectorAll(".babel-language-picker__group-label"),
+      ].map((el) => el.textContent.trim());
+      assert.deepEqual(
+        labels,
+        [
+          "Pre-translated by this site",
+          "Other languages · translated on first view",
+        ],
+        "instant and on-demand languages are separated"
+      );
 
-      await fillIn(".babel-language-picker__filter", "zh-cn");
-      assert.dom(".babel-language-picker__hint").hasText("Instant");
+      // Everything between the two headings is the configured layer.
+      const nodes = [
+        ...document.querySelectorAll(
+          ".babel-language-picker__group-label, .babel-language-picker__item"
+        ),
+      ];
+      const secondHeading = nodes.findIndex(
+        (node, index) =>
+          index > 0 &&
+          node.classList.contains("babel-language-picker__group-label")
+      );
+      assert.strictEqual(
+        secondHeading - 1,
+        3,
+        "the three configured languages lead the list"
+      );
+
+      // The warning now sits on the group it describes, instead of above a
+      // list where it is false for the pre-translated three.
+      assert.dom(".babel-language-picker__note").doesNotExist();
+      assert
+        .dom(".babel-language-picker__hint")
+        .doesNotExist("the group heading replaces the per-row badge");
+    });
+
+    test("drops a group heading when the filter empties that group", async function (assert) {
+      this.siteSettings.babel_reunited_auto_translate_languages = "en,zh-cn,es";
+
+      this.set("closeModal", () => {});
+      await render(
+        <template>
+          <LanguagePreferenceModal
+            @closeModal={{this.closeModal}}
+            @inline={{true}}
+          />
+        </template>
+      );
 
       await fillIn(".babel-language-picker__filter", "thai");
       assert
-        .dom(".babel-language-picker__hint")
-        .doesNotExist("on-demand languages carry no per-row hint");
+        .dom(".babel-language-picker__group-label")
+        .doesNotExist("a lone list needs no heading");
+      assert.dom(".babel-language-picker__item").exists();
+
+      await fillIn(".babel-language-picker__filter", "espa");
+      assert
+        .dom(".babel-language-picker__group-label")
+        .hasText("Pre-translated by this site");
     });
 
     test("selecting language sends POST to user-preferred-language", async function (assert) {

@@ -15,6 +15,8 @@ es:
         more_languages: "Más idiomas"
         translated_group: "Traducido"
         all_group: "Todos los idiomas"
+        pretranslated_group: "Pretraducido por este sitio"
+        on_demand_group: "Otros idiomas · se traducen al verlos"
         search_placeholder: "Buscar idiomas..."
         instant_hint: "Instantáneo"
         on_demand_hint: "La primera vista tarda unos segundos"

@@ -84,6 +84,7 @@ export default class LanguagePreferenceModal extends Component {
 
         <BabelLanguagePicker
           @instantCodes={{this.instantCodes}}
+          @groupInstant={{true}}
           @showHints={{true}}
           @onSelect={{this.selectLanguage}}
         />

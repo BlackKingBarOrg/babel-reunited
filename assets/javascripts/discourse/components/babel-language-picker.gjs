@@ -25,7 +25,9 @@ import {
 // @translatedCodes codes with an existing displayable translation (grouped
 //                  first, instant to open)
 // @excludeCodes    codes handled elsewhere (original tab, preferred tab)
-// @instantCodes    pre-translate layer codes (hinted as instant)
+// @instantCodes    pre-translate layer codes
+// @groupInstant    give the pre-translate layer its own group instead of a
+//                  per-row badge (see instantEntries)
 // @showHints       show instant / first-view-takes-seconds hints
 // @selectedCode    currently selected code (preference surfaces)
 export default class BabelLanguagePicker extends Component {
@@ -97,12 +99,53 @@ export default class BabelLanguagePicker extends Component {
     );
   }
 
+  // On the preference surfaces every entry looks alike, but three of them are
+  // instant and a hundred take a cold translation on first view. Grouping is
+  // the only place that difference can be shown before the reader commits to
+  // a language.
+  get instantEntries() {
+    if (!this.args.groupInstant) {
+      return [];
+    }
+
+    const skip = new Set([...this.translatedCodes, ...this.excludeCodes]);
+    return this.entriesFor(
+      this.instantCodes.filter((code) => !skip.has(code))
+    );
+  }
+
   get otherEntries() {
     const skip = new Set([...this.translatedCodes, ...this.excludeCodes]);
+    if (this.args.groupInstant) {
+      this.instantCodes.forEach((code) => skip.add(code));
+    }
     return this.entriesFor(
       SELECTABLE_LOCALES.filter((code) => !skip.has(code)),
       { hinted: true }
     );
+  }
+
+  get hasLeadingGroup() {
+    return !!(this.translatedEntries.length || this.instantEntries.length);
+  }
+
+  // Labels the trailing group only when something precedes it; a lone list
+  // needs no heading.
+  get otherGroupLabel() {
+    if (!this.hasLeadingGroup) {
+      return null;
+    }
+
+    return this.args.groupInstant
+      ? i18n("babel_reunited.language_tabs.on_demand_group")
+      : i18n("babel_reunited.language_tabs.all_group");
+  }
+
+  // The note above the list is true of most languages but false of the
+  // pre-translate layer, so once that layer has its own group the warning
+  // belongs on the group it actually describes.
+  get showTopNote() {
+    return this.args.showHints && !this.args.groupInstant;
   }
 
   @action
@@ -128,7 +171,7 @@ export default class BabelLanguagePicker extends Component {
         {{on "input" this.updateFilter}}
       />
 
-      {{#if @showHints}}
+      {{#if this.showTopNote}}
         <div class="babel-language-picker__note">
           {{i18n "babel_reunited.language_tabs.on_demand_hint"}}
         </div>
@@ -159,10 +202,33 @@ export default class BabelLanguagePicker extends Component {
           {{/each}}
         {{/if}}
 
+        {{#if this.instantEntries.length}}
+          <div class="babel-language-picker__group-label">
+            {{i18n "babel_reunited.language_tabs.pretranslated_group"}}
+          </div>
+          {{#each this.instantEntries as |entry|}}
+            <button
+              type="button"
+              class={{concatClass
+                "babel-language-picker__item"
+                (if (eq entry.code @selectedCode) "--selected")
+              }}
+              {{on "click" (fn this.select entry.code)}}
+            >
+              <span class="babel-language-picker__name">{{entry.name}}</span>
+              {{#if entry.secondary}}
+                <span
+                  class="babel-language-picker__secondary"
+                >{{entry.secondary}}</span>
+              {{/if}}
+            </button>
+          {{/each}}
+        {{/if}}
+
         {{#if this.otherEntries.length}}
-          {{#if this.translatedEntries.length}}
+          {{#if this.otherGroupLabel}}
             <div class="babel-language-picker__group-label">
-              {{i18n "babel_reunited.language_tabs.all_group"}}
+              {{this.otherGroupLabel}}
             </div>
           {{/if}}
           {{#each this.otherEntries as |entry|}}

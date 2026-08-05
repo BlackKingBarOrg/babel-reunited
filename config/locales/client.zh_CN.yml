@@ -15,6 +15,8 @@ zh_CN:
         more_languages: "更多语言"
         translated_group: "已翻译"
         all_group: "全部语言"
+        pretranslated_group: "站点预翻译"
+        on_demand_group: "其他语言 · 首次查看时翻译"
         search_placeholder: "搜索语言..."
         instant_hint: "即时"
         on_demand_hint: "首次查看需数秒"

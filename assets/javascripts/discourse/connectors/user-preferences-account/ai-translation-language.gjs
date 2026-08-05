@@ -156,6 +156,7 @@ export default class AiTranslationLanguage extends Component {
             <BabelLanguagePicker
               @selectedCode={{this.currentLanguage}}
               @instantCodes={{this.instantCodes}}
+              @groupInstant={{true}}
               @showHints={{true}}
               @onSelect={{this.changeLanguage}}
             />
