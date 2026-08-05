@@ -94,6 +94,10 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
 
     return if post_id.blank? || target_language.blank?
 
+    # Anchors the deletion tombstone check in write_result!: a deletion
+    # after this moment wins over this job, one before it does not.
+    @job_started_at = Time.current
+
     with_translation_lock(post_id, target_language) do
       post = find_post(post_id, target_language)
       return unless post
@@ -283,7 +287,11 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
   # already paid for would be dropped without a trace. Writing through a
   # fresh lookup puts it back instead.
   def write_result!(post, target_language, attrs)
-    if BabelReunited.translation_tombstoned?(post.id, target_language)
+    if BabelReunited.translation_tombstoned_since?(
+         post.id,
+         target_language,
+         @job_started_at
+       )
       log_skipped(post.id, target_language, "deleted_while_translating")
       return nil
     end

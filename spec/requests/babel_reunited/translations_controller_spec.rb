@@ -839,12 +839,26 @@ RSpec.describe BabelReunited::TranslationsController do
     # what stops it from writing the finished translation right back.
     it "stamps a tombstone so an in-flight job cannot resurrect the row" do
       Fabricate(:post_translation, post: post_record, language: "es")
+      before_delete = Time.current
 
       delete "/babel-reunited/posts/#{post_record.id}/translations/es.json"
       expect(response.status).to eq(200)
       expect(
-        BabelReunited.translation_tombstoned?(post_record.id, "es")
+        BabelReunited.translation_tombstoned_since?(
+          post_record.id,
+          "es",
+          before_delete
+        )
       ).to be true
+      # A job started after the deletion is a fresh request and must not
+      # defer to it.
+      expect(
+        BabelReunited.translation_tombstoned_since?(
+          post_record.id,
+          "es",
+          Time.current
+        )
+      ).to be false
     end
   end
 

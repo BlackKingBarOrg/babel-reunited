@@ -504,6 +504,28 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
       ).to be_nil
     end
 
+    # The tombstone marks a moment, not a language: deleting and then asking
+    # again is a fresh request, and a job started after the deletion must
+    # deliver instead of deferring to the leftover marker.
+    it "writes the result of a re-request that follows a deletion" do
+      BabelReunited.tombstone_translation!(post_record.id, "es")
+
+      BabelReunited::TranslationService
+        .any_instance
+        .stubs(:call)
+        .returns(success_result)
+
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+
+      stored =
+        BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      expect(stored).to be_present
+      expect(stored.status).to eq("completed")
+    end
+
     it "survives the view lane releasing the claim it is working on" do
       BabelReunited::PostTranslation.claim_new(post_record.id, "es")
 

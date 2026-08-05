@@ -53,21 +53,27 @@ module ::BabelReunited
     translation_enabled_for_category?(post.topic&.category_id)
   end
 
-  # A deliberate deletion must win over a translation job that is still
-  # holding the row across a provider call (write_result! re-creates rows
-  # that vanish mid-flight, which is correct for the view lane's mechanical
-  # claim cleanup but must not resurrect content a person chose to remove).
-  # The tombstone outlives the longest possible in-flight job.
+  # A deliberate deletion must win over a translation job that was already
+  # running when the person deleted (write_result! re-creates rows that
+  # vanish mid-flight, which is correct for the view lane's mechanical claim
+  # cleanup but must not resurrect content a person chose to remove). The
+  # tombstone records WHEN the deletion happened, and only jobs that started
+  # before that moment defer to it — a job started afterwards is the deletion
+  # being followed by a fresh request, and its result must land, not be
+  # discarded by a leftover flag. The key outlives the longest possible
+  # in-flight job.
   def self.tombstone_translation!(post_id, language)
     Discourse.redis.setex(
       translation_tombstone_key(post_id, language),
       max_translation_runtime.to_i,
-      "1"
+      Time.current.to_f.to_s
     )
   end
 
-  def self.translation_tombstoned?(post_id, language)
-    Discourse.redis.exists?(translation_tombstone_key(post_id, language))
+  def self.translation_tombstoned_since?(post_id, language, started_at)
+    deleted_at =
+      Discourse.redis.get(translation_tombstone_key(post_id, language))
+    deleted_at.present? && deleted_at.to_f > started_at.to_f
   end
 
   def self.translation_tombstone_key(post_id, language)
