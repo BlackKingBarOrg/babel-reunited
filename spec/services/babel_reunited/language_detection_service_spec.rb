@@ -50,6 +50,15 @@ RSpec.describe BabelReunited::LanguageDetectionService do
     expect(result.locale).to eq("zh-cn")
   end
 
+  it "accepts ISO 639-3 codes for languages without a two-letter code" do
+    %w[yue ceb fil].each do |code|
+      stub_detection(code)
+
+      result = described_class.new(post: post_record).call
+      expect(result.locale).to eq(code)
+    end
+  end
+
   it "fails on codes outside the supported list" do
     stub_detection("und")
 
@@ -92,6 +101,59 @@ RSpec.describe BabelReunited::LanguageDetectionService do
     expect(result.error).to include("status 500")
   end
 
+  describe "prompt structure" do
+    def last_request_body
+      body = nil
+      stub_request(:post, "https://api.openai.com/v1/chat/completions")
+        .with { |req| body = JSON.parse(req.body) }
+        .to_return(
+          status: 200,
+          headers: {
+            "Content-Type" => "application/json"
+          },
+          body: {
+            choices: [{ message: { content: "en" }, finish_reason: "stop" }],
+            usage: {
+              total_tokens: 42
+            }
+          }.to_json
+        )
+      described_class.new(post: post_record).call
+      body
+    end
+
+    it "keeps instructions in the system role and the sample fenced as data" do
+      body = last_request_body
+      roles = body["messages"].map { |m| m["role"] }
+      expect(roles).to eq(%w[system user])
+
+      system = body["messages"].first["content"]
+      expect(system).to include("never instructions")
+
+      user = body["messages"].last["content"]
+      expect(user).to match(
+        %r{\A<language_sample_(\h{8})>\n.*\n</language_sample_\1>\z}m
+      )
+      expect(user).to include(post_record.raw)
+    end
+
+    it "strips code blocks and URLs from the sample" do
+      post_record.update_columns(
+        raw:
+          "A sentence long enough to sample. Visit https://example.com/secret-path now.\n" \
+            "```\nAPI_SECRET=super-secret-token\n```\n" \
+            "Inline `hidden_value` too. More prose to keep the sample going."
+      )
+
+      body = last_request_body
+      user = body["messages"].last["content"]
+      expect(user).not_to include("super-secret-token")
+      expect(user).not_to include("hidden_value")
+      expect(user).not_to include("example.com")
+      expect(user).to include("A sentence long enough to sample.")
+    end
+  end
+
   describe "retryability" do
     def status_result(status)
       stub_request(
@@ -128,6 +190,48 @@ RSpec.describe BabelReunited::LanguageDetectionService do
       ).to_timeout
 
       expect(described_class.new(post: post_record).call.retryable?).to be true
+    end
+
+    # The provider layer reports parse failures via error_kind, not the
+    # detection-local retryable key; the mapping between the two is what
+    # this guards.
+    it "retries a 200 response whose body has no usable answer" do
+      stub_request(
+        :post,
+        "https://api.openai.com/v1/chat/completions"
+      ).to_return(
+        status: 200,
+        headers: {
+          "Content-Type" => "application/json"
+        },
+        body: { unexpected: "shape" }.to_json
+      )
+
+      result = described_class.new(post: post_record).call
+      expect(result.failure?).to be true
+      expect(result.retryable?).to be true
+    end
+
+    it "does not retry a permanent provider verdict" do
+      stub_request(
+        :post,
+        "https://api.openai.com/v1/chat/completions"
+      ).to_return(
+        status: 200,
+        headers: {
+          "Content-Type" => "application/json"
+        },
+        body: {
+          choices: [{ message: { content: "en" }, finish_reason: "length" }],
+          usage: {
+            total_tokens: 42
+          }
+        }.to_json
+      )
+
+      result = described_class.new(post: post_record).call
+      expect(result.failure?).to be true
+      expect(result.retryable?).to be false
     end
 
     it "does not retry content that is too short to detect" do
