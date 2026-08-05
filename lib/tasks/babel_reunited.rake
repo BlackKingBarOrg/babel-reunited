@@ -15,15 +15,14 @@ namespace :babel_reunited do
       exit 1
     end
 
-    auto_translate_languages =
-      SiteSetting.babel_reunited_auto_translate_languages
-    if auto_translate_languages.blank?
-      puts "ERROR: No auto-translate languages configured"
+    # The filtered accessor, not a raw split: unsupported codes in the
+    # setting must not reach the model or the provider from here either.
+    languages = BabelReunited.auto_translate_languages
+    if languages.empty?
+      puts "ERROR: No supported auto-translate languages configured"
       puts "Please set babel_reunited_auto_translate_languages in Site Settings"
       exit 1
     end
-
-    languages = auto_translate_languages.split(",").map(&:strip)
     puts "Auto-translate languages: #{languages.join(", ")}"
     puts ""
 
