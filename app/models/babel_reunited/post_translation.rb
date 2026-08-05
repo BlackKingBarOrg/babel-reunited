@@ -48,6 +48,14 @@ module BabelReunited
                 with: BabelReunited::Locales::LANGUAGE_CODE_FORMAT,
                 message: "must be a valid language code"
               }
+    # On create only: rows that predate a shrink of the supported set must
+    # stay updatable (recook, heal, stale-marking all go through update!).
+    validates :language,
+              inclusion: {
+                in: BabelReunited::Locales::SUPPORTED,
+                message: "is not a supported language"
+              },
+              on: :create
 
     scope :by_language, ->(lang) { where(language: lang) }
     scope :recent, -> { order(created_at: :desc) }

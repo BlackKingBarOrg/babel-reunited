@@ -267,7 +267,12 @@ RSpec.describe BabelReunited::PostTranslation do
       Fabricate(
         :post_translation,
         post: post,
-        language: "d#{status[0]}",
+        language: {
+          "completed" => "de",
+          "stale" => "es",
+          "translating" => "fr",
+          "failed" => "fi"
+        }.fetch(status),
         status: status,
         translated_content: "<p>old</p>"
       )
