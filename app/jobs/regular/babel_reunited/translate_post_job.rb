@@ -211,11 +211,7 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
       # satisfy it. A holder that discards its own result — a translation
       # deleted mid-flight — leaves it unserved forever instead, so leave a
       # marker the holder picks up when it releases the lock.
-      Discourse.redis.setex(
-        self.class.rerun_key(post_id, language),
-        self.class.lock_ttl,
-        force_update ? "1" : "0"
-      )
+      mark_pending_request(post_id, language, force_update)
       log_skipped(post_id, language, "locked")
       return
     end
@@ -238,17 +234,52 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
     "babel_reunited:rerun:#{post_id}:#{language}"
   end
 
+  # Both lanes share one marker, so merging has to be a promotion, never a
+  # replacement: a plain request arriving second must not turn a staff force
+  # into a follow-up that skips on source_unchanged, silently discarding the
+  # one request that was meant to override an existing translation.
+  MERGE_RERUN_MARKER = <<~LUA
+    local current = redis.call('get', KEYS[1])
+    local value = ARGV[1]
+    if current == '1' then value = '1' end
+    redis.call('setex', KEYS[1], ARGV[2], value)
+    return value
+  LUA
+
+  # Read and remove in one step. Separate GET and DEL would delete a marker
+  # written between them while acting on the value it replaced — losing a
+  # force request exactly when two lanes are competing.
+  TAKE_RERUN_MARKER = <<~LUA
+    local value = redis.call('get', KEYS[1])
+    if value then redis.call('del', KEYS[1]) end
+    return value
+  LUA
+
+  # eval bypasses DiscourseRedis key prefixing, so the key has to be
+  # namespaced by hand — same reason as the lock release above.
+  def rerun_marker_key(post_id, language)
+    Discourse.redis.namespace_key(self.class.rerun_key(post_id, language))
+  end
+
+  def mark_pending_request(post_id, language, force_update)
+    Discourse.redis.eval(
+      MERGE_RERUN_MARKER,
+      keys: [rerun_marker_key(post_id, language)],
+      argv: [force_update ? "1" : "0", self.class.lock_ttl.to_s]
+    )
+  end
+
   # Re-enqueues a request that arrived while this job held the lock. Costs
   # nothing in the common case: the follow-up job finds the translation this
   # one just wrote and returns on the source_unchanged path. It only does real
   # work when this job produced nothing usable.
   def hand_off_pending_request(post_id, language)
-    key = self.class.rerun_key(post_id, language)
-    pending = Discourse.redis.get(key)
+    pending =
+      Discourse.redis.eval(
+        TAKE_RERUN_MARKER,
+        keys: [rerun_marker_key(post_id, language)]
+      )
     return if pending.nil?
-    # Taking the marker atomically keeps concurrent releases from each
-    # enqueueing their own follow-up.
-    return unless Discourse.redis.del(key) == 1
 
     Jobs.enqueue(
       self.class,
@@ -628,6 +659,15 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
     return unless post.post_number == 1
     return if translation.translated_title.blank?
     return unless translation.safe_to_display?
+    # The title is its own egress on its own channel: without this the body of
+    # a same-language record is withheld and its title is pushed anyway, and a
+    # reload then takes the title back when the serializer applies the rule.
+    if BabelReunited.same_language?(
+         translation.language,
+         BabelReunited.current_detected_locale_for(post)
+       )
+      return
+    end
 
     MessageBus.publish(
       "/babel-translated-title/#{post.topic_id}",

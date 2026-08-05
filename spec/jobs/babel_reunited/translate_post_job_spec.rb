@@ -214,6 +214,77 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
       ).to be_nil
     end
 
+    # Both lanes share one marker. A staff force is the only way to override
+    # an existing translation, so a plain request landing on top of it must
+    # not downgrade it into a follow-up that skips on source_unchanged.
+    it "keeps a force request when an ordinary one is merged into it" do
+      lock_key = "babel_reunited:translate:#{post_record.id}:es"
+      Discourse.redis.set(lock_key, "1", ex: 300)
+
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es",
+        force_update: true
+      )
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es",
+        force_update: false
+      )
+
+      Discourse.redis.del(lock_key)
+      BabelReunited::TranslationService
+        .any_instance
+        .stubs(:call)
+        .returns(success_result)
+
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+
+      expect(
+        job_enqueued?(
+          job: described_class,
+          args: {
+            post_id: post_record.id,
+            target_language: "es",
+            force_update: true
+          }
+        )
+      ).to be true
+    end
+
+    it "consumes the marker exactly once" do
+      lock_key = "babel_reunited:translate:#{post_record.id}:es"
+      Discourse.redis.set(lock_key, "1", ex: 300)
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+      Discourse.redis.del(lock_key)
+
+      BabelReunited::TranslationService
+        .any_instance
+        .stubs(:call)
+        .returns(success_result)
+
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+      enqueued_after_first = Jobs::BabelReunited::TranslatePostJob.jobs.size
+
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+
+      expect(Jobs::BabelReunited::TranslatePostJob.jobs.size).to eq(
+        enqueued_after_first
+      )
+    end
+
     it "leaves no marker when nothing contended for the lock" do
       BabelReunited::TranslationService
         .any_instance
@@ -727,6 +798,29 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
       expect(messages.length).to eq(1)
       expect(messages.first.data[:status]).to eq("withheld")
       expect(messages.first.data).not_to have_key(:translation)
+    end
+
+    # The title travels on its own channel, so withholding the body is only
+    # half the guard: a same-language title pushed to open pages would be
+    # taken back by the serializer on the next reload.
+    it "does not push a same-language title either" do
+      BabelReunited.store_detected_locale(post_record, "es")
+      BabelReunited::TranslationService
+        .any_instance
+        .stubs(:call)
+        .returns(success_result)
+
+      messages =
+        MessageBus.track_publish(
+          "/babel-translated-title/#{post_record.topic_id}"
+        ) do
+          described_class.new.execute(
+            post_id: post_record.id,
+            target_language: "es"
+          )
+        end
+
+      expect(messages).to be_empty
     end
 
     it "does not push a withheld title either" do
