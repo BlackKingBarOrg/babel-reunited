@@ -576,8 +576,19 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
     payload = { post_id: post.id, language: language, status: status }
 
     # Pushing the body to open pages bypasses the serializer and the
-    # controller, so the same guard has to hold here or it holds nowhere.
-    if status == "completed" && translation && !translation.safe_to_display?
+    # controller, so the same guard has to hold here or it holds nowhere —
+    # including the same-language reject, since a wrong detection can produce
+    # a completed record of the post's own language.
+    withheld =
+      translation &&
+        (
+          !translation.safe_to_display? ||
+            BabelReunited.same_language?(
+              language,
+              BabelReunited.current_detected_locale_for(post)
+            )
+        )
+    if status == "completed" && withheld
       MessageBus.publish(
         "/post-translations/#{post.id}",
         { post_id: post.id, language: language, status: "withheld" },

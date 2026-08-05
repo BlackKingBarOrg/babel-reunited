@@ -862,6 +862,36 @@ RSpec.describe BabelReunited::TranslationsController do
     end
   end
 
+  # A translation into the post's own language is legacy data or the product
+  # of a wrong detection, and it is the shape answer-mode output took. No
+  # reader path may surface it — the read endpoints included.
+  describe "same-language records" do
+    before do
+      Fabricate(:post_translation, post: post_record, language: "en")
+      BabelReunited.store_detected_locale(post_record, "en")
+    end
+
+    it "does not list one in index" do
+      get "/babel-reunited/posts/#{post_record.id}/translations.json"
+
+      expect(response.status).to eq(200)
+      languages = response.parsed_body.map { |t| t["language"] }
+      expect(languages).not_to include("en")
+    end
+
+    it "does not serve one from show" do
+      get "/babel-reunited/posts/#{post_record.id}/translations/en.json"
+      expect(response.status).to eq(404)
+    end
+
+    it "still serves a genuine translation of the same post" do
+      Fabricate(:post_translation, post: post_record, language: "es")
+
+      get "/babel-reunited/posts/#{post_record.id}/translations/es.json"
+      expect(response.status).to eq(200)
+    end
+  end
+
   # The category setting scopes the whole feature: excluded categories serve
   # no stored translations, so the read endpoints match the hidden UI, the
   # withheld serializer payloads, and the blocked generation.

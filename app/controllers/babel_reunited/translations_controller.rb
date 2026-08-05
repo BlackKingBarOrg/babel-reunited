@@ -19,21 +19,20 @@ module BabelReunited
                   only: %i[index show create translation_status]
 
     def index
-      # This is a public read endpoint, so it needs the same guard as show:
-      # otherwise it is a way around it.
-      translations = @post.post_translations.recent.select(&:safe_to_display?)
+      # A public read endpoint is an egress like any other: the same guard the
+      # serializer applies has to hold here, or it holds nowhere.
+      detected = BabelReunited.current_detected_locale_for(@post)
+      translations =
+        @post.post_translations.recent.select do |t|
+          t.safe_to_display? &&
+            !BabelReunited.same_language?(t.language, detected)
+        end
       render_serialized(translations, PostTranslationSerializer)
     end
 
     def show
       translation =
-        BabelReunited::PostTranslation.find_translation(
-          @post.id,
-          params[:language]
-        )
-      # The display guard applies here too, or the on-demand fetch would be a
-      # way around the serializer's.
-      translation = nil if translation && !translation.safe_to_display?
+        BabelReunited.displayable_translation_for(@post, params[:language])
 
       unless translation
         return(

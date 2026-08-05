@@ -706,6 +706,29 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
       expect(messages.first.data).not_to have_key(:translation)
     end
 
+    # A wrong detection can still produce a completed record of the post's own
+    # language. It is displayable by status, so only the same-language check
+    # keeps it off open pages.
+    it "does not push a same-language body to open pages" do
+      BabelReunited.store_detected_locale(post_record, "es")
+      BabelReunited::TranslationService
+        .any_instance
+        .stubs(:call)
+        .returns(success_result)
+
+      messages =
+        MessageBus.track_publish("/post-translations/#{post_record.id}") do
+          described_class.new.execute(
+            post_id: post_record.id,
+            target_language: "es"
+          )
+        end
+
+      expect(messages.length).to eq(1)
+      expect(messages.first.data[:status]).to eq("withheld")
+      expect(messages.first.data).not_to have_key(:translation)
+    end
+
     it "does not push a withheld title either" do
       job_result = success_result
       fake = Object.new
