@@ -359,7 +359,7 @@ module(
         .exists("shows spinner on the transient tab");
     });
 
-    test("picking an in-flight language fetches but never re-requests", async function (assert) {
+    test("picking an in-flight language waits without any request", async function (assert) {
       this.set(
         "post",
         createPost({
@@ -378,14 +378,8 @@ module(
       pretender.get(
         `/babel-reunited/posts/${this.post.id}/translations/vi.json`,
         () => {
-          assert.step("GET body");
-          return response({
-            post_translation: {
-              language: "vi",
-              status: "translating",
-              translated_content: "",
-            },
-          });
+          assert.step("GET called");
+          return response(404, { errors: ["not found"] });
         }
       );
 
@@ -401,9 +395,82 @@ module(
       await fillIn(".babel-language-picker__filter", "vietnamese");
       await click(".babel-language-picker__item");
 
-      // A fresh in-flight record has no body yet: one read, no new job.
-      assert.verifySteps(["GET body"]);
+      // The show endpoint only returns completed bodies, so there is nothing
+      // to fetch; the running job's completion will switch the view.
+      assert.verifySteps([]);
+      assert
+        .dom(".ai-language-tabs .spinner.small")
+        .exists("waits with a spinner");
       assert.dom(".cooked").hasText("Original cooked content");
+
+      await publishToMessageBus(`/post-translations/${this.post.id}`, {
+        status: "completed",
+        language: "vi",
+        translation: {
+          language: "vi",
+          status: "completed",
+          translated_content: "<p>Bản dịch tiếng Việt</p>",
+        },
+      });
+
+      assert.dom(".cooked").hasText("Bản dịch tiếng Việt");
+    });
+
+    test("a stale language with no local body refreshes instead of fetching", async function (assert) {
+      this.set(
+        "post",
+        createPost({
+          babel_translations_meta: [
+            { language: "de", status: "stale", source_language: "en" },
+          ],
+        })
+      );
+      pretender.post(
+        `/babel-reunited/posts/${this.post.id}/translations`,
+        (request) => {
+          const body = new URLSearchParams(request.requestBody);
+          assert.step(`POST ${body.get("target_language")}`);
+          return response({ status: "queued" });
+        }
+      );
+      pretender.get(
+        `/babel-reunited/posts/${this.post.id}/translations/de.json`,
+        () => {
+          assert.step("GET called");
+          return response(404, { errors: ["not found"] });
+        }
+      );
+
+      await render(
+        <template>
+          <LanguageTabsConnector @post={{this.post}}>
+            <div class="cooked">{{trustHTML this.post.cooked}}</div>
+          </LanguageTabsConnector>
+        </template>
+      );
+
+      await openLanguageMenu();
+      await fillIn(".babel-language-picker__filter", "deutsch");
+      await click(".babel-language-picker__item.--translated");
+
+      // Fetching would 404 — the body was withheld as stale. The click asks
+      // for a refresh and the completion swaps the view in.
+      assert.verifySteps(["POST de"]);
+      assert
+        .dom(".ai-language-tabs .spinner.small")
+        .exists("shows the refresh in progress");
+
+      await publishToMessageBus(`/post-translations/${this.post.id}`, {
+        status: "completed",
+        language: "de",
+        translation: {
+          language: "de",
+          status: "completed",
+          translated_content: "<p>Frische Übersetzung</p>",
+        },
+      });
+
+      assert.dom(".cooked").hasText("Frische Übersetzung");
     });
 
     test("a re-translating record with an old body stays readable", async function (assert) {

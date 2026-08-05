@@ -463,13 +463,16 @@ export default class LanguageTabsConnector extends Component {
       return;
     }
 
+    // No readable content locally. The show endpoint only ever returns
+    // completed bodies, so what happens next depends on the row's state:
+    // fetch a body that exists, wait out a run already in flight, and ask
+    // the server to (re)translate everything else — stale, failed, missing.
     const status = this.getTranslationStatus(languageCode);
-    if (status && status !== "failed") {
+    if (status === "completed") {
       this._pendingLanguage = languageCode;
-      // A record exists server-side (completed, stale, or re-translating with
-      // an old body) but the body is not local; fetch it. Fresh translating
-      // rows come back empty and simply keep their spinner.
       this._fetchTranslation(languageCode);
+    } else if (status === "translating") {
+      this._pendingLanguage = languageCode;
     } else if (this._pendingLanguage !== languageCode) {
       this._requestTranslation(languageCode);
     }
