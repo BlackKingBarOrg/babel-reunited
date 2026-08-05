@@ -17,6 +17,7 @@ import {
   languageDisplayName,
   languageEndonym,
 } from "../lib/language-display-name";
+import BabelScrollToSelected from "../modifiers/babel-scroll-to-selected";
 
 // Searchable language list shared by the post-level overflow menu and the
 // preference surfaces (modal + account page).
@@ -177,7 +178,10 @@ export default class BabelLanguagePicker extends Component {
         </div>
       {{/if}}
 
-      <div class="babel-language-picker__list">
+      <div
+        class="babel-language-picker__list"
+        {{BabelScrollToSelected @selectedCode}}
+      >
         {{#if this.translatedEntries.length}}
           <div class="babel-language-picker__group-label">
             {{i18n "babel_reunited.language_tabs.translated_group"}}
