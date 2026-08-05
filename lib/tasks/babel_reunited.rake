@@ -15,15 +15,14 @@ namespace :babel_reunited do
       exit 1
     end
 
-    auto_translate_languages =
-      SiteSetting.babel_reunited_auto_translate_languages
-    if auto_translate_languages.blank?
-      puts "ERROR: No auto-translate languages configured"
+    # The filtered accessor, not a raw split: unsupported codes in the
+    # setting must not reach the model or the provider from here either.
+    languages = BabelReunited.auto_translate_languages
+    if languages.empty?
+      puts "ERROR: No supported auto-translate languages configured"
       puts "Please set babel_reunited_auto_translate_languages in Site Settings"
       exit 1
     end
-
-    languages = auto_translate_languages.split(",").map(&:strip)
     puts "Auto-translate languages: #{languages.join(", ")}"
     puts ""
 
@@ -169,6 +168,44 @@ namespace :babel_reunited do
     end
   end
 
+  desc "Scan completed translations whose structure drifted from the source (read-only)"
+  task scan_translation_anomalies: :environment do
+    unless SiteSetting.babel_reunited_enabled
+      puts "ERROR: Babel Reunited plugin is not enabled"
+      exit 1
+    end
+
+    limit = ENV["LIMIT"]&.to_i
+    scanned = 0
+    flagged = 0
+
+    scope = BabelReunited::PostTranslation.recookable.order(:id)
+    if ENV["TARGET_LANGUAGE"].present?
+      scope = scope.where(language: ENV["TARGET_LANGUAGE"])
+    end
+
+    scope.find_each(batch_size: 200) do |t|
+      break if limit && scanned >= limit
+      post = Post.find_by(id: t.post_id)
+      next if post.nil? || post.raw.blank?
+
+      scanned += 1
+      reasons =
+        BabelReunited::TranslationStructure.drift(post.raw, t.translated_raw)
+      next if reasons.empty?
+
+      flagged += 1
+      puts "translation #{t.id} post #{t.post_id} topic #{post.topic_id} " \
+             "#{t.language}: #{reasons.join(", ")}"
+    end
+
+    puts ""
+    puts "Scanned: #{scanned}, flagged: #{flagged}"
+    if flagged > 0
+      puts "Review flagged records, then re-translate (force_update) or delete them."
+    end
+  end
+
   desc "Recook completed translations from stored translated_raw (no LLM calls)"
   task recook_translations: :environment do
     unless SiteSetting.babel_reunited_enabled
@@ -210,6 +247,122 @@ namespace :babel_reunited do
       puts "Skipped (changed mid-run): #{stats.skipped_changed}"
       puts "Failed (content kept): #{stats.failed}"
       puts "Last handled ID:  #{stats.last_id || "-"} (use START_ID=#{stats.last_id.to_i + 1} to resume)"
+    end
+  end
+
+  desc "Report language codes in existing data that are not in the supported list"
+  task audit_language_codes: :environment do
+    supported = BabelReunited::Locales::SUPPORTED
+
+    translation_codes =
+      BabelReunited::PostTranslation.distinct.pluck(:language) - supported
+    puts "post_translations languages outside the supported list: " \
+           "#{translation_codes.sort.join(", ").presence || "none"}"
+    translation_codes.sort.each do |code|
+      count = BabelReunited::PostTranslation.where(language: code).count
+      puts "  #{code}: #{count} records"
+    end
+
+    pref_codes =
+      UserCustomField
+        .where(name: BabelReunited::PREFERRED_LANGUAGE_FIELD)
+        .distinct
+        .pluck(:value)
+        .compact - supported
+    legacy_pref_codes =
+      BabelReunited::UserPreferredLanguage.distinct.pluck(:language).compact -
+        supported
+    all_pref_codes = (pref_codes + legacy_pref_codes).uniq.sort
+    puts "user preference languages outside the supported list: " \
+           "#{all_pref_codes.join(", ").presence || "none"}"
+    puts ""
+    puts "These codes can no longer be requested for translation. Extend " \
+           "BabelReunited::Locales::SUPPORTED (and the client mirror) or " \
+           "migrate the data."
+  end
+
+  desc "Remove translation records whose language matches the post's detected language (legacy source-to-source copies)"
+  task cleanup_same_language_copies: :environment do
+    dry_run = ENV["DRY_RUN"] != "false"
+
+    # Only provably redundant records are touched: the post's detected locale
+    # is the ground truth, and the original view already covers that language.
+    # Posts without a detected locale are left alone.
+    batch_size = (ENV["BATCH_SIZE"] || 500).to_i
+
+    candidates =
+      BabelReunited::PostTranslation.joins(
+        "INNER JOIN post_custom_fields pcf " \
+          "ON pcf.post_id = post_translations.post_id " \
+          "AND pcf.name = '#{BabelReunited::DETECTED_LOCALE_FIELD}'"
+      ).where("post_translations.language = pcf.value")
+
+    total = 0
+    skipped = 0
+    deleted = 0
+    samples = []
+
+    # Fully streaming: legacy data can hold one same-language copy per post,
+    # so nothing accumulates across batches. Each batch preloads both
+    # detection custom fields once (detection_current? would otherwise query
+    # them per record) and, outside dry runs, deletes before moving on, which
+    # also keeps the verify-to-delete window inside a single batch.
+    candidates.in_batches(of: batch_size) do |batch|
+      records = batch.includes(:post).to_a
+      posts = records.filter_map(&:post).uniq(&:id)
+      Post.preload_custom_fields(
+        posts,
+        [
+          BabelReunited::DETECTED_LOCALE_FIELD,
+          BabelReunited::DETECTED_SHA_FIELD
+        ]
+      )
+
+      # A detection bound to older content proves nothing: the post may have
+      # been rewritten in another language, which makes this record the
+      # translation that is now needed rather than a redundant copy.
+      redundant =
+        records.select do |t|
+          t.post && BabelReunited.detection_current?(t.post)
+        end
+
+      skipped += records.size - redundant.size
+      total += redundant.size
+
+      redundant
+        .first(10 - samples.size)
+        .each do |t|
+          samples << "  Translation ID: #{t.id}, Post ID: #{t.post_id}, Language: #{t.language}"
+        end
+
+      unless dry_run
+        deleted +=
+          BabelReunited::PostTranslation.where(
+            id: redundant.map(&:id)
+          ).delete_all
+      end
+    end
+
+    puts "Found #{total} same-language translation records"
+    if skipped > 0
+      puts "Skipped #{skipped} records whose post changed after detection"
+    end
+
+    if total == 0
+      puts "Nothing to do"
+      next
+    end
+
+    if dry_run
+      puts ""
+      puts "DRY RUN mode - nothing will be deleted"
+      puts "Use DRY_RUN=false to actually delete these records"
+      puts ""
+      puts "Sample records:"
+      samples.each { |line| puts line }
+      puts "  ... and #{total - 10} more" if total > 10
+    else
+      puts "Deleted: #{deleted} records"
     end
   end
 

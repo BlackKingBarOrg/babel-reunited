@@ -10,29 +10,46 @@ RSpec.describe BabelReunited::PostTranslation do
   describe "validations" do
     it "requires language presence" do
       translation =
-        Fabricate.build(:post_translation, post: post, language: nil, status: "translating")
+        Fabricate.build(
+          :post_translation,
+          post: post,
+          language: nil,
+          status: "translating"
+        )
       expect(translation).not_to be_valid
       expect(translation.errors[:language]).to be_present
     end
 
     it "validates language format with two-letter code" do
-      translation = Fabricate.build(:post_translation, post: post, language: "en")
+      translation =
+        Fabricate.build(:post_translation, post: post, language: "en")
       expect(translation).to be_valid
     end
 
     it "validates language format with region code" do
-      translation = Fabricate.build(:post_translation, post: post, language: "zh-cn")
+      translation =
+        Fabricate.build(:post_translation, post: post, language: "zh-cn")
       expect(translation).to be_valid
     end
 
     it "rejects invalid language format" do
-      translation = Fabricate.build(:post_translation, post: post, language: "ENG")
+      translation =
+        Fabricate.build(:post_translation, post: post, language: "ENG")
       expect(translation).not_to be_valid
-      expect(translation.errors[:language]).to include("must be a valid language code")
+      expect(translation.errors[:language]).to include(
+        "must be a valid language code"
+      )
+    end
+
+    it "accepts three-letter language codes" do
+      translation =
+        Fabricate.build(:post_translation, post: post, language: "yue")
+      expect(translation).to be_valid
     end
 
     it "rejects language codes that are too long" do
-      translation = Fabricate.build(:post_translation, post: post, language: "a" * 11)
+      translation =
+        Fabricate.build(:post_translation, post: post, language: "a" * 11)
       expect(translation).not_to be_valid
     end
 
@@ -50,7 +67,7 @@ RSpec.describe BabelReunited::PostTranslation do
           post: post,
           language: "fr",
           status: "completed",
-          translated_content: nil,
+          translated_content: nil
         )
       expect(translation).not_to be_valid
       expect(translation.errors[:translated_content]).to be_present
@@ -63,31 +80,47 @@ RSpec.describe BabelReunited::PostTranslation do
           post: post,
           language: "fr",
           status: "translating",
-          translated_content: "",
+          translated_content: ""
         )
       expect(translation).to be_valid
     end
 
     it "validates translated_title max length" do
       translation =
-        Fabricate.build(:post_translation, post: post, language: "fr", translated_title: "a" * 256)
+        Fabricate.build(
+          :post_translation,
+          post: post,
+          language: "fr",
+          translated_title: "a" * 256
+        )
       expect(translation).not_to be_valid
     end
 
     it "allows blank translated_title" do
       translation =
-        Fabricate.build(:post_translation, post: post, language: "fr", translated_title: "")
+        Fabricate.build(
+          :post_translation,
+          post: post,
+          language: "fr",
+          translated_title: ""
+        )
       expect(translation).to be_valid
     end
   end
 
   describe "scopes" do
-    fab!(:es_translation) { Fabricate(:post_translation, post: post, language: "es") }
-    fab!(:fr_translation) { Fabricate(:post_translation, post: post, language: "fr") }
+    fab!(:es_translation) do
+      Fabricate(:post_translation, post: post, language: "es")
+    end
+    fab!(:fr_translation) do
+      Fabricate(:post_translation, post: post, language: "fr")
+    end
 
     describe ".by_language" do
       it "filters by language" do
-        expect(described_class.by_language("es")).to contain_exactly(es_translation)
+        expect(described_class.by_language("es")).to contain_exactly(
+          es_translation
+        )
       end
     end
 
@@ -100,7 +133,9 @@ RSpec.describe BabelReunited::PostTranslation do
   end
 
   describe ".find_translation" do
-    fab!(:translation) { Fabricate(:post_translation, post: post, language: "es") }
+    fab!(:translation) do
+      Fabricate(:post_translation, post: post, language: "es")
+    end
 
     it "finds translation by post_id and language" do
       expect(described_class.find_translation(post.id, "es")).to eq(translation)
@@ -119,20 +154,32 @@ RSpec.describe BabelReunited::PostTranslation do
           post: post,
           language: "de",
           status: "translating",
-          translated_content: "",
+          translated_content: ""
         )
       expect(translation.translating?).to be true
     end
 
     it "returns false when status is completed" do
-      translation = Fabricate(:post_translation, post: post, language: "de", status: "completed")
+      translation =
+        Fabricate(
+          :post_translation,
+          post: post,
+          language: "de",
+          status: "completed"
+        )
       expect(translation.translating?).to be false
     end
   end
 
   describe "#completed?" do
     it "returns true when status is completed" do
-      translation = Fabricate(:post_translation, post: post, language: "de", status: "completed")
+      translation =
+        Fabricate(
+          :post_translation,
+          post: post,
+          language: "de",
+          status: "completed"
+        )
       expect(translation.completed?).to be true
     end
 
@@ -143,7 +190,7 @@ RSpec.describe BabelReunited::PostTranslation do
           post: post,
           language: "de",
           status: "translating",
-          translated_content: "",
+          translated_content: ""
         )
       expect(translation.completed?).to be false
     end
@@ -157,20 +204,251 @@ RSpec.describe BabelReunited::PostTranslation do
           post: post,
           language: "de",
           status: "failed",
-          translated_content: "",
+          translated_content: ""
         )
       expect(translation.failed?).to be true
     end
   end
 
+  describe ".claim_existing and .claim_new" do
+    it "claims a stale record exactly once" do
+      translation =
+        Fabricate(
+          :post_translation,
+          post: post,
+          language: "es",
+          status: "stale"
+        )
+
+      # A second caller that read the row before the claim landed.
+      snapshot = described_class.find_translation(post.id, "es")
+
+      expect(described_class.claim_existing(translation)).to be true
+      expect(translation.reload.status).to eq("translating")
+      expect(translation.translated_content).to be_present
+
+      # Its snapshot is now out of date, so its claim finds nothing.
+      expect(described_class.claim_existing(snapshot)).to be false
+    end
+
+    it "lets only one caller re-claim the same expired lease" do
+      translation =
+        Fabricate(
+          :post_translation,
+          post: post,
+          language: "es",
+          status: "translating",
+          translated_content: ""
+        )
+      translation.update_columns(
+        updated_at: described_class.translation_lease.ago - 1.minute
+      )
+
+      # Two concurrent requests both read the row while its lease was expired.
+      first = described_class.find_translation(post.id, "es")
+      second = described_class.find_translation(post.id, "es")
+
+      expect(described_class.claim_existing(first)).to be true
+      expect(described_class.claim_existing(second)).to be false
+    end
+
+    it "claims a missing record exactly once" do
+      expect(described_class.claim_new(post.id, "th")).to be true
+      expect(described_class.find_translation(post.id, "th").status).to eq(
+        "translating"
+      )
+
+      expect(described_class.claim_new(post.id, "th")).to be false
+    end
+  end
+
+  describe "#safe_to_display?" do
+    def record(status)
+      Fabricate(
+        :post_translation,
+        post: post,
+        language: {
+          "completed" => "de",
+          "stale" => "es",
+          "translating" => "fr",
+          "failed" => "fi"
+        }.fetch(status),
+        status: status,
+        translated_content: "<p>old</p>"
+      )
+    end
+
+    it "serves a completed translation" do
+      expect(record("completed").safe_to_display?).to be true
+    end
+
+    # A redaction is usually a few characters in a long post -- an API key, a
+    # phone number. No length or ratio test can see that, so every body
+    # produced from content the post no longer has is withheld, whatever
+    # state the record is in.
+    it "withholds every body that is not a translation of the current content" do
+      %w[stale translating failed].each do |status|
+        expect(record(status).safe_to_display?).to(
+          be(false),
+          "#{status} row still carries text the post may no longer have"
+        )
+      end
+    end
+  end
+
+  describe "#translation_lease_expired?" do
+    def translating_record
+      Fabricate(
+        :post_translation,
+        post: post,
+        language: "de",
+        status: "translating",
+        translated_content: ""
+      )
+    end
+
+    it "is false for a fresh claim" do
+      expect(translating_record.translation_lease_expired?).to be false
+    end
+
+    it "is true once the claim outlives the lease" do
+      record = translating_record
+      record.update_columns(
+        updated_at: described_class.translation_lease.ago - 1.minute
+      )
+      expect(record.reload.translation_lease_expired?).to be true
+    end
+
+    it "outlasts the worst case a job can legitimately run" do
+      SiteSetting.babel_reunited_request_timeout_seconds = 1800
+
+      # 5 chunks + title, each allowed a full timeout, is ~3 hours of
+      # legitimate work; the lease must never expire before that.
+      expect(described_class.translation_lease).to be >
+        BabelReunited.max_translation_runtime
+      expect(described_class.translation_lease).to be > 3.hours
+      expect(described_class.translation_lease).to be >
+        Jobs::BabelReunited::TranslatePostJob.lock_ttl.seconds
+    end
+
+    it "tracks the configured provider timeout" do
+      SiteSetting.babel_reunited_request_timeout_seconds = 60
+      short = described_class.translation_lease
+
+      SiteSetting.babel_reunited_request_timeout_seconds = 600
+      expect(described_class.translation_lease).to be > short
+    end
+
+    it "is false for records that are not translating" do
+      record = Fabricate(:post_translation, post: post, language: "de")
+      record.update_columns(updated_at: 1.year.ago)
+      expect(record.reload.translation_lease_expired?).to be false
+    end
+  end
+
+  describe "#stale?" do
+    it "returns true when status is stale" do
+      translation =
+        Fabricate(
+          :post_translation,
+          post: post,
+          language: "de",
+          status: "stale"
+        )
+      expect(translation.stale?).to be true
+      expect(translation.completed?).to be false
+    end
+  end
+
+  describe "#auto_retryable?" do
+    def failed_translation(metadata)
+      Fabricate(
+        :post_translation,
+        post: post,
+        language: "de",
+        status: "failed",
+        translated_content: "",
+        metadata: metadata
+      )
+    end
+
+    it "returns false for non-failed translations" do
+      translation =
+        Fabricate(
+          :post_translation,
+          post: post,
+          language: "de",
+          status: "completed"
+        )
+      expect(translation.auto_retryable?).to be false
+    end
+
+    it "returns false for permanent failures" do
+      translation =
+        failed_translation(
+          "error_kind" => "permanent",
+          "failed_at" => 2.hours.ago.iso8601,
+          "failure_count" => 1
+        )
+      expect(translation.auto_retryable?).to be false
+    end
+
+    it "returns false before the cooldown elapses" do
+      translation =
+        failed_translation(
+          "error_kind" => "transient",
+          "failed_at" => 5.minutes.ago.iso8601,
+          "failure_count" => 1
+        )
+      expect(translation.auto_retryable?).to be false
+    end
+
+    it "returns true after the cooldown elapses" do
+      translation =
+        failed_translation(
+          "error_kind" => "transient",
+          "failed_at" => 31.minutes.ago.iso8601,
+          "failure_count" => 1
+        )
+      expect(translation.auto_retryable?).to be true
+    end
+
+    it "returns false once failure_count reaches the cap" do
+      translation =
+        failed_translation(
+          "error_kind" => "transient",
+          "failed_at" => 2.hours.ago.iso8601,
+          "failure_count" => described_class::MAX_AUTO_RETRIES
+        )
+      expect(translation.auto_retryable?).to be false
+    end
+
+    it "returns true for legacy failed rows without failure metadata" do
+      translation = failed_translation({})
+      expect(translation.auto_retryable?).to be true
+    end
+  end
+
   describe "#source_language_detected?" do
     it "returns true when source_language is present" do
-      translation = Fabricate(:post_translation, post: post, language: "de", source_language: "en")
+      translation =
+        Fabricate(
+          :post_translation,
+          post: post,
+          language: "de",
+          source_language: "en"
+        )
       expect(translation.source_language_detected?).to be true
     end
 
     it "returns false when source_language is blank" do
-      translation = Fabricate(:post_translation, post: post, language: "de", source_language: nil)
+      translation =
+        Fabricate(
+          :post_translation,
+          post: post,
+          language: "de",
+          source_language: nil
+        )
       expect(translation.source_language_detected?).to be false
     end
   end
@@ -184,14 +462,15 @@ RSpec.describe BabelReunited::PostTranslation do
           post: post,
           language: "de",
           metadata: {
-            "provider_info" => info,
-          },
+            "provider_info" => info
+          }
         )
       expect(translation.provider_info).to eq(info)
     end
 
     it "returns empty hash when provider_info is absent" do
-      translation = Fabricate(:post_translation, post: post, language: "de", metadata: {})
+      translation =
+        Fabricate(:post_translation, post: post, language: "de", metadata: {})
       expect(translation.provider_info).to eq({})
     end
   end
@@ -199,12 +478,20 @@ RSpec.describe BabelReunited::PostTranslation do
   describe "#translation_confidence" do
     it "returns confidence from metadata" do
       translation =
-        Fabricate(:post_translation, post: post, language: "de", metadata: { "confidence" => 0.98 })
+        Fabricate(
+          :post_translation,
+          post: post,
+          language: "de",
+          metadata: {
+            "confidence" => 0.98
+          }
+        )
       expect(translation.translation_confidence).to eq(0.98)
     end
 
     it "returns 0.0 when confidence is absent" do
-      translation = Fabricate(:post_translation, post: post, language: "de", metadata: {})
+      translation =
+        Fabricate(:post_translation, post: post, language: "de", metadata: {})
       expect(translation.translation_confidence).to eq(0.0)
     end
   end
@@ -212,12 +499,23 @@ RSpec.describe BabelReunited::PostTranslation do
   describe "#has_translated_title?" do
     it "returns true when translated_title is present" do
       translation =
-        Fabricate(:post_translation, post: post, language: "de", translated_title: "Titel")
+        Fabricate(
+          :post_translation,
+          post: post,
+          language: "de",
+          translated_title: "Titel"
+        )
       expect(translation.has_translated_title?).to be true
     end
 
     it "returns false when translated_title is blank" do
-      translation = Fabricate(:post_translation, post: post, language: "de", translated_title: "")
+      translation =
+        Fabricate(
+          :post_translation,
+          post: post,
+          language: "de",
+          translated_title: ""
+        )
       expect(translation.has_translated_title?).to be false
     end
   end
@@ -225,12 +523,23 @@ RSpec.describe BabelReunited::PostTranslation do
   describe "#translated_title_or_original" do
     it "returns translated_title when present" do
       translation =
-        Fabricate(:post_translation, post: post, language: "de", translated_title: "Titel")
+        Fabricate(
+          :post_translation,
+          post: post,
+          language: "de",
+          translated_title: "Titel"
+        )
       expect(translation.translated_title_or_original).to eq("Titel")
     end
 
     it "returns original topic title when translated_title is blank" do
-      translation = Fabricate(:post_translation, post: post, language: "de", translated_title: "")
+      translation =
+        Fabricate(
+          :post_translation,
+          post: post,
+          language: "de",
+          translated_title: ""
+        )
       expect(translation.translated_title_or_original).to eq(post.topic.title)
     end
   end

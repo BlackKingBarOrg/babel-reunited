@@ -18,14 +18,20 @@ RSpec.describe "Language tabs" do
     # Tab list is driven by this setting. Fabricated posts skip PostCreator
     # events, so no auto-translation jobs are enqueued and specs stay offline.
     SiteSetting.babel_reunited_auto_translate_languages = "en,zh-cn,es"
+    # A user without a preference gets the language-preference modal after 1s,
+    # which overlays the page and intercepts clicks mid-test.
+    admin.custom_fields[BabelReunited::PREFERRED_LANGUAGE_FIELD] = "es"
+    admin.save_custom_fields
     sign_in(admin)
   end
 
-  it "shows the language tabs on a topic page" do
+  it "shows the original tab, the preferred tab, and the language menu" do
     visit "/t/#{topic.slug}/#{topic.id}"
 
     expect(page).to have_css("#post_1 .ai-language-tabs")
-    expect(page).to have_css("#post_1 .babel-reunited-language-tab", count: 4)
+    # original + the three pre-translate languages + overflow menu trigger
+    expect(page).to have_css("#post_1 .babel-reunited-language-tab", count: 5)
+    expect(page).to have_css("#post_1 .babel-reunited-language-tab.--menu")
   end
 
   describe "cooked decoration pipeline" do
@@ -51,12 +57,18 @@ RSpec.describe "Language tabs" do
       expect(page).to have_css("#post_1 .cooked", count: 1)
     end
 
+    # zh-cn is a pre-translate language, so it has a fixed tab of its own
+    # (order: original, en, zh-cn, es, menu) and is not offered in the menu.
+    def switch_to_translated
+      find("#post_1 .ai-language-tabs button:nth-child(3)").click
+    end
+
     it "decorates the translated view and never duplicates the post body" do
       visit "/t/#{topic.slug}/#{topic.id}"
       expect(page).to have_css("#post_1 .codeblock-button-wrapper", count: 1)
 
-      # Switch to zh-cn (button order: Original, en, zh-cn, es)
-      find("#post_1 .ai-language-tabs button:nth-child(3)").click
+      # Switch to zh-cn, which fetches the body on demand
+      switch_to_translated
       expect(page).to have_css("#post_1 .cooked", text: "介绍段落")
       expect(page).to have_css("#post_1 .codeblock-button-wrapper", count: 1)
       expect(page).to have_css("#post_1 .cooked", count: 1)
@@ -66,7 +78,7 @@ RSpec.describe "Language tabs" do
       expect(page).to have_css("#post_1 .cooked", text: "Outro paragraph")
       expect(page).to have_css("#post_1 .codeblock-button-wrapper", count: 1)
 
-      find("#post_1 .ai-language-tabs button:nth-child(3)").click
+      switch_to_translated
       expect(page).to have_css("#post_1 .cooked", text: "介绍段落")
       expect(page).to have_css("#post_1 .codeblock-button-wrapper", count: 1)
       expect(page).to have_css("#post_1 .cooked", count: 1)

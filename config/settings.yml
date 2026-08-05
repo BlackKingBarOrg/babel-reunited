@@ -37,6 +37,25 @@ babel_reunited:
     default: "en,zh-cn,es"
     client: true
 
+  babel_reunited_view_triggered_translation:
+    default: false
+    client: true
+
+  babel_reunited_daily_translation_limit:
+    default: 10000
+    min: 0
+    max: 1000000
+
+  babel_reunited_user_daily_translation_limit:
+    default: 500
+    min: 0
+    max: 100000
+
+  babel_reunited_view_trigger_min_trust_level:
+    default: 0
+    min: 0
+    max: 4
+
   # API Keys for different providers
   babel_reunited_openai_api_key:
     default: ""

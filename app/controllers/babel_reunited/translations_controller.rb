@@ -4,63 +4,165 @@ module BabelReunited
   class TranslationsController < ::ApplicationController
     requires_plugin PLUGIN_NAME
 
-    before_action :ensure_logged_in
-    before_action :find_post, except: %i[set_user_preferred_language get_user_preferred_language]
+    # Read endpoints are open to anonymous users: visibility is enforced by
+    # guardian.can_see? in find_post, and reads can never trigger LLM calls.
+    before_action :ensure_logged_in, except: %i[index show translation_status]
+    before_action :find_post,
+                  except: %i[
+                    set_user_preferred_language
+                    get_user_preferred_language
+                  ]
+    # The category setting scopes the whole feature, not just generation: an
+    # excluded category serves no stored translations either. destroy stays
+    # available — removing stock data is cleanup, not a translation feature.
+    before_action :ensure_category_enabled,
+                  only: %i[index show create translation_status]
 
     def index
-      translations = @post.post_translations.recent
+      # A public read endpoint is an egress like any other: the same guard the
+      # serializer applies has to hold here, or it holds nowhere.
+      detected = BabelReunited.current_detected_locale_for(@post)
+      translations =
+        @post.post_translations.recent.select do |t|
+          t.safe_to_display? &&
+            !BabelReunited.same_language?(t.language, detected)
+        end
       render_serialized(translations, PostTranslationSerializer)
     end
 
     def show
-      translation = BabelReunited::PostTranslation.find_translation(@post.id, params[:language])
-      return render json: { error: "Translation not found" }, status: :not_found unless translation
+      translation =
+        BabelReunited.displayable_translation_for(@post, params[:language])
+
+      unless translation
+        return(
+          render json: { error: "Translation not found" }, status: :not_found
+        )
+      end
 
       render_serialized(translation, PostTranslationSerializer)
     end
 
     def create
-      unless BabelReunited.translation_enabled_for_post?(@post)
-        raise Discourse::InvalidAccess.new(
-                nil,
-                nil,
-                custom_message: "babel_reunited.errors.category_not_enabled",
-              )
-      end
-
       target_language = params[:target_language]&.downcase
-      force_update = ActiveModel::Type::Boolean.new.cast(params[:force_update]) || false
+      force_update =
+        ActiveModel::Type::Boolean.new.cast(params[:force_update]) || false
+
+      if force_update && !guardian.is_staff?
+        return(
+          render json: {
+                   error: "force_update requires staff"
+                 },
+                 status: :forbidden
+        )
+      end
 
       if target_language.blank?
-        return render json: { error: "Target language required" }, status: :bad_request
+        return(
+          render json: {
+                   error: "Target language required"
+                 },
+                 status: :bad_request
+        )
       end
 
-      unless target_language.match?(/\A[a-z]{2}(-[a-z]{2})?\z/)
-        return render json: { error: "Invalid language code format" }, status: :bad_request
+      unless BabelReunited::Locales.format_valid?(target_language)
+        return(
+          render json: {
+                   error: "Invalid language code format"
+                 },
+                 status: :bad_request
+        )
       end
 
-      ::RateLimiter.new(current_user, "babel-reunited-translate", 10, 1.minute).performed!
+      unless BabelReunited::Locales.valid?(target_language)
+        return(
+          render json: { error: "Unsupported language" }, status: :bad_request
+        )
+      end
 
-      BabelReunited.enqueue_translation_jobs(@post, [target_language], force_update: force_update)
+      return handle_view_trigger(target_language) if params[:trigger] == "view"
+
+      # Translating a post into the language it is already written in is never
+      # what a reader wants: the original is that language. Such a request
+      # only arrives from a client whose detection data is stale, so refuse it
+      # and tell the client the truth instead of paying for a
+      # self-translation. Correcting a wrong detection is staff work, and
+      # force_update (already staff-only above) is that escape hatch.
+      unless force_update
+        if BabelReunited.same_language?(
+             BabelReunited.current_detected_locale_for(@post),
+             target_language
+           )
+          return(
+            render json: {
+                     status: "noop",
+                     reason: "source_language",
+                     post_id: @post.id,
+                     target_language: target_language,
+                     detected_locale: target_language
+                   }
+          )
+        end
+      end
+
+      ::RateLimiter.new(
+        current_user,
+        "babel-reunited-translate",
+        10,
+        1.minute
+      ).performed!
+
+      # After the rate limiter, so a request that never gets through does not
+      # spend a daily slot.
+      unless guardian.is_staff?
+        fuse = BabelReunited::UsageFuse.admit(current_user)
+        if fuse
+          message =
+            if fuse == "site_daily_limit"
+              "Site-wide daily translation limit reached"
+            else
+              "Daily translation limit reached"
+            end
+          return render json: { error: message }, status: :too_many_requests
+        end
+      end
+
+      BabelReunited.enqueue_translation_jobs(
+        @post,
+        [target_language],
+        force_update: force_update
+      )
 
       render json: {
                message: "Translation job enqueued",
                post_id: @post.id,
                target_language: target_language,
                force_update: force_update,
-               status: "queued",
+               status: "queued"
              }
     end
 
     def destroy
-      unless guardian.is_admin? || guardian.is_moderator? || (@post.user_id == current_user.id)
+      unless guardian.is_admin? || guardian.is_moderator? ||
+               (@post.user_id == current_user.id)
         return render json: { error: "Not authorized" }, status: :forbidden
       end
 
       translation = @post.post_translations.find_by(language: params[:language])
-      return render json: { error: "Translation not found" }, status: :not_found unless translation
+      unless translation
+        return(
+          render json: { error: "Translation not found" }, status: :not_found
+        )
+      end
 
       translation.destroy!
+      # A job may be holding this row across a provider call; without the
+      # tombstone it would write the finished translation right back.
+      BabelReunited.tombstone_translation!(@post.id, translation.language)
+      # Deleting a bad translation is the escape hatch for a bad banner, so it
+      # has to reach the banner cache too.
+      BabelReunited.clear_banner_cache_for(@post)
       render json: { message: "Translation deleted" }
     end
 
@@ -68,8 +170,10 @@ module BabelReunited
       cast = ActiveModel::Type::Boolean.new
 
       # Return language independently of enabled status so frontend preserves selection
-      language = current_user.custom_fields[BabelReunited::PREFERRED_LANGUAGE_FIELD]
-      enabled_val = current_user.custom_fields[BabelReunited::PREFERRED_ENABLED_FIELD]
+      language =
+        current_user.custom_fields[BabelReunited::PREFERRED_LANGUAGE_FIELD]
+      enabled_val =
+        current_user.custom_fields[BabelReunited::PREFERRED_ENABLED_FIELD]
 
       if language.blank? || enabled_val.nil?
         legacy = current_user.user_preferred_language
@@ -88,34 +192,57 @@ module BabelReunited
       cast = ActiveModel::Type::Boolean.new
 
       if language.present?
-        unless language.match?(/\A[a-z]{2}(-[a-z]{2})?\z/)
-          return render json: { error: "Invalid language code format" }, status: :bad_request
+        unless BabelReunited::Locales.format_valid?(language)
+          return(
+            render json: {
+                     error: "Invalid language code format"
+                   },
+                   status: :bad_request
+          )
         end
-        current_user.custom_fields[BabelReunited::PREFERRED_LANGUAGE_FIELD] = language
+        unless BabelReunited::Locales.valid?(language)
+          return(
+            render json: { error: "Unsupported language" }, status: :bad_request
+          )
+        end
+        current_user.custom_fields[
+          BabelReunited::PREFERRED_LANGUAGE_FIELD
+        ] = language
       end
 
       unless enabled.nil?
-        current_user.custom_fields[BabelReunited::PREFERRED_ENABLED_FIELD] = cast.cast(enabled)
+        current_user.custom_fields[
+          BabelReunited::PREFERRED_ENABLED_FIELD
+        ] = cast.cast(enabled)
       end
 
       current_user.save_custom_fields
 
       # Dual-write to legacy table for rollback safety
-      legacy = current_user.user_preferred_language || current_user.build_user_preferred_language
+      legacy =
+        current_user.user_preferred_language ||
+          current_user.build_user_preferred_language
       legacy.language = language if language.present?
       legacy.enabled = cast.cast(enabled) unless enabled.nil?
       legacy.save
 
       final_language =
-        current_user.custom_fields[BabelReunited::PREFERRED_LANGUAGE_FIELD] || legacy.language
-      final_enabled = current_user.custom_fields[BabelReunited::PREFERRED_ENABLED_FIELD]
+        current_user.custom_fields[BabelReunited::PREFERRED_LANGUAGE_FIELD] ||
+          legacy.language
+      final_enabled =
+        current_user.custom_fields[BabelReunited::PREFERRED_ENABLED_FIELD]
       final_enabled = legacy.enabled if final_enabled.nil?
 
-      render json: { success: true, language: final_language, enabled: cast.cast(final_enabled) }
+      render json: {
+               success: true,
+               language: final_language,
+               enabled: cast.cast(final_enabled)
+             }
     end
 
     def translation_status
-      rows = @post.post_translations.select(:language, :status, :updated_at).to_a
+      rows =
+        @post.post_translations.select(:language, :status, :updated_at).to_a
       pending = rows.select { |r| r.status == "translating" }.map(&:language)
       last_updated = rows.map(&:updated_at).compact.max
 
@@ -123,17 +250,138 @@ module BabelReunited
                post_id: @post.id,
                pending_translations: pending,
                available_translations: rows.map(&:language),
-               last_updated: last_updated,
+               last_updated: last_updated
              }
     end
 
     private
 
+    def ensure_category_enabled
+      return if BabelReunited.translation_enabled_for_post?(@post)
+
+      raise Discourse::InvalidAccess.new(
+              nil,
+              nil,
+              custom_message: "babel_reunited.errors.category_not_enabled"
+            )
+    end
+
+    # The automated lane. Fire-and-forget from the client: every rejection is
+    # a silent 200 noop (the reader already sees the original or stale
+    # content), and the guard order keeps rejected requests cost-free.
+    def handle_view_trigger(target_language)
+      unless SiteSetting.babel_reunited_view_triggered_translation
+        return render_view_noop("disabled")
+      end
+
+      min_tl = SiteSetting.babel_reunited_view_trigger_min_trust_level
+      if !guardian.is_staff? && current_user.trust_level < min_tl
+        return render_view_noop("trust_level")
+      end
+
+      if BabelReunited.same_language?(
+           BabelReunited.current_detected_locale_for(@post),
+           target_language
+         )
+        return render_view_noop("source_language")
+      end
+
+      translation =
+        BabelReunited::PostTranslation.find_translation(
+          @post.id,
+          target_language
+        )
+
+      # An expired claim falls through to be re-claimed below: without this a
+      # dispatch that failed after claiming would pin the record in
+      # "translating" forever, with every later view noop-ing on it.
+      if translation&.translating? && !translation.translation_lease_expired?
+        return render_view_noop("already_translating")
+      end
+      if translation&.failed? && !translation.auto_retryable?
+        return render_view_noop("failed_not_retryable")
+      end
+
+      ::RateLimiter.new(
+        current_user,
+        "babel-reunited-view-translate",
+        30,
+        1.minute
+      ).performed!
+
+      if translation&.completed?
+        # Client missed the body or raced the job; the job republishes for
+        # free (fingerprint skip), so no claim and no fuse count.
+        BabelReunited.enqueue_translation_jobs(@post, [target_language])
+        return render_view_queued(target_language)
+      end
+
+      # Atomic claim: the first viewer moves the record into "translating";
+      # everyone else noops instead of stacking duplicate jobs for the same
+      # run. It comes before the fuse so that only the caller that actually
+      # got the work charges a daily slot — with the fuse first, every viewer
+      # who lost this race would pay for a translation someone else is doing.
+      snapshot = BabelReunited::PostTranslation.claim_snapshot(translation)
+      claimed =
+        if translation
+          BabelReunited::PostTranslation.claim_existing(translation)
+        else
+          BabelReunited::PostTranslation.claim_new(@post.id, target_language)
+        end
+      return render_view_noop("already_translating") unless claimed
+
+      begin
+        # After the rate limiter, so a request that never gets through does
+        # not spend a daily slot.
+        unless guardian.is_staff?
+          fuse = BabelReunited::UsageFuse.admit(current_user)
+          if fuse
+            release_view_claim(target_language, snapshot)
+            return render_view_noop(fuse)
+          end
+        end
+
+        BabelReunited.enqueue_translation_jobs(@post, [target_language])
+      rescue StandardError
+        # A claim with no job behind it would pin the record in "translating"
+        # for a full lease, and every later view would noop on it.
+        release_view_claim(target_language, snapshot)
+        raise
+      end
+
+      render_view_queued(target_language)
+    end
+
+    def release_view_claim(target_language, snapshot)
+      BabelReunited::PostTranslation.release_claim(
+        @post.id,
+        target_language,
+        snapshot
+      )
+    end
+
+    def render_view_queued(target_language)
+      render json: {
+               status: "queued",
+               post_id: @post.id,
+               target_language: target_language,
+               trigger: "view"
+             }
+    end
+
+    def render_view_noop(reason)
+      render json: { status: "noop", reason: reason }
+    end
+
     def find_post
       @post = Post.find_by(id: params[:post_id])
-      return render json: { error: "Post not found" }, status: :not_found unless @post
+      unless @post
+        return render json: { error: "Post not found" }, status: :not_found
+      end
 
-      render json: { error: "Access denied" }, status: :forbidden unless guardian.can_see?(@post)
+      unless guardian.can_see?(@post)
+        render json: { error: "Access denied" }, status: :forbidden
+      end
     end
   end
 end

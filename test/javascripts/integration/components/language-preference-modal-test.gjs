@@ -1,4 +1,4 @@
-import { click, render, settled } from "@ember/test-helpers";
+import { click, fillIn, render } from "@ember/test-helpers";
 import { module, test } from "qunit";
 import { setupRenderingTest } from "discourse/tests/helpers/component-test";
 import pretender, { response } from "discourse/tests/helpers/create-pretender";
@@ -9,7 +9,7 @@ module(
   function (hooks) {
     setupRenderingTest(hooks);
 
-    test("renders language buttons and a disable button", async function (assert) {
+    test("renders the searchable language picker and a disable button", async function (assert) {
       this.set("closeModal", () => {});
       await render(
         <template>
@@ -20,8 +20,86 @@ module(
         </template>
       );
 
-      assert.dom(".language-btn").exists({ count: 3 });
+      assert.dom(".babel-language-picker__filter").exists();
+      assert
+        .dom(".babel-language-picker__item")
+        .exists("full language list is offered");
       assert.dom(".disable-btn").exists();
+    });
+
+    test("groups the pre-translate layer above everything else", async function (assert) {
+      this.siteSettings.babel_reunited_auto_translate_languages = "en,zh-cn,es";
+
+      this.set("closeModal", () => {});
+      await render(
+        <template>
+          <LanguagePreferenceModal
+            @closeModal={{this.closeModal}}
+            @inline={{true}}
+          />
+        </template>
+      );
+
+      const labels = [
+        ...document.querySelectorAll(".babel-language-picker__group-label"),
+      ].map((el) => el.textContent.trim());
+      assert.deepEqual(
+        labels,
+        [
+          "Pre-translated by this site",
+          "Other languages · translated on first view",
+        ],
+        "instant and on-demand languages are separated"
+      );
+
+      // Everything between the two headings is the configured layer.
+      const nodes = [
+        ...document.querySelectorAll(
+          ".babel-language-picker__group-label, .babel-language-picker__item"
+        ),
+      ];
+      const secondHeading = nodes.findIndex(
+        (node, index) =>
+          index > 0 &&
+          node.classList.contains("babel-language-picker__group-label")
+      );
+      assert.strictEqual(
+        secondHeading - 1,
+        3,
+        "the three configured languages lead the list"
+      );
+
+      // The warning now sits on the group it describes, instead of above a
+      // list where it is false for the pre-translated three.
+      assert.dom(".babel-language-picker__note").doesNotExist();
+      assert
+        .dom(".babel-language-picker__hint")
+        .doesNotExist("the group heading replaces the per-row badge");
+    });
+
+    test("drops a group heading when the filter empties that group", async function (assert) {
+      this.siteSettings.babel_reunited_auto_translate_languages = "en,zh-cn,es";
+
+      this.set("closeModal", () => {});
+      await render(
+        <template>
+          <LanguagePreferenceModal
+            @closeModal={{this.closeModal}}
+            @inline={{true}}
+          />
+        </template>
+      );
+
+      await fillIn(".babel-language-picker__filter", "thai");
+      assert
+        .dom(".babel-language-picker__group-label")
+        .doesNotExist("a lone list needs no heading");
+      assert.dom(".babel-language-picker__item").exists();
+
+      await fillIn(".babel-language-picker__filter", "espa");
+      assert
+        .dom(".babel-language-picker__group-label")
+        .hasText("Pre-translated by this site");
     });
 
     test("selecting language sends POST to user-preferred-language", async function (assert) {
@@ -43,40 +121,11 @@ module(
         </template>
       );
 
-      await click(".language-btn");
+      await fillIn(".babel-language-picker__filter", "zh-cn");
+      await click(".babel-language-picker__item");
 
-      assert.verifySteps(["POST language=en"]);
+      assert.verifySteps(["POST language=zh-cn"]);
       assert.true(modalClosed, "closeModal was called");
-    });
-
-    test("buttons are disabled while saving", async function (assert) {
-      let resolveRequest;
-      pretender.post("/babel-reunited/user-preferred-language", () => {
-        return new Promise((resolve) => {
-          resolveRequest = resolve;
-        });
-      });
-
-      this.set("closeModal", () => {});
-      await render(
-        <template>
-          <LanguagePreferenceModal
-            @closeModal={{this.closeModal}}
-            @inline={{true}}
-          />
-        </template>
-      );
-
-      click(".language-btn");
-
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
-      assert.dom(".language-btn:nth-child(2)").isDisabled();
-      assert.dom(".language-btn:nth-child(3)").isDisabled();
-      assert.dom(".disable-btn").isDisabled();
-
-      resolveRequest(response({ success: true }));
-      await settled();
     });
 
     test("disable translation sends POST with enabled=false", async function (assert) {

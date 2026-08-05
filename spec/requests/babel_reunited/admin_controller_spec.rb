@@ -38,7 +38,43 @@ RSpec.describe BabelReunited::AdminController do
       expect(json).to have_key("total_translations")
       expect(json).to have_key("unique_languages")
       expect(json).to have_key("language_distribution")
+      expect(json).to have_key("status_distribution")
+      expect(json).to have_key("today_usage")
       expect(json).to have_key("recent_translations")
+    end
+
+    it "reports fuse usage, provider calls, and limits" do
+      Discourse.redis.flushdb
+      SiteSetting.babel_reunited_daily_translation_limit = 1234
+      BabelReunited::UsageFuse.admit(user)
+      BabelReunited::UsageFuse.admit(user)
+      3.times { BabelReunited::RateLimiter.perform_request_if_allowed }
+
+      get "/babel-reunited/admin/stats.json"
+      json = response.parsed_body
+
+      usage = json["today_usage"]
+      expect(usage["accepted_ondemand_requests"]).to eq(2)
+      expect(usage["provider_calls_today"]).to eq(3)
+      expect(usage["site_daily_limit"]).to eq(1234)
+      expect(usage).to have_key("user_daily_limit")
+      expect(usage).to have_key("view_triggered_enabled")
+    end
+
+    it "groups status distribution" do
+      Fabricate(:post_translation, post: post_record, language: "es")
+      Fabricate(
+        :post_translation,
+        post: post_record,
+        language: "de",
+        status: "stale"
+      )
+
+      get "/babel-reunited/admin/stats.json"
+      json = response.parsed_body
+
+      expect(json["status_distribution"]["completed"]).to eq(1)
+      expect(json["status_distribution"]["stale"]).to eq(1)
     end
 
     it "counts translations correctly" do

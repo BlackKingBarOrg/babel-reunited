@@ -11,7 +11,14 @@ module BabelReunited
         raise NotImplementedError
       end
 
-      def build_request_body(model:, messages:, max_tokens:, token_param:, supports_temperature:)
+      def build_request_body(
+        model:,
+        messages:,
+        max_tokens:,
+        token_param:,
+        supports_temperature:,
+        system: nil
+      )
         raise NotImplementedError
       end
 

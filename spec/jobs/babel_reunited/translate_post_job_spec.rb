@@ -10,6 +10,7 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
     SiteSetting.babel_reunited_openai_api_key = "sk-test-key"
     SiteSetting.babel_reunited_preset_model = "gpt-4o"
     Discourse.redis.flushdb
+    Jobs.run_later!
   end
 
   def success_result(
@@ -25,72 +26,104 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
         confidence: 0.95,
         provider_info: {
           model: "gpt-4o",
-          provider: "openai",
-        },
-      },
+          provider: "openai"
+        }
+      }
     )
   end
 
-  def failure_result(error: "API key not configured")
-    BabelReunited::TranslationService::Result.new(error: error)
+  def failure_result(error: "API key not configured", error_kind: "transient")
+    BabelReunited::TranslationService::Result.new(
+      error: error,
+      error_kind: error_kind
+    )
   end
 
   describe "argument validation" do
     it "returns early when post_id is blank" do
-      expect { described_class.new.execute(post_id: nil, target_language: "es") }.not_to raise_error
+      expect {
+        described_class.new.execute(post_id: nil, target_language: "es")
+      }.not_to raise_error
     end
 
     it "returns early when target_language is blank" do
       expect {
-        described_class.new.execute(post_id: post_record.id, target_language: nil)
+        described_class.new.execute(
+          post_id: post_record.id,
+          target_language: nil
+        )
       }.not_to raise_error
     end
   end
 
   describe "post validation" do
     it "skips non-existent posts" do
-      expect { described_class.new.execute(post_id: -1, target_language: "es") }.not_to raise_error
+      expect {
+        described_class.new.execute(post_id: -1, target_language: "es")
+      }.not_to raise_error
     end
 
     it "skips deleted posts" do
       post_record.trash!
       expect {
-        described_class.new.execute(post_id: post_record.id, target_language: "es")
+        described_class.new.execute(
+          post_id: post_record.id,
+          target_language: "es"
+        )
       }.not_to raise_error
     end
 
     it "marks existing translation as failed when post is deleted" do
-      BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
+      BabelReunited::PostTranslation.create_or_update_record(
+        post_record.id,
+        "es"
+      )
       post_record.trash!
 
-      described_class.new.execute(post_id: post_record.id, target_language: "es")
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
 
-      translation = BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      translation =
+        BabelReunited::PostTranslation.find_translation(post_record.id, "es")
       expect(translation.status).to eq("failed")
       expect(translation.metadata["error"]).to eq("post_not_found")
+      expect(translation.metadata["error_kind"]).to eq("permanent")
     end
 
     it "skips hidden posts" do
       post_record.update!(hidden: true)
       expect {
-        described_class.new.execute(post_id: post_record.id, target_language: "es")
+        described_class.new.execute(
+          post_id: post_record.id,
+          target_language: "es"
+        )
       }.not_to raise_error
     end
 
     it "marks existing translation as failed when post is hidden" do
-      BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
+      BabelReunited::PostTranslation.create_or_update_record(
+        post_record.id,
+        "es"
+      )
       post_record.update!(hidden: true)
 
-      described_class.new.execute(post_id: post_record.id, target_language: "es")
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
 
-      translation = BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      translation =
+        BabelReunited::PostTranslation.find_translation(post_record.id, "es")
       expect(translation.status).to eq("failed")
       expect(translation.metadata["error"]).to eq("post_deleted_or_hidden")
     end
 
     it "skips posts in non-whitelisted categories" do
       blocked_category = Fabricate(:category)
-      topic_in_blocked = Fabricate(:topic, user: user, category: blocked_category)
+      topic_in_blocked =
+        Fabricate(:topic, user: user, category: blocked_category)
       blocked_post = Fabricate(:post, topic: topic_in_blocked, user: user)
 
       allowed_category = Fabricate(:category)
@@ -98,7 +131,10 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
 
       BabelReunited::TranslationService.any_instance.expects(:call).never
 
-      described_class.new.execute(post_id: blocked_post.id, target_language: "es")
+      described_class.new.execute(
+        post_id: blocked_post.id,
+        target_language: "es"
+      )
     end
   end
 
@@ -109,42 +145,302 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
 
       BabelReunited::TranslationService.any_instance.expects(:call).never
 
-      described_class.new.execute(post_id: post_record.id, target_language: "es")
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
     end
 
     it "releases lock after completion" do
-      BabelReunited::TranslationService.any_instance.stubs(:call).returns(success_result)
-      BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
+      BabelReunited::TranslationService
+        .any_instance
+        .stubs(:call)
+        .returns(success_result)
+      BabelReunited::PostTranslation.create_or_update_record(
+        post_record.id,
+        "es"
+      )
 
-      described_class.new.execute(post_id: post_record.id, target_language: "es")
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
 
       lock_key = "babel_reunited:translate:#{post_record.id}:es"
       expect(Discourse.redis.exists?(lock_key)).to be false
+    end
+
+    # Dropping a request while another job holds the lock is only safe because
+    # that job's result satisfies it. When the holder discards its result
+    # instead — the row was deliberately deleted mid-flight — the dropped
+    # request has to come back, or the reader waits forever on a "queued" that
+    # nothing will ever complete.
+    it "hands a request dropped on the lock back to the releasing job" do
+      lock_key = "babel_reunited:translate:#{post_record.id}:es"
+      Discourse.redis.set(lock_key, "1", ex: 300)
+
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+
+      expect(
+        Discourse.redis.get(described_class.rerun_key(post_record.id, "es"))
+      ).to eq("0")
+
+      Discourse.redis.del(lock_key)
+      BabelReunited::TranslationService
+        .any_instance
+        .stubs(:call)
+        .returns(success_result)
+
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+
+      expect(
+        job_enqueued?(
+          job: described_class,
+          args: {
+            post_id: post_record.id,
+            target_language: "es",
+            force_update: false
+          }
+        )
+      ).to be true
+      expect(
+        Discourse.redis.get(described_class.rerun_key(post_record.id, "es"))
+      ).to be_nil
+    end
+
+    # Both lanes share one marker. A staff force is the only way to override
+    # an existing translation, so a plain request landing on top of it must
+    # not downgrade it into a follow-up that skips on source_unchanged.
+    it "keeps a force request when an ordinary one is merged into it" do
+      lock_key = "babel_reunited:translate:#{post_record.id}:es"
+      Discourse.redis.set(lock_key, "1", ex: 300)
+
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es",
+        force_update: true
+      )
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es",
+        force_update: false
+      )
+
+      Discourse.redis.del(lock_key)
+      BabelReunited::TranslationService
+        .any_instance
+        .stubs(:call)
+        .returns(success_result)
+
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+
+      expect(
+        job_enqueued?(
+          job: described_class,
+          args: {
+            post_id: post_record.id,
+            target_language: "es",
+            force_update: true
+          }
+        )
+      ).to be true
+    end
+
+    it "consumes the marker exactly once" do
+      lock_key = "babel_reunited:translate:#{post_record.id}:es"
+      Discourse.redis.set(lock_key, "1", ex: 300)
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+      Discourse.redis.del(lock_key)
+
+      BabelReunited::TranslationService
+        .any_instance
+        .stubs(:call)
+        .returns(success_result)
+
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+      enqueued_after_first = Jobs::BabelReunited::TranslatePostJob.jobs.size
+
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+
+      expect(Jobs::BabelReunited::TranslatePostJob.jobs.size).to eq(
+        enqueued_after_first
+      )
+    end
+
+    it "leaves no marker when nothing contended for the lock" do
+      BabelReunited::TranslationService
+        .any_instance
+        .stubs(:call)
+        .returns(success_result)
+
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+
+      expect(
+        job_enqueued?(
+          job: described_class,
+          args: {
+            post_id: post_record.id,
+            target_language: "es",
+            force_update: false
+          }
+        )
+      ).to be false
     end
   end
 
   describe "source_sha check" do
     it "skips translation when source unchanged and not force_update" do
-      translation = BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
-      sha = Digest::SHA256.hexdigest(post_record.raw)
-      translation.update!(status: "completed", source_sha: sha, translated_content: "<p>old</p>")
+      translation =
+        BabelReunited::PostTranslation.create_or_update_record(
+          post_record.id,
+          "es"
+        )
+      sha = described_class.content_sha(post_record)
+      translation.update!(
+        status: "completed",
+        source_sha: sha,
+        translated_content: "<p>old</p>"
+      )
 
       BabelReunited::TranslationService.any_instance.expects(:call).never
 
-      described_class.new.execute(post_id: post_record.id, target_language: "es")
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+    end
+
+    it "re-announces the title when skipping an already completed translation" do
+      translation =
+        BabelReunited::PostTranslation.create_or_update_record(
+          post_record.id,
+          "es"
+        )
+      translation.update!(
+        status: "completed",
+        source_sha: described_class.content_sha(post_record),
+        translated_content: "<p>old</p>",
+        translated_title: "Titulo viejo",
+        metadata: {
+          "source_length" => post_record.raw.length
+        }
+      )
+
+      messages =
+        MessageBus.track_publish(
+          "/babel-translated-title/#{post_record.topic_id}"
+        ) do
+          described_class.new.execute(
+            post_id: post_record.id,
+            target_language: "es"
+          )
+        end
+
+      expect(messages.length).to eq(1)
+      expect(messages.first.data[:translated_title]).to eq("Titulo viejo")
+    end
+
+    it "re-announces completion when skipping an already completed translation" do
+      translation =
+        BabelReunited::PostTranslation.create_or_update_record(
+          post_record.id,
+          "es"
+        )
+      sha = described_class.content_sha(post_record)
+      translation.update!(
+        status: "completed",
+        source_sha: sha,
+        translated_content: "<p>old</p>"
+      )
+
+      BabelReunited::TranslationService.any_instance.expects(:call).never
+
+      messages =
+        MessageBus.track_publish("/post-translations/#{post_record.id}") do
+          described_class.new.execute(
+            post_id: post_record.id,
+            target_language: "es"
+          )
+        end
+
+      expect(messages.length).to eq(1)
+      data = messages.first.data
+      expect(data[:status]).to eq("completed")
+      expect(data[:translation][:translated_content]).to eq("<p>old</p>")
     end
 
     it "translates when force_update even if source unchanged" do
-      translation = BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
-      sha = Digest::SHA256.hexdigest(post_record.raw)
-      translation.update!(status: "completed", source_sha: sha, translated_content: "<p>old</p>")
+      translation =
+        BabelReunited::PostTranslation.create_or_update_record(
+          post_record.id,
+          "es"
+        )
+      sha = described_class.content_sha(post_record)
+      translation.update!(
+        status: "completed",
+        source_sha: sha,
+        translated_content: "<p>old</p>"
+      )
 
-      BabelReunited::TranslationService.any_instance.stubs(:call).returns(success_result)
+      BabelReunited::TranslationService
+        .any_instance
+        .stubs(:call)
+        .returns(success_result)
 
       described_class.new.execute(
         post_id: post_record.id,
         target_language: "es",
-        force_update: true,
+        force_update: true
+      )
+
+      translation.reload
+      expect(translation.translated_content).to include("Hola mundo")
+    end
+
+    it "re-translates when the topic title changes on a first post" do
+      translation =
+        BabelReunited::PostTranslation.create_or_update_record(
+          post_record.id,
+          "es"
+        )
+      sha = described_class.content_sha(post_record)
+      translation.update!(
+        status: "completed",
+        source_sha: sha,
+        translated_content: "<p>old</p>"
+      )
+
+      post_record.topic.update!(title: "A completely different topic title")
+
+      BabelReunited::TranslationService
+        .any_instance
+        .stubs(:call)
+        .returns(success_result)
+
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
       )
 
       translation.reload
@@ -152,15 +448,538 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
     end
   end
 
+  describe "mid-flight edit guard" do
+    it "saves the result as stale and chases the new content when the post changes during translation" do
+      job_result = success_result
+
+      fake_service = Object.new
+      target_post = post_record
+      fake_service.define_singleton_method(:call) do
+        target_post.update_columns(
+          raw: "Content edited while the LLM was running"
+        )
+        job_result
+      end
+      BabelReunited::TranslationService.stubs(:new).returns(fake_service)
+
+      BabelReunited::PostTranslation.create_or_update_record(
+        post_record.id,
+        "es"
+      )
+
+      messages =
+        MessageBus.track_publish("/post-translations/#{post_record.id}") do
+          described_class.new.execute(
+            post_id: post_record.id,
+            target_language: "es"
+          )
+        end
+
+      translation =
+        BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      expect(translation.status).to eq("stale")
+      expect(translation.translated_content).to include("Hola mundo")
+
+      # Stale means the body describes content the post no longer has, so it
+      # is not pushed to open pages; the follow-up job below supplies one that
+      # matches.
+      expect(messages.length).to eq(1)
+      expect(messages.first.data[:status]).to eq("withheld")
+      expect(messages.first.data[:translation]).to be_nil
+
+      expect(
+        job_enqueued?(
+          job: Jobs::BabelReunited::TranslatePostJob,
+          args: {
+            post_id: post_record.id,
+            target_language: "es"
+          }
+        )
+      ).to be true
+    end
+  end
+
+  describe "redaction guard" do
+    it "withholds a result whose source changed while the provider ran" do
+      # The author cuts the post down while the provider call is in flight, so
+      # the finished translation describes text the post no longer has.
+      job_result = success_result
+      fake = Object.new
+      target = post_record
+      fake.define_singleton_method(:call) do
+        target.update_columns(raw: "redacted")
+        job_result
+      end
+      BabelReunited::TranslationService.stubs(:new).returns(fake)
+
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+
+      translation =
+        BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      expect(translation.status).to eq("stale")
+      expect(translation.safe_to_display?).to be false
+    end
+
+    # The regression this guards: a permanent verdict recorded against content
+    # the post no longer has. trigger_retranslation only clears records that
+    # were already failed when the edit landed, so a translation still running
+    # at that moment would land as permanently failed and the language would
+    # noop on failed_not_retryable forever.
+    it "voids a failure verdict when the post changed while the job ran" do
+      fake = Object.new
+      target = post_record
+      fake.define_singleton_method(:call) do
+        target.update_columns(raw: "Completely different content now")
+        BabelReunited::TranslationService::Result.new(
+          error: "Content too long",
+          error_kind: "permanent"
+        )
+      end
+      BabelReunited::TranslationService.stubs(:new).returns(fake)
+
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+
+      translation =
+        BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      expect(translation.status).to eq("failed")
+      expect(translation.metadata["error_kind"]).to be_nil
+      expect(translation.auto_retryable?).to be true
+    end
+
+    it "keeps a permanent verdict when the post did not change" do
+      BabelReunited::TranslationService
+        .any_instance
+        .stubs(:call)
+        .returns(
+          failure_result(error: "Content too long", error_kind: "permanent")
+        )
+
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+
+      translation =
+        BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      expect(translation.metadata["error_kind"]).to eq("permanent")
+      expect(translation.auto_retryable?).to be false
+    end
+
+    # The regression this guards: ActiveRecord reports success for an UPDATE
+    # that matched no row, so a translation whose record went away while the
+    # provider ran was dropped without a trace -- after it had been paid for.
+    it "keeps a finished translation whose row was deleted while the provider ran" do
+      translation =
+        BabelReunited::PostTranslation.create_or_update_record(
+          post_record.id,
+          "es"
+        )
+      doomed_id = translation.id
+
+      job_result = success_result
+      fake = Object.new
+      fake.define_singleton_method(:call) do
+        # Staff deleting the translation, or the view lane releasing a claim
+        # it could not turn into work.
+        BabelReunited::PostTranslation.where(id: doomed_id).delete_all
+        job_result
+      end
+      BabelReunited::TranslationService.stubs(:new).returns(fake)
+
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+
+      stored =
+        BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      expect(stored).to be_present
+      expect(stored.status).to eq("completed")
+      expect(stored.translated_content).to include("Hola mundo")
+    end
+
+    # The counterpart of the write-back above: when the deletion was a
+    # person's deliberate choice, the destroy endpoint stamps a tombstone and
+    # the paid-for result is discarded instead of resurrected.
+    it "drops the result when the row was deliberately deleted mid-flight" do
+      translation =
+        BabelReunited::PostTranslation.create_or_update_record(
+          post_record.id,
+          "es"
+        )
+      doomed_id = translation.id
+      target_post_id = post_record.id
+
+      job_result = success_result
+      fake = Object.new
+      fake.define_singleton_method(:call) do
+        BabelReunited::PostTranslation.where(id: doomed_id).delete_all
+        BabelReunited.tombstone_translation!(target_post_id, "es")
+        job_result
+      end
+      BabelReunited::TranslationService.stubs(:new).returns(fake)
+
+      ::BabelReunited::TranslationLogger.expects(:log_translation_skipped).with(
+        has_entries(
+          post_id: post_record.id,
+          reason: "deleted_while_translating"
+        )
+      )
+
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+
+      expect(
+        BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      ).to be_nil
+    end
+
+    # The check before the write cannot see a deletion that lands while the
+    # INSERT is in flight; without the second check that INSERT silently
+    # resurrects the row a person just removed.
+    it "removes a row it inserted while the deletion was landing" do
+      target_post_id = post_record.id
+      BabelReunited::TranslationService
+        .any_instance
+        .stubs(:call)
+        .returns(success_result)
+
+      # False on the pre-write check, true afterwards: the deletion lands in
+      # between, which is exactly the window under test.
+      seq = sequence("tombstone")
+      BabelReunited
+        .expects(:translation_tombstoned_since?)
+        .returns(false)
+        .in_sequence(seq)
+      BabelReunited
+        .expects(:translation_tombstoned_since?)
+        .returns(true)
+        .in_sequence(seq)
+
+      described_class.new.execute(
+        post_id: target_post_id,
+        target_language: "es"
+      )
+
+      expect(
+        BabelReunited::PostTranslation.find_translation(target_post_id, "es")
+      ).to be_nil
+    end
+
+    # The tombstone marks a moment, not a language: deleting and then asking
+    # again is a fresh request, and a job started after the deletion must
+    # deliver instead of deferring to the leftover marker.
+    it "writes the result of a re-request that follows a deletion" do
+      BabelReunited.tombstone_translation!(post_record.id, "es")
+
+      BabelReunited::TranslationService
+        .any_instance
+        .stubs(:call)
+        .returns(success_result)
+
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+
+      stored =
+        BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      expect(stored).to be_present
+      expect(stored.status).to eq("completed")
+    end
+
+    it "survives the view lane releasing the claim it is working on" do
+      BabelReunited::PostTranslation.claim_new(post_record.id, "es")
+
+      job_result = success_result
+      target_post_id = post_record.id
+      fake = Object.new
+      fake.define_singleton_method(:call) do
+        BabelReunited::PostTranslation.release_claim(target_post_id, "es", nil)
+        job_result
+      end
+      BabelReunited::TranslationService.stubs(:new).returns(fake)
+
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+
+      stored =
+        BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      expect(stored).to be_present
+      expect(stored.translated_content).to include("Hola mundo")
+    end
+
+    it "writes into a row re-created while the provider ran" do
+      translation =
+        BabelReunited::PostTranslation.create_or_update_record(
+          post_record.id,
+          "es"
+        )
+      doomed_id = translation.id
+      target_post_id = post_record.id
+
+      job_result = success_result
+      fake = Object.new
+      fake.define_singleton_method(:call) do
+        BabelReunited::PostTranslation.where(id: doomed_id).delete_all
+        BabelReunited::PostTranslation.create_or_update_record(
+          target_post_id,
+          "es"
+        )
+        job_result
+      end
+      BabelReunited::TranslationService.stubs(:new).returns(fake)
+
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+
+      rows =
+        BabelReunited::PostTranslation.where(
+          post_id: post_record.id,
+          language: "es"
+        )
+      expect(rows.count).to eq(1)
+      expect(rows.first.translated_content).to include("Hola mundo")
+    end
+
+    it "does not push a withheld body to open pages" do
+      job_result = success_result
+      fake = Object.new
+      target = post_record
+      fake.define_singleton_method(:call) do
+        target.update_columns(raw: "redacted")
+        job_result
+      end
+      BabelReunited::TranslationService.stubs(:new).returns(fake)
+
+      messages =
+        MessageBus.track_publish("/post-translations/#{post_record.id}") do
+          described_class.new.execute(
+            post_id: post_record.id,
+            target_language: "es"
+          )
+        end
+
+      expect(messages.length).to eq(1)
+      expect(messages.first.data[:status]).to eq("withheld")
+      expect(messages.first.data).not_to have_key(:translation)
+    end
+
+    # A wrong detection can still produce a completed record of the post's own
+    # language. It is displayable by status, so only the same-language check
+    # keeps it off open pages.
+    it "does not push a same-language body to open pages" do
+      BabelReunited.store_detected_locale(post_record, "es")
+      BabelReunited::TranslationService
+        .any_instance
+        .stubs(:call)
+        .returns(success_result)
+
+      messages =
+        MessageBus.track_publish("/post-translations/#{post_record.id}") do
+          described_class.new.execute(
+            post_id: post_record.id,
+            target_language: "es"
+          )
+        end
+
+      expect(messages.length).to eq(1)
+      expect(messages.first.data[:status]).to eq("withheld")
+      expect(messages.first.data).not_to have_key(:translation)
+    end
+
+    # The title travels on its own channel, so withholding the body is only
+    # half the guard: a same-language title pushed to open pages would be
+    # taken back by the serializer on the next reload.
+    it "does not push a same-language title either" do
+      BabelReunited.store_detected_locale(post_record, "es")
+      BabelReunited::TranslationService
+        .any_instance
+        .stubs(:call)
+        .returns(success_result)
+
+      messages =
+        MessageBus.track_publish(
+          "/babel-translated-title/#{post_record.topic_id}"
+        ) do
+          described_class.new.execute(
+            post_id: post_record.id,
+            target_language: "es"
+          )
+        end
+
+      expect(messages).to be_empty
+    end
+
+    it "does not push a withheld title either" do
+      job_result = success_result
+      fake = Object.new
+      target = post_record
+      fake.define_singleton_method(:call) do
+        target.update_columns(raw: "redacted")
+        job_result
+      end
+      BabelReunited::TranslationService.stubs(:new).returns(fake)
+
+      messages =
+        MessageBus.track_publish(
+          "/babel-translated-title/#{post_record.topic_id}"
+        ) do
+          described_class.new.execute(
+            post_id: post_record.id,
+            target_language: "es"
+          )
+        end
+
+      expect(messages).to be_empty
+    end
+  end
+
+  describe "stale fast-path" do
+    it "heals a stale translation for free when content is unchanged" do
+      translation =
+        BabelReunited::PostTranslation.create_or_update_record(
+          post_record.id,
+          "es"
+        )
+      sha = described_class.content_sha(post_record)
+      translation.update!(
+        status: "stale",
+        source_sha: sha,
+        translated_content: "<p>old</p>"
+      )
+
+      BabelReunited::TranslationService.any_instance.expects(:call).never
+
+      messages =
+        MessageBus.track_publish("/post-translations/#{post_record.id}") do
+          described_class.new.execute(
+            post_id: post_record.id,
+            target_language: "es"
+          )
+        end
+
+      expect(translation.reload.status).to eq("completed")
+      expect(messages.length).to eq(1)
+      expect(messages.first.data[:status]).to eq("completed")
+    end
+
+    it "heals a view-claimed translating record with unchanged content" do
+      translation =
+        BabelReunited::PostTranslation.create_or_update_record(
+          post_record.id,
+          "es"
+        )
+      sha = described_class.content_sha(post_record)
+      translation.update!(
+        status: "completed",
+        source_sha: sha,
+        translated_content: "<p>old</p>"
+      )
+      expect(
+        BabelReunited::PostTranslation.claim_existing(translation)
+      ).to be true
+
+      BabelReunited::TranslationService.any_instance.expects(:call).never
+
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+
+      expect(translation.reload.status).to eq("completed")
+    end
+
+    it "heals a failed record whose content never changed" do
+      translation =
+        BabelReunited::PostTranslation.create_or_update_record(
+          post_record.id,
+          "es"
+        )
+      sha = described_class.content_sha(post_record)
+      translation.update!(
+        status: "failed",
+        source_sha: sha,
+        translated_content: "<p>old</p>",
+        metadata: {
+          "error_kind" => "transient"
+        }
+      )
+
+      BabelReunited::TranslationService.any_instance.expects(:call).never
+
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+
+      expect(translation.reload.status).to eq("completed")
+    end
+
+    it "re-translates a stale translation when content changed" do
+      translation =
+        BabelReunited::PostTranslation.create_or_update_record(
+          post_record.id,
+          "es"
+        )
+      translation.update!(
+        status: "stale",
+        source_sha: "0" * 64,
+        translated_content: "<p>old</p>"
+      )
+
+      BabelReunited::TranslationService
+        .any_instance
+        .stubs(:call)
+        .returns(success_result)
+
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+
+      translation.reload
+      expect(translation.status).to eq("completed")
+      expect(translation.translated_content).to include("Hola mundo")
+      expect(translation.source_sha).to eq(
+        described_class.content_sha(post_record)
+      )
+    end
+  end
+
   describe "successful translation" do
-    before { BabelReunited::TranslationService.any_instance.stubs(:call).returns(success_result) }
+    before do
+      BabelReunited::TranslationService
+        .any_instance
+        .stubs(:call)
+        .returns(success_result)
+    end
 
     it "creates a completed translation with cooked content" do
-      BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
+      BabelReunited::PostTranslation.create_or_update_record(
+        post_record.id,
+        "es"
+      )
 
-      described_class.new.execute(post_id: post_record.id, target_language: "es")
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
 
-      translation = BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      translation =
+        BabelReunited::PostTranslation.find_translation(post_record.id, "es")
       expect(translation.status).to eq("completed")
       expect(translation.translated_content).to include("Hola mundo")
       expect(translation.translated_raw).to eq("Hola mundo")
@@ -173,20 +992,33 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
         .stubs(:call)
         .returns(success_result(translated_raw: "**Bold** text"))
 
-      BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
-      described_class.new.execute(post_id: post_record.id, target_language: "es")
+      BabelReunited::PostTranslation.create_or_update_record(
+        post_record.id,
+        "es"
+      )
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
 
-      translation = BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      translation =
+        BabelReunited::PostTranslation.find_translation(post_record.id, "es")
       expect(translation.translated_raw).to eq("**Bold** text")
       expect(translation.translated_content).to include("<strong>Bold</strong>")
     end
 
     it "publishes success to MessageBus" do
-      BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
+      BabelReunited::PostTranslation.create_or_update_record(
+        post_record.id,
+        "es"
+      )
 
       messages =
         MessageBus.track_publish("/post-translations/#{post_record.id}") do
-          described_class.new.execute(post_id: post_record.id, target_language: "es")
+          described_class.new.execute(
+            post_id: post_record.id,
+            target_language: "es"
+          )
         end
 
       expect(messages.length).to eq(1)
@@ -197,19 +1029,104 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
     end
 
     it "creates translation record if not pre-created" do
-      described_class.new.execute(post_id: post_record.id, target_language: "es")
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
 
-      translation = BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      translation =
+        BabelReunited::PostTranslation.find_translation(post_record.id, "es")
       expect(translation).to be_present
       expect(translation.status).to eq("completed")
     end
 
     it "stores source_sha for incremental translation" do
-      BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
-      described_class.new.execute(post_id: post_record.id, target_language: "es")
+      BabelReunited::PostTranslation.create_or_update_record(
+        post_record.id,
+        "es"
+      )
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
 
-      translation = BabelReunited::PostTranslation.find_translation(post_record.id, "es")
-      expect(translation.source_sha).to eq(Digest::SHA256.hexdigest(post_record.raw))
+      translation =
+        BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      expect(translation.source_sha).to eq(
+        described_class.content_sha(post_record)
+      )
+    end
+
+    it "publishes the translated title so open topics update live" do
+      BabelReunited::PostTranslation.create_or_update_record(
+        post_record.id,
+        "es"
+      )
+
+      messages =
+        MessageBus.track_publish(
+          "/babel-translated-title/#{post_record.topic_id}"
+        ) do
+          described_class.new.execute(
+            post_id: post_record.id,
+            target_language: "es"
+          )
+        end
+
+      expect(messages.length).to eq(1)
+      expect(messages.first.data[:language]).to eq("es")
+      expect(messages.first.data[:translated_title]).to eq("Titulo")
+    end
+
+    it "does not publish a title for replies" do
+      reply = Fabricate(:post, topic: topic, user: user)
+
+      messages =
+        MessageBus.track_publish("/babel-translated-title/#{topic.id}") do
+          described_class.new.execute(post_id: reply.id, target_language: "es")
+        end
+
+      expect(messages).to be_empty
+    end
+
+    it "stores the detected locale as source_language" do
+      BabelReunited.store_detected_locale(post_record, "en")
+
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+
+      translation =
+        BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      expect(translation.source_language).to eq("en")
+    end
+
+    it "enqueues detection backfill for posts without a detected locale" do
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+
+      expect(
+        job_enqueued?(
+          job: Jobs::BabelReunited::DetectPostLanguageJob,
+          args: {
+            post_id: post_record.id
+          }
+        )
+      ).to be true
+    end
+
+    it "does not enqueue detection backfill when locale is already detected" do
+      BabelReunited.store_detected_locale(post_record, "en")
+
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+
+      expect(Jobs::BabelReunited::DetectPostLanguageJob.jobs).to be_empty
     end
 
     it "truncates translated title longer than 255 characters" do
@@ -219,10 +1136,17 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
         .stubs(:call)
         .returns(success_result(translated_title: long_title))
 
-      BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
-      described_class.new.execute(post_id: post_record.id, target_language: "es")
+      BabelReunited::PostTranslation.create_or_update_record(
+        post_record.id,
+        "es"
+      )
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
 
-      translation = BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      translation =
+        BabelReunited::PostTranslation.find_translation(post_record.id, "es")
       expect(translation.status).to eq("completed")
       expect(translation.translated_title.length).to eq(255)
       expect(translation.translated_title).to end_with("...")
@@ -237,10 +1161,17 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
         .stubs(:call)
         .returns(success_result(translated_raw: "<img src=\"#{upload.url}\">"))
 
-      BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
-      described_class.new.execute(post_id: post_record.id, target_language: "es")
+      BabelReunited::PostTranslation.create_or_update_record(
+        post_record.id,
+        "es"
+      )
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
 
-      translation = BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      translation =
+        BabelReunited::PostTranslation.find_translation(post_record.id, "es")
       expect(translation.status).to eq("completed")
       expect(translation.translated_content).to include("lightbox-wrapper")
     end
@@ -253,12 +1184,23 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
       BabelReunited::TranslationService
         .any_instance
         .stubs(:call)
-        .returns(success_result(translated_raw: "https://example.com/interesting-article"))
+        .returns(
+          success_result(
+            translated_raw: "https://example.com/interesting-article"
+          )
+        )
 
-      BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
-      described_class.new.execute(post_id: post_record.id, target_language: "es")
+      BabelReunited::PostTranslation.create_or_update_record(
+        post_record.id,
+        "es"
+      )
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
 
-      translation = BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      translation =
+        BabelReunited::PostTranslation.find_translation(post_record.id, "es")
       expect(translation.status).to eq("completed")
       expect(translation.translated_content).to include("onebox-body")
     end
@@ -268,44 +1210,210 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
         .any_instance
         .stubs(:post_process)
         .raises(StandardError.new("boom"))
-      BabelReunited::TranslationService.any_instance.stubs(:call).returns(success_result)
+      BabelReunited::TranslationService
+        .any_instance
+        .stubs(:call)
+        .returns(success_result)
 
-      BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
-      described_class.new.execute(post_id: post_record.id, target_language: "es")
+      BabelReunited::PostTranslation.create_or_update_record(
+        post_record.id,
+        "es"
+      )
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
 
-      translation = BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      translation =
+        BabelReunited::PostTranslation.find_translation(post_record.id, "es")
       expect(translation.status).to eq("completed")
       expect(translation.translated_content).to include("Hola mundo")
     end
   end
 
   describe "failed translation" do
-    before { BabelReunited::TranslationService.any_instance.stubs(:call).returns(failure_result) }
+    before do
+      BabelReunited::TranslationService
+        .any_instance
+        .stubs(:call)
+        .returns(failure_result)
+    end
 
     it "marks translation as failed" do
-      BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
+      BabelReunited::PostTranslation.create_or_update_record(
+        post_record.id,
+        "es"
+      )
 
-      described_class.new.execute(post_id: post_record.id, target_language: "es")
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
 
-      translation = BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      translation =
+        BabelReunited::PostTranslation.find_translation(post_record.id, "es")
       expect(translation.status).to eq("failed")
     end
 
     it "stores error in metadata" do
-      BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
+      BabelReunited::PostTranslation.create_or_update_record(
+        post_record.id,
+        "es"
+      )
 
-      described_class.new.execute(post_id: post_record.id, target_language: "es")
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
 
-      translation = BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      translation =
+        BabelReunited::PostTranslation.find_translation(post_record.id, "es")
       expect(translation.metadata["error"]).to eq("API key not configured")
     end
 
+    it "classifies configuration errors as transient and counts the failure" do
+      BabelReunited::PostTranslation.create_or_update_record(
+        post_record.id,
+        "es"
+      )
+
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+
+      translation =
+        BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      expect(translation.metadata["error_kind"]).to eq("transient")
+      expect(translation.metadata["failure_count"]).to eq(1)
+    end
+
+    it "takes the classification from the service, not the message text" do
+      # A reworded provider error must not silently become retryable.
+      BabelReunited::TranslationService
+        .any_instance
+        .stubs(:call)
+        .returns(
+          failure_result(
+            error: "some wording nobody anticipated",
+            error_kind: "permanent"
+          )
+        )
+
+      BabelReunited::PostTranslation.create_or_update_record(
+        post_record.id,
+        "es"
+      )
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+
+      translation =
+        BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      expect(translation.metadata["error_kind"]).to eq("permanent")
+    end
+
+    it "classifies content-too-long errors as permanent" do
+      BabelReunited::TranslationService
+        .any_instance
+        .stubs(:call)
+        .returns(
+          failure_result(
+            error: "Content too long for translation",
+            error_kind: "permanent"
+          )
+        )
+
+      BabelReunited::PostTranslation.create_or_update_record(
+        post_record.id,
+        "es"
+      )
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+
+      translation =
+        BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      expect(translation.metadata["error_kind"]).to eq("permanent")
+    end
+
+    it "clears failure metadata after a later success" do
+      BabelReunited::PostTranslation.create_or_update_record(
+        post_record.id,
+        "es"
+      )
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+      expect(
+        BabelReunited::PostTranslation.find_translation(
+          post_record.id,
+          "es"
+        ).metadata[
+          "failure_count"
+        ]
+      ).to eq(1)
+
+      BabelReunited::TranslationService
+        .any_instance
+        .stubs(:call)
+        .returns(success_result)
+      BabelReunited::PostTranslation.create_or_update_record(
+        post_record.id,
+        "es"
+      )
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+
+      translation =
+        BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      expect(translation.status).to eq("completed")
+      expect(translation.metadata).not_to have_key("failure_count")
+      expect(translation.metadata).not_to have_key("error_kind")
+      expect(translation.metadata).not_to have_key("error")
+    end
+
+    it "increments failure_count across repeated failures" do
+      BabelReunited::PostTranslation.create_or_update_record(
+        post_record.id,
+        "es"
+      )
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+
+      BabelReunited::PostTranslation.create_or_update_record(
+        post_record.id,
+        "es"
+      )
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+
+      translation =
+        BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      expect(translation.metadata["failure_count"]).to eq(2)
+    end
+
     it "publishes failure to MessageBus" do
-      BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
+      BabelReunited::PostTranslation.create_or_update_record(
+        post_record.id,
+        "es"
+      )
 
       messages =
         MessageBus.track_publish("/post-translations/#{post_record.id}") do
-          described_class.new.execute(post_id: post_record.id, target_language: "es")
+          described_class.new.execute(
+            post_id: post_record.id,
+            target_language: "es"
+          )
         end
 
       expect(messages.length).to eq(1)
@@ -323,23 +1431,36 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
     end
 
     it "raises RateLimitError for Sidekiq retry" do
-      BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
+      BabelReunited::PostTranslation.create_or_update_record(
+        post_record.id,
+        "es"
+      )
 
       expect {
-        described_class.new.execute(post_id: post_record.id, target_language: "es")
+        described_class.new.execute(
+          post_id: post_record.id,
+          target_language: "es"
+        )
       }.to raise_error(BabelReunited::RateLimitError)
     end
 
     it "does not mark translation as failed" do
-      BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
+      BabelReunited::PostTranslation.create_or_update_record(
+        post_record.id,
+        "es"
+      )
 
       begin
-        described_class.new.execute(post_id: post_record.id, target_language: "es")
+        described_class.new.execute(
+          post_id: post_record.id,
+          target_language: "es"
+        )
       rescue StandardError
         nil
       end
 
-      translation = BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      translation =
+        BabelReunited::PostTranslation.find_translation(post_record.id, "es")
       expect(translation.status).not_to eq("failed")
     end
   end
@@ -353,21 +1474,35 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
     end
 
     it "marks translation as failed on exception" do
-      BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
+      BabelReunited::PostTranslation.create_or_update_record(
+        post_record.id,
+        "es"
+      )
 
-      described_class.new.execute(post_id: post_record.id, target_language: "es")
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
 
-      translation = BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      translation =
+        BabelReunited::PostTranslation.find_translation(post_record.id, "es")
       expect(translation.status).to eq("failed")
       expect(translation.metadata["error"]).to eq("unexpected boom")
     end
 
     it "stores error class in metadata" do
-      BabelReunited::PostTranslation.create_or_update_record(post_record.id, "es")
+      BabelReunited::PostTranslation.create_or_update_record(
+        post_record.id,
+        "es"
+      )
 
-      described_class.new.execute(post_id: post_record.id, target_language: "es")
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
 
-      translation = BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      translation =
+        BabelReunited::PostTranslation.find_translation(post_record.id, "es")
       expect(translation.metadata["error_class"]).to eq("StandardError")
     end
   end

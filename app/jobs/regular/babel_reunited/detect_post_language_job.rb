@@ -1,0 +1,89 @@
+# frozen_string_literal: true
+
+class Jobs::BabelReunited::DetectPostLanguageJob < ::Jobs::Base
+  sidekiq_options retry: 3
+
+  sidekiq_retry_in do |count, exception|
+    case exception.wrapped
+    when BabelReunited::RateLimitError
+      (count + 1) * 30 + rand(15)
+    end
+  end
+
+  sidekiq_retries_exhausted do |msg|
+    args = msg["args"]&.first || {}
+    next unless args["then_fanout"]
+
+    # Detection could not run; fan out to every configured language so the
+    # pre-translate layer never silently stalls behind detection.
+    post = Post.find_by(id: args["post_id"])
+    BabelReunited.fanout_translations(post) if post
+  end
+
+  def execute(args)
+    post = Post.find_by(id: args[:post_id])
+    # Detection sends post content to a third-party provider, so it refuses
+    # the same posts translation does (deleted, hidden, disabled category).
+    return unless BabelReunited.translatable_post?(post)
+
+    then_fanout = args[:then_fanout] || false
+
+    unless BabelReunited.detection_current?(post)
+      sampled_sha = BabelReunited.detection_raw_sha(post)
+      result = BabelReunited::LanguageDetectionService.new(post: post).call
+
+      if result.success?
+        post.reload
+        if BabelReunited.detection_raw_sha(post) == sampled_sha
+          BabelReunited.store_detected_locale(
+            post,
+            result.locale,
+            raw_sha: sampled_sha
+          )
+          publish_detected_locale(post, result.locale)
+        else
+          # The post changed while detection ran; the result may describe the
+          # old content. Discard it and try again shortly.
+          Jobs.enqueue_in(
+            5.seconds,
+            Jobs::BabelReunited::DetectPostLanguageJob,
+            post_id: post.id,
+            then_fanout: then_fanout
+          )
+          return
+        end
+      else
+        ::BabelReunited::TranslationLogger.log_translation_skipped(
+          post_id: post.id,
+          target_language: "detect",
+          reason: "detection_failed: #{result.error}"
+        )
+
+        # Fanning out with no result costs a full translation into the post's
+        # own language, and that record then looks completed forever. A
+        # transient failure is worth retrying first; sidekiq_retries_exhausted
+        # above is the fan-out fallback once retries really are spent.
+        if result.retryable?
+          raise BabelReunited::DetectionError, result.error.to_s
+        end
+      end
+    end
+
+    BabelReunited.fanout_translations(post) if then_fanout
+  rescue BabelReunited::RateLimitError, BabelReunited::DetectionError
+    raise
+  end
+
+  private
+
+  # Detection lands seconds after the page renders, so a client that loaded
+  # during the gap believes the post's language is unknown and offers to
+  # translate it into itself. Reuse the translation channel to correct it.
+  def publish_detected_locale(post, locale)
+    MessageBus.publish(
+      "/post-translations/#{post.id}",
+      { post_id: post.id, detected_locale: locale },
+      **::BabelReunited::MessageBusAudience.options_for(post)
+    )
+  end
+end

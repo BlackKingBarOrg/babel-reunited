@@ -3,7 +3,9 @@
 RSpec.describe BabelReunited do
   fab!(:user) { Fabricate(:user, trust_level: TrustLevel[1]) }
   fab!(:topic) { Fabricate(:topic, user: user) }
-  fab!(:post_record) { Fabricate(:post, topic: topic, user: user, post_number: 1) }
+  fab!(:post_record) do
+    Fabricate(:post, topic: topic, user: user, post_number: 1)
+  end
 
   before do
     enable_current_plugin
@@ -16,34 +18,47 @@ RSpec.describe BabelReunited do
   end
 
   describe "post_created event" do
-    it "enqueues translation jobs for auto_translate_languages" do
+    it "enqueues language detection with fanout instead of direct translation" do
       new_post = Fabricate(:post, user: user)
 
       DiscourseEvent.trigger(:post_created, new_post)
 
-      %w[zh-cn en es].each do |lang|
-        expect(
-          job_enqueued?(
-            job: Jobs::BabelReunited::TranslatePostJob,
-            args: {
-              post_id: new_post.id,
-              target_language: lang,
-            },
-          ),
-        ).to be true
-      end
+      expect(
+        job_enqueued?(
+          job: Jobs::BabelReunited::DetectPostLanguageJob,
+          args: {
+            post_id: new_post.id,
+            then_fanout: true
+          }
+        )
+      ).to be true
+      expect(Jobs::BabelReunited::TranslatePostJob.jobs).to be_empty
     end
 
-    it "pre-creates translation records with translating status" do
+    it "creates translating records for auto languages minus the detected one" do
+      BabelReunited::LanguageDetectionService
+        .any_instance
+        .stubs(:call)
+        .returns(
+          BabelReunited::LanguageDetectionService::Result.new(locale: "en")
+        )
       new_post = Fabricate(:post, user: user)
 
       DiscourseEvent.trigger(:post_created, new_post)
+      Jobs::BabelReunited::DetectPostLanguageJob.new.execute(
+        post_id: new_post.id,
+        then_fanout: true
+      )
 
-      %w[zh-cn en es].each do |lang|
-        translation = BabelReunited::PostTranslation.find_translation(new_post.id, lang)
+      %w[zh-cn es].each do |lang|
+        translation =
+          BabelReunited::PostTranslation.find_translation(new_post.id, lang)
         expect(translation).to be_present
         expect(translation.status).to eq("translating")
       end
+      expect(
+        BabelReunited::PostTranslation.find_translation(new_post.id, "en")
+      ).to be_nil
     end
 
     it "does nothing when auto_translate_languages is blank" do
@@ -52,7 +67,9 @@ RSpec.describe BabelReunited do
 
       DiscourseEvent.trigger(:post_created, new_post)
 
-      expect(BabelReunited::PostTranslation.where(post_id: new_post.id).count).to eq(0)
+      expect(
+        BabelReunited::PostTranslation.where(post_id: new_post.id).count
+      ).to eq(0)
     end
 
     it "does nothing when plugin is disabled" do
@@ -61,7 +78,9 @@ RSpec.describe BabelReunited do
 
       DiscourseEvent.trigger(:post_created, new_post)
 
-      expect(BabelReunited::PostTranslation.where(post_id: new_post.id).count).to eq(0)
+      expect(
+        BabelReunited::PostTranslation.where(post_id: new_post.id).count
+      ).to eq(0)
     end
   end
 
@@ -78,42 +97,26 @@ RSpec.describe BabelReunited do
           job: Jobs::BabelReunited::TranslatePostJob,
           args: {
             post_id: post_record.id,
-            target_language: "de",
-          },
-        ),
+            target_language: "de"
+          }
+        )
       ).to be false
     end
 
-    it "only re-translates existing languages when no auto_translate_languages" do
+    it "marks all completed translations stale when no auto_translate_languages" do
       SiteSetting.babel_reunited_auto_translate_languages = ""
-      Fabricate(:post_translation, post: post_record, language: "de")
+      translation =
+        Fabricate(:post_translation, post: post_record, language: "de")
 
       revisor = OpenStruct.new(topic_diff: {})
       DiscourseEvent.trigger(:post_edited, post_record, false, revisor)
 
-      expect(
-        job_enqueued?(
-          job: Jobs::BabelReunited::TranslatePostJob,
-          args: {
-            post_id: post_record.id,
-            target_language: "de",
-            force_update: true,
-          },
-        ),
-      ).to be true
-
-      expect(
-        job_enqueued?(
-          job: Jobs::BabelReunited::TranslatePostJob,
-          args: {
-            post_id: post_record.id,
-            target_language: "zh-cn",
-          },
-        ),
-      ).to be false
+      expect(translation.reload.status).to eq("stale")
+      expect(Jobs::BabelReunited::TranslatePostJob.jobs).to be_empty
     end
 
     it "deduplicates existing translations and auto_translate_languages" do
+      BabelReunited.store_detected_locale(post_record, "ja")
       Fabricate(:post_translation, post: post_record, language: "es")
 
       revisor = OpenStruct.new(topic_diff: {})
@@ -121,31 +124,140 @@ RSpec.describe BabelReunited do
 
       jobs =
         Jobs::BabelReunited::TranslatePostJob.jobs.select do |j|
-          j["args"].first["post_id"] == post_record.id && j["args"].first["target_language"] == "es"
+          j["args"].first["post_id"] == post_record.id &&
+            j["args"].first["target_language"] == "es"
         end
 
       expect(jobs.length).to eq(1)
     end
 
-    it "re-translates existing languages with force_update" do
-      Fabricate(:post_translation, post: post_record, language: "de")
+    it "marks lazy-layer translations stale instead of re-translating" do
+      translation =
+        Fabricate(:post_translation, post: post_record, language: "de")
 
       revisor = OpenStruct.new(topic_diff: {})
       DiscourseEvent.trigger(:post_edited, post_record, false, revisor)
 
+      expect(translation.reload.status).to eq("stale")
       expect(
         job_enqueued?(
           job: Jobs::BabelReunited::TranslatePostJob,
           args: {
             post_id: post_record.id,
             target_language: "de",
-            force_update: true,
-          },
-        ),
-      ).to be true
+            force_update: true
+          }
+        )
+      ).to be false
+    end
+
+    # Invalidation compares each row's fingerprint against the current
+    # content instead of blanket-staling: an edit that leaves the translated
+    # content identical (a category or tag change) must not discard rows.
+    it "keeps a completed translation whose fingerprint still matches" do
+      translation =
+        Fabricate(
+          :post_translation,
+          post: post_record,
+          language: "de",
+          source_sha:
+            Jobs::BabelReunited::TranslatePostJob.content_sha(post_record)
+        )
+
+      revisor = OpenStruct.new(topic_diff: {})
+      DiscourseEvent.trigger(:post_edited, post_record, false, revisor)
+
+      expect(translation.reload.status).to eq("completed")
+    end
+
+    # Failure verdicts are judged by the same fingerprint as completed rows,
+    # or a verdict rendered against an old title outlives the title.
+    it "clears a failure verdict on a title-only edit" do
+      failed =
+        Fabricate(
+          :post_translation,
+          post: post_record,
+          language: "de",
+          status: "failed",
+          source_sha:
+            Jobs::BabelReunited::TranslatePostJob.content_sha(post_record),
+          metadata: {
+            "error" => "Content too long",
+            "error_kind" => "permanent"
+          }
+        )
+
+      post_record.topic.update_columns(title: "A much shorter title")
+      revisor = OpenStruct.new(topic_diff: {})
+      DiscourseEvent.trigger(:post_edited, post_record.reload, false, revisor)
+
+      failed.reload
+      expect(failed.metadata["error_kind"]).to be_nil
+      expect(failed.auto_retryable?).to be true
+    end
+
+    # The fingerprint includes the topic title for the first post, so a
+    # title-only edit outdates lazy rows even though the raw is unchanged.
+    it "marks lazy rows stale on a title-only edit" do
+      translation =
+        Fabricate(
+          :post_translation,
+          post: post_record,
+          language: "de",
+          source_sha:
+            Jobs::BabelReunited::TranslatePostJob.content_sha(post_record)
+        )
+
+      post_record.topic.update_columns(title: "A freshly retitled topic")
+      revisor = OpenStruct.new(topic_diff: {})
+      DiscourseEvent.trigger(:post_edited, post_record.reload, false, revisor)
+
+      expect(translation.reload.status).to eq("stale")
+    end
+
+    it "keeps lazy translated_content readable after being marked stale" do
+      translation =
+        Fabricate(
+          :post_translation,
+          post: post_record,
+          language: "de",
+          translated_content: "<p>Altes Inhalt</p>"
+        )
+
+      revisor = OpenStruct.new(topic_diff: {})
+      DiscourseEvent.trigger(:post_edited, post_record, false, revisor)
+
+      expect(translation.reload.translated_content).to eq("<p>Altes Inhalt</p>")
+    end
+
+    it "does not touch translating or failed lazy translations on edit" do
+      translating =
+        Fabricate(
+          :post_translation,
+          post: post_record,
+          language: "de",
+          status: "translating",
+          translated_content: ""
+        )
+      failed =
+        Fabricate(
+          :post_translation,
+          post: post_record,
+          language: "fr",
+          status: "failed",
+          translated_content: ""
+        )
+
+      revisor = OpenStruct.new(topic_diff: {})
+      DiscourseEvent.trigger(:post_edited, post_record, false, revisor)
+
+      expect(translating.reload.status).to eq("translating")
+      expect(failed.reload.status).to eq("failed")
     end
 
     it "includes auto_translate_languages in re-translation" do
+      BabelReunited.store_detected_locale(post_record, "ja")
+
       revisor = OpenStruct.new(topic_diff: {})
       DiscourseEvent.trigger(:post_edited, post_record, false, revisor)
 
@@ -156,9 +268,116 @@ RSpec.describe BabelReunited do
             args: {
               post_id: post_record.id,
               target_language: lang,
-              force_update: true,
-            },
-          ),
+              force_update: true
+            }
+          )
+        ).to be true
+      end
+    end
+
+    it "routes edits with changed content through re-detection" do
+      BabelReunited.store_detected_locale(post_record, "en", raw_sha: "0" * 64)
+
+      revisor = OpenStruct.new(topic_diff: {})
+      DiscourseEvent.trigger(:post_edited, post_record, false, revisor)
+
+      expect(
+        job_enqueued?(
+          job: Jobs::BabelReunited::DetectPostLanguageJob,
+          args: {
+            post_id: post_record.id,
+            then_fanout: true
+          }
+        )
+      ).to be true
+      expect(Jobs::BabelReunited::TranslatePostJob.jobs).to be_empty
+    end
+
+    it "invalidates translations of a hidden post without dispatching work" do
+      # Invalidation is local bookkeeping: a hidden post whose content changed
+      # must not keep serving pre-edit translations once it becomes visible.
+      translation =
+        Fabricate(:post_translation, post: post_record, language: "de")
+      post_record.update!(hidden: true)
+
+      revisor = OpenStruct.new(topic_diff: {})
+      DiscourseEvent.trigger(:post_edited, post_record, false, revisor)
+
+      expect(translation.reload.status).to eq("stale")
+      expect(Jobs::BabelReunited::DetectPostLanguageJob.jobs).to be_empty
+      expect(Jobs::BabelReunited::TranslatePostJob.jobs).to be_empty
+    end
+
+    it "invalidates translations of a deleted post without dispatching work" do
+      translation =
+        Fabricate(:post_translation, post: post_record, language: "de")
+      post_record.trash!
+
+      revisor = OpenStruct.new(topic_diff: {})
+      DiscourseEvent.trigger(:post_edited, post_record, false, revisor)
+
+      expect(translation.reload.status).to eq("stale")
+      expect(Jobs::BabelReunited::DetectPostLanguageJob.jobs).to be_empty
+    end
+
+    it "marks pre-translate-layer translations stale too when content changed" do
+      # The post was English (es/zh-cn were its translations) and is rewritten
+      # in Spanish. The old es translation is now both outdated and redundant:
+      # it must not stay completed and readable as pre-edit content.
+      BabelReunited.store_detected_locale(post_record, "en", raw_sha: "0" * 64)
+      es = Fabricate(:post_translation, post: post_record, language: "es")
+      zh = Fabricate(:post_translation, post: post_record, language: "zh-cn")
+
+      revisor = OpenStruct.new(topic_diff: {})
+      DiscourseEvent.trigger(:post_edited, post_record, false, revisor)
+
+      expect(es.reload.status).to eq("stale")
+      expect(zh.reload.status).to eq("stale")
+      expect(es.translated_content).to be_present
+    end
+
+    it "still marks lazy translations stale when routing through re-detection" do
+      translation =
+        Fabricate(:post_translation, post: post_record, language: "de")
+
+      revisor = OpenStruct.new(topic_diff: {})
+      DiscourseEvent.trigger(:post_edited, post_record, false, revisor)
+
+      expect(translation.reload.status).to eq("stale")
+      expect(
+        job_enqueued?(job: Jobs::BabelReunited::DetectPostLanguageJob, args: {})
+      ).to be true
+    end
+
+    it "excludes the detected source language from eager re-translation" do
+      BabelReunited.store_detected_locale(post_record, "en")
+      legacy_copy =
+        Fabricate(:post_translation, post: post_record, language: "en")
+
+      revisor = OpenStruct.new(topic_diff: {})
+      DiscourseEvent.trigger(:post_edited, post_record, false, revisor)
+
+      expect(
+        job_enqueued?(
+          job: Jobs::BabelReunited::TranslatePostJob,
+          args: {
+            post_id: post_record.id,
+            target_language: "en"
+          }
+        )
+      ).to be false
+      expect(legacy_copy.reload.status).to eq("stale")
+
+      %w[zh-cn es].each do |lang|
+        expect(
+          job_enqueued?(
+            job: Jobs::BabelReunited::TranslatePostJob,
+            args: {
+              post_id: post_record.id,
+              target_language: lang,
+              force_update: true
+            }
+          )
         ).to be true
       end
     end
@@ -167,28 +386,20 @@ RSpec.describe BabelReunited do
   describe "category_created event" do
     fab!(:category_with_definition)
 
-    it "enqueues translation jobs for the category definition post" do
+    it "enqueues language detection for the category definition post" do
       first_post = category_with_definition.topic.first_post
 
       DiscourseEvent.trigger(:category_created, category_with_definition)
 
-      %w[zh-cn en es].each do |lang|
-        expect(
-          job_enqueued?(
-            job: Jobs::BabelReunited::TranslatePostJob,
-            args: {
-              post_id: first_post.id,
-              target_language: lang,
-            },
-          ),
-        ).to be true
-      end
-
-      %w[zh-cn en es].each do |lang|
-        translation = BabelReunited::PostTranslation.find_translation(first_post.id, lang)
-        expect(translation).to be_present
-        expect(translation.status).to eq("translating")
-      end
+      expect(
+        job_enqueued?(
+          job: Jobs::BabelReunited::DetectPostLanguageJob,
+          args: {
+            post_id: first_post.id,
+            then_fanout: true
+          }
+        )
+      ).to be true
     end
 
     it "does nothing when plugin is disabled" do
@@ -197,7 +408,9 @@ RSpec.describe BabelReunited do
 
       DiscourseEvent.trigger(:category_created, category_with_definition)
 
-      expect(BabelReunited::PostTranslation.where(post_id: first_post.id).count).to eq(0)
+      expect(
+        BabelReunited::PostTranslation.where(post_id: first_post.id).count
+      ).to eq(0)
     end
 
     it "does not trigger when category is not in enabled_categories" do
@@ -208,7 +421,9 @@ RSpec.describe BabelReunited do
 
       DiscourseEvent.trigger(:category_created, category_with_definition)
 
-      expect(BabelReunited::PostTranslation.where(post_id: first_post.id).count).to eq(0)
+      expect(
+        BabelReunited::PostTranslation.where(post_id: first_post.id).count
+      ).to eq(0)
     end
   end
 
@@ -253,16 +468,162 @@ RSpec.describe BabelReunited do
       PostSerializer.new(a_post, scope: guardian, root: false).as_json
     end
 
-    it "includes available_translations" do
-      Fabricate(:post_translation, post: post_record, language: "es")
+    it "withholds a stale translation once the post was cut back" do
+      Fabricate(
+        :user_preferred_language,
+        user: user,
+        language: "es",
+        enabled: true
+      )
+      Fabricate(
+        :post_translation,
+        post: post_record,
+        language: "es",
+        status: "stale",
+        metadata: {
+          "source_length" => post_record.raw.length * 5
+        }
+      )
+
       json = serialize_post(post_record)
-      expect(json[:available_translations]).to include("es")
+
+      expect(json[:babel_preferred_translation]).to be_nil
+      # The body is withheld, but the row's status stays visible so the
+      # client can render progress instead of re-enqueueing.
+      expect(
+        json[:babel_translations_meta].map { |t| t[:status] }
+      ).to contain_exactly("stale")
     end
 
-    it "includes post_translations" do
+    # An edit moves every completed translation to stale, and the edit that
+    # matters is the one that removed something. The old body is withheld
+    # until it has been re-translated rather than shown with a notice.
+    it "withholds a stale body after an edit" do
+      Fabricate(
+        :user_preferred_language,
+        user: user,
+        language: "es",
+        enabled: true
+      )
+      Fabricate(
+        :post_translation,
+        post: post_record,
+        language: "es",
+        status: "stale",
+        translated_content: "<p>Das Passwort lautet hunter2</p>"
+      )
+
+      json = serialize_post(post_record)
+
+      expect(json[:babel_preferred_translation]).to be_nil
+      expect(
+        json[:babel_translations_meta].map { |t| t[:status] }
+      ).to contain_exactly("stale")
+    end
+
+    it "keeps translating and failed rows visible in the metadata" do
+      Fabricate(
+        :post_translation,
+        post: post_record,
+        language: "es",
+        status: "translating",
+        translated_content: ""
+      )
+      Fabricate(
+        :post_translation,
+        post: post_record,
+        language: "ja",
+        status: "failed",
+        translated_content: ""
+      )
+
+      json = serialize_post(post_record)
+
+      expect(
+        json[:babel_translations_meta].map { |t| t[:status] }
+      ).to contain_exactly("translating", "failed")
+    end
+
+    it "includes lightweight babel_translations_meta without bodies" do
       Fabricate(:post_translation, post: post_record, language: "es")
       json = serialize_post(post_record)
-      expect(json[:post_translations]).to be_present
+
+      meta = json[:babel_translations_meta]
+      expect(meta.length).to eq(1)
+      expect(meta.first[:language]).to eq("es")
+      expect(meta.first[:status]).to eq("completed")
+      expect(meta.first[:source_language]).to eq("en")
+      expect(meta.first).not_to have_key(:translated_content)
+    end
+
+    it "does not serialize legacy post_translations and available_translations" do
+      Fabricate(:post_translation, post: post_record, language: "es")
+      json = serialize_post(post_record)
+
+      expect(json).not_to have_key(:post_translations)
+      expect(json).not_to have_key(:available_translations)
+    end
+
+    it "includes the full body only for the viewer's preferred language" do
+      Fabricate(
+        :user_preferred_language,
+        user: user,
+        language: "es",
+        enabled: true
+      )
+      Fabricate(:post_translation, post: post_record, language: "es")
+      Fabricate(:post_translation, post: post_record, language: "de")
+
+      json = serialize_post(post_record)
+
+      preferred = json[:babel_preferred_translation]
+      expect(preferred[:language]).to eq("es")
+      expect(preferred[:translated_content]).to include("Hola mundo")
+      expect(
+        json[:babel_translations_meta].map { |t| t[:language] }
+      ).to contain_exactly("es", "de")
+    end
+
+    it "omits babel_preferred_translation without a preference" do
+      Fabricate(:post_translation, post: post_record, language: "es")
+      json = serialize_post(post_record)
+      expect(json).not_to have_key(:babel_preferred_translation)
+    end
+
+    # Same-language records are legacy artifacts (fanout skips the detected
+    # locale now) and can be LLM answer-mode output, so no reader path may
+    # surface them — not the language menu, not the preferred-language body.
+    it "hides same-language translations from babel_translations_meta" do
+      BabelReunited.store_detected_locale(post_record, "zh-cn")
+      Fabricate(:post_translation, post: post_record, language: "zh-cn")
+      Fabricate(:post_translation, post: post_record, language: "es")
+
+      json = serialize_post(post_record.reload)
+
+      expect(
+        json[:babel_translations_meta].map { |t| t[:language] }
+      ).to contain_exactly("es")
+    end
+
+    it "never serves a same-language body as the preferred translation" do
+      BabelReunited.store_detected_locale(post_record, "zh-cn")
+      Fabricate(
+        :user_preferred_language,
+        user: user,
+        language: "zh-cn",
+        enabled: true
+      )
+      Fabricate(:post_translation, post: post_record, language: "zh-cn")
+
+      json = serialize_post(post_record.reload)
+
+      expect(json[:babel_preferred_translation]).to be_nil
+    end
+
+    it "includes babel_detected_locale when detected" do
+      BabelReunited.store_detected_locale(post_record, "en")
+      json = serialize_post(post_record.reload)
+      expect(json[:babel_detected_locale]).to eq("en")
     end
 
     it "includes show_translation_widget" do
@@ -278,7 +639,11 @@ RSpec.describe BabelReunited do
 
   describe "CurrentUserSerializer extensions" do
     def serialize_current_user(a_user)
-      CurrentUserSerializer.new(a_user, scope: Guardian.new(a_user), root: false).as_json
+      CurrentUserSerializer.new(
+        a_user,
+        scope: Guardian.new(a_user),
+        root: false
+      ).as_json
     end
 
     it "includes preferred_language" do
@@ -293,7 +658,12 @@ RSpec.describe BabelReunited do
     end
 
     it "includes preferred_language_enabled" do
-      Fabricate(:user_preferred_language, user: user, language: "es", enabled: true)
+      Fabricate(
+        :user_preferred_language,
+        user: user,
+        language: "es",
+        enabled: true
+      )
       json = serialize_current_user(user)
       expect(json[:preferred_language_enabled]).to be true
     end
@@ -303,43 +673,71 @@ RSpec.describe BabelReunited do
     let(:guardian) { Guardian.new(user) }
 
     before do
-      Fabricate(:user_preferred_language, user: user, language: "es", enabled: true)
+      Fabricate(
+        :user_preferred_language,
+        user: user,
+        language: "es",
+        enabled: true
+      )
       Fabricate(
         :post_translation,
         post: post_record,
         language: "es",
         translated_title: "Titulo traducido",
-        status: "completed",
+        status: "completed"
       )
+    end
+
+    it "never serves a title from a translation into the post's own language" do
+      # The post was rewritten in Spanish; its old es translation lingers as
+      # stale content that nothing will refresh.
+      BabelReunited.store_detected_locale(post_record, "es")
+
+      json =
+        ListableTopicSerializer.new(topic, scope: guardian, root: false).as_json
+      expect(json[:babel_translated_title]).to be_nil
     end
 
     it "includes babel_translated_title in topic_view" do
       topic_view = TopicView.new(topic.id, user)
-      json = TopicViewSerializer.new(topic_view, scope: guardian, root: false).as_json
+      json =
+        TopicViewSerializer.new(
+          topic_view,
+          scope: guardian,
+          root: false
+        ).as_json
       expect(json[:babel_translated_title]).to eq("Titulo traducido")
     end
 
     it "includes babel_translated_title in listable_topic" do
-      json = ListableTopicSerializer.new(topic, scope: guardian, root: false).as_json
+      json =
+        ListableTopicSerializer.new(topic, scope: guardian, root: false).as_json
       expect(json[:babel_translated_title]).to eq("Titulo traducido")
     end
 
     it "includes babel_translated_title in topic_list_item" do
-      json = TopicListItemSerializer.new(topic, scope: guardian, root: false).as_json
+      json =
+        TopicListItemSerializer.new(topic, scope: guardian, root: false).as_json
       expect(json[:babel_translated_title]).to eq("Titulo traducido")
     end
   end
 
   describe "preload hooks" do
     before do
-      Fabricate(:user_preferred_language, user: user, language: "es", enabled: true)
+      Fabricate(
+        :user_preferred_language,
+        user: user,
+        language: "es",
+        enabled: true
+      )
       topic.allowed_user_ids = [user.id]
       topic.update!(first_post: post_record)
     end
 
     it "does not preload when plugin is disabled" do
       SiteSetting.babel_reunited_enabled = false
-      translation = Fabricate(:post_translation, post: post_record, language: "es")
+      translation =
+        Fabricate(:post_translation, post: post_record, language: "es")
 
       topic_view = TopicView.new(topic.id, user)
 
@@ -352,7 +750,8 @@ RSpec.describe BabelReunited do
       BabelReunited::UserPreferredLanguage.where(user: user).destroy_all
       user.reload
 
-      translation = Fabricate(:post_translation, post: post_record, language: "es")
+      translation =
+        Fabricate(:post_translation, post: post_record, language: "es")
       topic_view = TopicView.new(topic.id, user)
 
       first_post = topic_view.topic.first_post
@@ -361,7 +760,8 @@ RSpec.describe BabelReunited do
     end
 
     it "preloads translations for topic view" do
-      translation = Fabricate(:post_translation, post: post_record, language: "es")
+      translation =
+        Fabricate(:post_translation, post: post_record, language: "es")
 
       topic_view = TopicView.new(topic.id, user)
 
@@ -371,7 +771,8 @@ RSpec.describe BabelReunited do
     end
 
     it "preloads translations for topic list" do
-      translation = Fabricate(:post_translation, post: post_record, language: "es")
+      translation =
+        Fabricate(:post_translation, post: post_record, language: "es")
       topic_list = TopicList.new("latest", user, [topic])
 
       topics = topic_list.topics
@@ -379,6 +780,31 @@ RSpec.describe BabelReunited do
       first_post = topics.first.first_post
       preloaded = BabelReunited.preloaded_post_translation(first_post, "es")
       expect(preloaded).to eq(translation)
+    end
+
+    it "preloads meta rows without translation bodies" do
+      Fabricate(:post_translation, post: post_record, language: "de")
+
+      topic_view = TopicView.new(topic.id, user)
+      preloaded =
+        BabelReunited.preloaded_all_translations(topic_view.posts.first)
+
+      expect(preloaded.length).to eq(1)
+      expect(preloaded.first.has_attribute?(:translated_content)).to be false
+      expect(preloaded.first.language).to eq("de")
+    end
+
+    it "preloads preferred-language bodies for every stream post" do
+      second_post = Fabricate(:post, topic: topic, user: user)
+      translation =
+        Fabricate(:post_translation, post: second_post, language: "es")
+
+      topic_view = TopicView.new(topic.id, user)
+      stream_post = topic_view.posts.find { |p| p.id == second_post.id }
+
+      expect(BabelReunited.preloaded_post_translation(stream_post, "es")).to eq(
+        translation
+      )
     end
   end
 
@@ -389,17 +815,23 @@ RSpec.describe BabelReunited do
     describe ".translation_enabled_for_category?" do
       it "returns true when setting is blank" do
         SiteSetting.babel_reunited_enabled_categories = ""
-        expect(BabelReunited.translation_enabled_for_category?(allowed_category.id)).to be true
+        expect(
+          BabelReunited.translation_enabled_for_category?(allowed_category.id)
+        ).to be true
       end
 
       it "returns true when category is in the whitelist" do
         SiteSetting.babel_reunited_enabled_categories = allowed_category.id.to_s
-        expect(BabelReunited.translation_enabled_for_category?(allowed_category.id)).to be true
+        expect(
+          BabelReunited.translation_enabled_for_category?(allowed_category.id)
+        ).to be true
       end
 
       it "returns false when category is not in the whitelist" do
         SiteSetting.babel_reunited_enabled_categories = allowed_category.id.to_s
-        expect(BabelReunited.translation_enabled_for_category?(blocked_category.id)).to be false
+        expect(
+          BabelReunited.translation_enabled_for_category?(blocked_category.id)
+        ).to be false
       end
 
       it "returns false when category_id is nil and whitelist is set" do
@@ -409,8 +841,9 @@ RSpec.describe BabelReunited do
     end
 
     describe "post_created event with category whitelist" do
-      it "does not enqueue jobs for non-whitelisted category" do
-        topic_in_blocked = Fabricate(:topic, user: user, category: blocked_category)
+      it "does not enqueue detection for non-whitelisted category" do
+        topic_in_blocked =
+          Fabricate(:topic, user: user, category: blocked_category)
         new_post = Fabricate(:post, topic: topic_in_blocked, user: user)
 
         SiteSetting.babel_reunited_enabled_categories = allowed_category.id.to_s
@@ -419,40 +852,39 @@ RSpec.describe BabelReunited do
 
         expect(
           job_enqueued?(
-            job: Jobs::BabelReunited::TranslatePostJob,
+            job: Jobs::BabelReunited::DetectPostLanguageJob,
             args: {
-              post_id: new_post.id,
-              target_language: "zh-cn",
-            },
-          ),
+              post_id: new_post.id
+            }
+          )
         ).to be false
       end
 
-      it "enqueues jobs for whitelisted category" do
-        topic_in_allowed = Fabricate(:topic, user: user, category: allowed_category)
+      it "enqueues detection for whitelisted category" do
+        topic_in_allowed =
+          Fabricate(:topic, user: user, category: allowed_category)
         new_post = Fabricate(:post, topic: topic_in_allowed, user: user)
 
         SiteSetting.babel_reunited_enabled_categories = allowed_category.id.to_s
 
         DiscourseEvent.trigger(:post_created, new_post)
 
-        %w[zh-cn en es].each do |lang|
-          expect(
-            job_enqueued?(
-              job: Jobs::BabelReunited::TranslatePostJob,
-              args: {
-                post_id: new_post.id,
-                target_language: lang,
-              },
-            ),
-          ).to be true
-        end
+        expect(
+          job_enqueued?(
+            job: Jobs::BabelReunited::DetectPostLanguageJob,
+            args: {
+              post_id: new_post.id,
+              then_fanout: true
+            }
+          )
+        ).to be true
       end
     end
 
     describe "post_edited event with category whitelist" do
       it "does not enqueue jobs for non-whitelisted category" do
-        topic_in_blocked = Fabricate(:topic, user: user, category: blocked_category)
+        topic_in_blocked =
+          Fabricate(:topic, user: user, category: blocked_category)
         blocked_post = Fabricate(:post, topic: topic_in_blocked, user: user)
 
         SiteSetting.babel_reunited_enabled_categories = allowed_category.id.to_s
@@ -465,9 +897,9 @@ RSpec.describe BabelReunited do
             job: Jobs::BabelReunited::TranslatePostJob,
             args: {
               post_id: blocked_post.id,
-              target_language: "zh-cn",
-            },
-          ),
+              target_language: "zh-cn"
+            }
+          )
         ).to be false
       end
     end
@@ -476,22 +908,26 @@ RSpec.describe BabelReunited do
       let(:guardian) { Guardian.new(user) }
 
       it "returns false for non-whitelisted category" do
-        topic_in_blocked = Fabricate(:topic, user: user, category: blocked_category)
+        topic_in_blocked =
+          Fabricate(:topic, user: user, category: blocked_category)
         blocked_post = Fabricate(:post, topic: topic_in_blocked, user: user)
 
         SiteSetting.babel_reunited_enabled_categories = allowed_category.id.to_s
 
-        json = PostSerializer.new(blocked_post, scope: guardian, root: false).as_json
+        json =
+          PostSerializer.new(blocked_post, scope: guardian, root: false).as_json
         expect(json[:show_translation_button]).to be false
       end
 
       it "returns true for whitelisted category" do
-        topic_in_allowed = Fabricate(:topic, user: user, category: allowed_category)
+        topic_in_allowed =
+          Fabricate(:topic, user: user, category: allowed_category)
         allowed_post = Fabricate(:post, topic: topic_in_allowed, user: user)
 
         SiteSetting.babel_reunited_enabled_categories = allowed_category.id.to_s
 
-        json = PostSerializer.new(allowed_post, scope: guardian, root: false).as_json
+        json =
+          PostSerializer.new(allowed_post, scope: guardian, root: false).as_json
         expect(json[:show_translation_button]).to be true
       end
     end
@@ -499,56 +935,150 @@ RSpec.describe BabelReunited do
     describe "babel_translated_title with category whitelist" do
       let(:guardian) { Guardian.new(user) }
 
-      before { Fabricate(:user_preferred_language, user: user, language: "es", enabled: true) }
+      before do
+        Fabricate(
+          :user_preferred_language,
+          user: user,
+          language: "es",
+          enabled: true
+        )
+      end
 
       it "returns nil for non-whitelisted category in topic_view" do
-        topic_in_blocked = Fabricate(:topic, user: user, category: blocked_category)
-        blocked_post = Fabricate(:post, topic: topic_in_blocked, user: user, post_number: 1)
+        topic_in_blocked =
+          Fabricate(:topic, user: user, category: blocked_category)
+        blocked_post =
+          Fabricate(:post, topic: topic_in_blocked, user: user, post_number: 1)
         topic_in_blocked.update!(first_post: blocked_post)
         Fabricate(
           :post_translation,
           post: blocked_post,
           language: "es",
           translated_title: "Titulo bloqueado",
-          status: "completed",
+          status: "completed"
         )
 
         SiteSetting.babel_reunited_enabled_categories = allowed_category.id.to_s
 
         topic_view = TopicView.new(topic_in_blocked.id, user)
-        json = TopicViewSerializer.new(topic_view, scope: guardian, root: false).as_json
+        json =
+          TopicViewSerializer.new(
+            topic_view,
+            scope: guardian,
+            root: false
+          ).as_json
         expect(json[:babel_translated_title]).to be_nil
       end
 
       it "returns nil for non-whitelisted category in topic_list_item" do
-        topic_in_blocked = Fabricate(:topic, user: user, category: blocked_category)
-        blocked_post = Fabricate(:post, topic: topic_in_blocked, user: user, post_number: 1)
+        topic_in_blocked =
+          Fabricate(:topic, user: user, category: blocked_category)
+        blocked_post =
+          Fabricate(:post, topic: topic_in_blocked, user: user, post_number: 1)
         topic_in_blocked.update!(first_post: blocked_post)
         Fabricate(
           :post_translation,
           post: blocked_post,
           language: "es",
           translated_title: "Titulo bloqueado",
-          status: "completed",
+          status: "completed"
         )
 
         SiteSetting.babel_reunited_enabled_categories = allowed_category.id.to_s
 
-        json = TopicListItemSerializer.new(topic_in_blocked, scope: guardian, root: false).as_json
+        json =
+          TopicListItemSerializer.new(
+            topic_in_blocked,
+            scope: guardian,
+            root: false
+          ).as_json
         expect(json[:babel_translated_title]).to be_nil
+      end
+    end
+
+    # The category setting scopes the whole feature: a post in an excluded
+    # category ships no translation payloads, matching the gated endpoints.
+    describe "post translation payloads with category whitelist" do
+      let(:guardian) { Guardian.new(user) }
+
+      it "ships no metadata, body, or detected locale for an excluded category" do
+        topic_in_blocked =
+          Fabricate(:topic, user: user, category: blocked_category)
+        blocked_post = Fabricate(:post, topic: topic_in_blocked, user: user)
+        Fabricate(
+          :post_translation,
+          post: blocked_post,
+          language: "es",
+          status: "completed"
+        )
+        BabelReunited.store_detected_locale(blocked_post, "en")
+        Fabricate(
+          :user_preferred_language,
+          user: user,
+          language: "es",
+          enabled: true
+        )
+
+        SiteSetting.babel_reunited_enabled_categories = allowed_category.id.to_s
+
+        json =
+          PostSerializer.new(blocked_post, scope: guardian, root: false).as_json
+        expect(json[:babel_translations_meta]).to be_nil
+        expect(json[:babel_preferred_translation]).to be_nil
+        expect(json[:babel_detected_locale]).to be_nil
       end
     end
   end
 
   describe "BabelReunited module methods" do
+    describe ".same_language?" do
+      it "matches identical codes" do
+        expect(BabelReunited.same_language?("es", "es")).to be true
+      end
+
+      it "collapses regional variants of the same base language" do
+        expect(BabelReunited.same_language?("en-us", "en")).to be true
+        expect(BabelReunited.same_language?("en-gb", "en-us")).to be true
+        expect(BabelReunited.same_language?("pt-pt", "pt")).to be true
+      end
+
+      it "never collapses Chinese variants (distinct scripts)" do
+        expect(BabelReunited.same_language?("zh-cn", "zh-tw")).to be false
+        expect(BabelReunited.same_language?("zh-cn", "zh-cn")).to be true
+      end
+
+      it "is case-insensitive" do
+        expect(BabelReunited.same_language?("EN-US", "en")).to be true
+      end
+
+      it "treats different languages as different" do
+        expect(BabelReunited.same_language?("es", "en")).to be false
+      end
+
+      it "returns false when either side is blank" do
+        expect(BabelReunited.same_language?(nil, "en")).to be false
+        expect(BabelReunited.same_language?("en", "")).to be false
+      end
+    end
+
     describe ".preferred_language_for" do
       it "returns language when user has enabled preference" do
-        Fabricate(:user_preferred_language, user: user, language: "es", enabled: true)
+        Fabricate(
+          :user_preferred_language,
+          user: user,
+          language: "es",
+          enabled: true
+        )
         expect(BabelReunited.preferred_language_for(user)).to eq("es")
       end
 
       it "returns nil when user has disabled preference" do
-        Fabricate(:user_preferred_language, user: user, language: "es", enabled: false)
+        Fabricate(
+          :user_preferred_language,
+          user: user,
+          language: "es",
+          enabled: false
+        )
         expect(BabelReunited.preferred_language_for(user)).to be_nil
       end
 
@@ -568,10 +1098,12 @@ RSpec.describe BabelReunited do
           post: post_record,
           language: "es",
           translated_title: "Titulo traducido",
-          status: "completed",
+          status: "completed"
         )
 
-        expect(BabelReunited.translated_title_for(post_record, "es")).to eq("Titulo traducido")
+        expect(BabelReunited.translated_title_for(post_record, "es")).to eq(
+          "Titulo traducido"
+        )
       end
 
       it "returns nil when translation is translating with no prior title" do
@@ -581,23 +1113,23 @@ RSpec.describe BabelReunited do
           language: "es",
           translated_title: "",
           translated_content: "",
-          status: "translating",
+          status: "translating"
         )
 
         expect(BabelReunited.translated_title_for(post_record, "es")).to be_nil
       end
 
-      it "returns prior title when re-translating (status=translating with old title)" do
+      it "returns nil when re-translating, even with an old title present" do
         Fabricate(
           :post_translation,
           post: post_record,
           language: "es",
           translated_title: "Titulo antiguo",
           translated_content: "<p>Old content</p>",
-          status: "translating",
+          status: "translating"
         )
 
-        expect(BabelReunited.translated_title_for(post_record, "es")).to eq("Titulo antiguo")
+        expect(BabelReunited.translated_title_for(post_record, "es")).to be_nil
       end
 
       it "returns nil for failed translations even if an old title is present" do
@@ -607,7 +1139,7 @@ RSpec.describe BabelReunited do
           language: "es",
           translated_title: "Titulo antiguo",
           translated_content: "<p>Old content</p>",
-          status: "failed",
+          status: "failed"
         )
 
         expect(BabelReunited.translated_title_for(post_record, "es")).to be_nil
@@ -619,6 +1151,123 @@ RSpec.describe BabelReunited do
 
       it "returns nil for blank language" do
         expect(BabelReunited.translated_title_for(post_record, nil)).to be_nil
+      end
+    end
+
+    describe ".trigger_retranslation" do
+      # The regression this guards: a failure verdict outliving the content
+      # that caused it. A post that failed as "content too long" and was then
+      # shortened could never be translated again, because auto_retryable?
+      # stayed false and every view trigger noop-ed on failed_not_retryable.
+      it "clears a permanent failure when the content changes" do
+        translation =
+          Fabricate(
+            :post_translation,
+            post: post_record,
+            language: "es",
+            status: "failed",
+            metadata: {
+              "error" => "Content too long",
+              "error_kind" => "permanent",
+              "failure_count" => 3,
+              "failed_at" => 1.minute.ago.iso8601
+            }
+          )
+        expect(translation.auto_retryable?).to be false
+
+        post_record.update_columns(raw: "Completely different, much shorter")
+        BabelReunited.trigger_retranslation(post_record)
+
+        expect(translation.reload.auto_retryable?).to be true
+      end
+
+      it "leaves a failure alone when only metadata changed" do
+        BabelReunited.store_detected_locale(post_record, "en")
+        translation =
+          Fabricate(
+            :post_translation,
+            post: post_record,
+            language: "es",
+            status: "failed",
+            source_sha:
+              Jobs::BabelReunited::TranslatePostJob.content_sha(post_record),
+            metadata: {
+              "error_kind" => "permanent",
+              "failure_count" => 1
+            }
+          )
+
+        BabelReunited.trigger_retranslation(post_record)
+
+        expect(translation.reload.metadata["error_kind"]).to eq("permanent")
+      end
+
+      # A verdict with no fingerprint predates the column and says nothing
+      # about what the post holds now. Granting it one fresh attempt is the
+      # safe direction: the alternative strands the language forever, and the
+      # retry stamps a fingerprint that makes the row behave from then on.
+      it "gives a verdict with no fingerprint a fresh attempt" do
+        BabelReunited.store_detected_locale(post_record, "en")
+        translation =
+          Fabricate(
+            :post_translation,
+            post: post_record,
+            language: "es",
+            status: "failed",
+            source_sha: nil,
+            metadata: {
+              "error_kind" => "permanent",
+              "failure_count" => 1
+            }
+          )
+
+        BabelReunited.trigger_retranslation(post_record)
+
+        # The verdict is gone, which is the whole point: the row is free to be
+        # attempted again (and here the fan-out claims it right away).
+        expect(translation.reload.metadata["error_kind"]).to be_nil
+      end
+    end
+
+    describe ".preload_detection_fields" do
+      it "answers both detection reads without going back to the post" do
+        BabelReunited.store_detected_locale(post_record, "en")
+        fresh = Post.find(post_record.id)
+
+        BabelReunited.preload_detection_fields([fresh])
+        fresh.expects(:custom_fields).never
+
+        expect(BabelReunited.detected_locale_for(fresh)).to eq("en")
+        expect(BabelReunited.detection_current?(fresh)).to be true
+      end
+
+      it "records a miss, so an undetected post does not fall back to a query" do
+        fresh = Post.find(post_record.id)
+
+        BabelReunited.preload_detection_fields([fresh])
+        fresh.expects(:custom_fields).never
+
+        expect(BabelReunited.detected_locale_for(fresh)).to be_nil
+      end
+
+      # Post.preload_custom_fields would install a proxy that raises
+      # NotPreloadedError for anything outside the preloaded list, turning an
+      # unrelated custom-field read on the same object into a 500.
+      it "leaves other custom fields readable" do
+        post_record.custom_fields["some_other_plugin_field"] = "value"
+        post_record.save_custom_fields
+        fresh = Post.find(post_record.id)
+
+        BabelReunited.preload_detection_fields([fresh])
+
+        expect(fresh.custom_fields["some_other_plugin_field"]).to eq("value")
+      end
+
+      it "tolerates an empty list" do
+        expect { BabelReunited.preload_detection_fields([]) }.not_to raise_error
+        expect {
+          BabelReunited.preload_detection_fields(nil)
+        }.not_to raise_error
       end
     end
   end

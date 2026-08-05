@@ -15,7 +15,9 @@ require "webmock/rspec"
 RSpec.describe BabelReunited::TranslationService do
   fab!(:user)
   fab!(:topic) { Fabricate(:topic, user: user) }
-  fab!(:post_record) { Fabricate(:post, topic: topic, user: user, post_number: 1) }
+  fab!(:post_record) do
+    Fabricate(:post, topic: topic, user: user, post_number: 1)
+  end
 
   # Both chunk sizes seen in production: Claude Sonnet 4.6 (16K max output)
   # and the GPT-4.1 family (32K max output).
@@ -51,8 +53,8 @@ RSpec.describe BabelReunited::TranslationService do
         base_url: "https://api.openai.com",
         api_key: "sk-test-key",
         max_tokens: 1_000_000,
-        max_output_tokens: chunk_size,
-      },
+        max_output_tokens: chunk_size
+      }
     )
   end
 
@@ -60,24 +62,31 @@ RSpec.describe BabelReunited::TranslationService do
   # echo of what the service asked the model to translate.
   def stub_llm_echo
     calls = 0
-    stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return do |request|
+    stub_request(
+      :post,
+      "https://api.openai.com/v1/chat/completions"
+    ).to_return do |request|
       calls += 1
-      prompt = JSON.parse(request.body)["messages"].first["content"]
+      msg =
+        JSON.parse(request.body)["messages"].find { |m| m["role"] == "user" }
+      echo =
+        msg["content"][
+          %r{\A<translation_source>\n?(.*?)\n?</translation_source>\z}m,
+          1
+        ] || msg["content"]
 
       {
         status: 200,
         body: {
-          choices: [
-            { message: { content: prompt.split("\n---\n", 2).last }, finish_reason: "stop" },
-          ],
+          choices: [{ message: { content: echo }, finish_reason: "stop" }],
           model: "gpt-4o",
           usage: {
-            total_tokens: 10,
-          },
+            total_tokens: 10
+          }
         }.to_json,
         headers: {
-          "Content-Type" => "application/json",
-        },
+          "Content-Type" => "application/json"
+        }
       }
     end
     -> { calls }
@@ -91,12 +100,16 @@ RSpec.describe BabelReunited::TranslationService do
         stub_config(chunk_size)
         call_counter = stub_llm_echo
 
-        result = described_class.new(post: post_record, target_language: "zh-cn").call
+        result =
+          described_class.new(post: post_record, target_language: "zh-cn").call
 
         expect(result.success?).to be true
         expect(result.translated_raw).to eq(raw)
         expect(call_counter.call).to eq(
-          BabelReunited::ContentSplitter.split(content: raw, chunk_size: chunk_size).size,
+          BabelReunited::ContentSplitter.split(
+            content: raw,
+            chunk_size: chunk_size
+          ).size
         )
       end
     end
@@ -104,14 +117,19 @@ RSpec.describe BabelReunited::TranslationService do
 
   it "keeps fixtures large enough to exercise multi-chunk translation" do
     fixtures.each do |name|
-      chunks = BabelReunited::ContentSplitter.split(content: read_fixture(name), chunk_size: 16_000)
+      chunks =
+        BabelReunited::ContentSplitter.split(
+          content: read_fixture(name),
+          chunk_size: 16_000
+        )
       expect(chunks.size).to be > 1
     end
   end
 
   it "splits the fixtures at a fenced code block" do
     raw = read_fixture("talk_10225_ickb_audit.md")
-    chunks = BabelReunited::ContentSplitter.split(content: raw, chunk_size: 16_000)
+    chunks =
+      BabelReunited::ContentSplitter.split(content: raw, chunk_size: 16_000)
 
     expect(chunks[0..-2]).to include(a_string_matching(/```\s*\z/))
   end

@@ -9,6 +9,10 @@ es:
     babel_reunited_enabled: "Habilitar el plugin Babel Reunited"
     babel_reunited_preset_model: "Seleccionar modelo predefinido"
     babel_reunited_auto_translate_languages: "Idiomas de traducción automática (códigos de idioma separados por comas)"
+    babel_reunited_view_triggered_translation: "Traducir automáticamente una publicación al idioma preferido del lector cuando la vea y aún no exista traducción"
+    babel_reunited_daily_translation_limit: "Cortacircuitos del sitio: máximo de solicitudes de traducción aceptadas por día entre todos los usuarios no staff (manuales y por visualización). 0 desactiva el límite."
+    babel_reunited_user_daily_translation_limit: "Cortacircuitos por usuario: máximo de solicitudes de traducción aceptadas por usuario y día (manuales y por visualización). 0 desactiva el límite."
+    babel_reunited_view_trigger_min_trust_level: "Nivel de confianza mínimo requerido para la traducción activada por visualización"
     
     babel_reunited_openai_api_key: "Clave API de OpenAI"
     babel_reunited_xai_api_key: "Clave API de xAI (Grok)"

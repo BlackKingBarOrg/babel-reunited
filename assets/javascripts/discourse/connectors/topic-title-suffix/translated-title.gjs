@@ -1,31 +1,63 @@
 import Component from "@glimmer/component";
+import { tracked } from "@glimmer/tracking";
+import { service } from "@ember/service";
 
 /**
- * Simple translated title component
- * Shows translated title if available, otherwise shows nothing
+ * Shows the translated topic title next to the original, if one exists.
+ *
+ * The serialized title is a snapshot: when the first post is translated while
+ * the topic is open, the body swaps in over MessageBus but the title would
+ * stay in the original language until a reload. Subscribing keeps the two in
+ * step.
  */
 export default class TranslatedTitleComponent extends Component {
+  @service currentUser;
+  @service messageBus;
+
+  @tracked liveTitle = null;
+
   constructor() {
     super(...arguments);
+
+    const topicId = this.topic?.id;
+    if (!topicId) {
+      return;
+    }
+
+    this._channel = `/babel-translated-title/${topicId}`;
+    this._onTitle = (data) => {
+      // Only the reader's own language may replace what they are looking at.
+      if (data?.language === this.currentUser?.preferred_language) {
+        this.liveTitle = data.translated_title;
+      }
+    };
+
+    this.messageBus?.subscribe(this._channel, this._onTitle);
+  }
+
+  willDestroy() {
+    super.willDestroy(...arguments);
+    if (this._channel) {
+      this.messageBus?.unsubscribe(this._channel, this._onTitle);
+    }
   }
 
   get topic() {
-    const topic = this.args.model || this.args.topic;
-    return topic;
+    return this.args.model || this.args.topic;
   }
 
   get translatedTitle() {
-    const translatedTitle = this.topic?.babel_translated_title;
-    return translatedTitle;
+    return this.liveTitle ?? this.topic?.babel_translated_title;
   }
 
   get shouldShowTranslatedTitle() {
-    const shouldShow =
+    const translated = this.translatedTitle;
+    return !!(
       this.topic &&
-      this.translatedTitle &&
-      this.translatedTitle !== this.topic.title &&
-      this.translatedTitle.length > 0;
-    return shouldShow;
+      translated &&
+      translated !== this.topic.title &&
+      translated.length > 0
+    );
   }
 
   get topicUrl() {
