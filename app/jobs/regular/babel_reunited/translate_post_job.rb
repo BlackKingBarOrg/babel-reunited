@@ -269,6 +269,41 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
     ).merge(extra)
   end
 
+  # Stores a finished translation, re-creating the row if it went away while
+  # the provider was running.
+  #
+  # That happens on two paths. Staff can delete a translation outright at any
+  # time, and the job holds its record across a call that takes tens of
+  # seconds. The view lane also deletes a claim it could not turn into work —
+  # a fuse rejection or a failed enqueue — and a job started by the manual
+  # lane may be holding that same row.
+  #
+  # Neither is caught by writing through the record we loaded: ActiveRecord
+  # reports success for an UPDATE that matched no row, so the translation we
+  # already paid for would be dropped without a trace. Writing through a
+  # fresh lookup puts it back instead.
+  def write_result!(post, target_language, attrs)
+    record =
+      ::BabelReunited::PostTranslation.find_or_initialize_by(
+        post_id: post.id,
+        language: target_language
+      )
+    record.assign_attributes(attrs)
+    record.save!
+    record
+  rescue ActiveRecord::RecordNotUnique, ActiveRecord::RecordInvalid
+    # Re-created between the lookup and the insert; that row is as good as
+    # this one, so write into it.
+    record =
+      ::BabelReunited::PostTranslation.find_translation(
+        post.id,
+        target_language
+      )
+    raise if record.nil?
+    record.update!(attrs)
+    record
+  end
+
   def ensure_translation_record(post, target_language)
     translation =
       BabelReunited::PostTranslation.find_translation(post.id, target_language)
@@ -316,24 +351,28 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
     final_status =
       self.class.content_sha(post) == source_sha ? "completed" : "stale"
 
-    translation.update!(
-      status: final_status,
-      translated_raw: result.translated_raw,
-      translated_content: translated_cooked,
-      translated_title: translated_title,
-      source_language:
-        BabelReunited.current_detected_locale_for(post) ||
-          result.source_language,
-      source_sha: source_sha,
-      metadata:
-        success_metadata(
-          translation,
-          confidence: result.ai_response[:confidence],
-          provider_info: result.ai_response[:provider_info],
-          translated_at: Time.current,
-          completed_at: Time.current
-        )
-    )
+    translation =
+      write_result!(
+        post,
+        target_language,
+        status: final_status,
+        translated_raw: result.translated_raw,
+        translated_content: translated_cooked,
+        translated_title: translated_title,
+        translation_provider: translation.translation_provider,
+        source_language:
+          BabelReunited.current_detected_locale_for(post) ||
+            result.source_language,
+        source_sha: source_sha,
+        metadata:
+          success_metadata(
+            translation,
+            confidence: result.ai_response[:confidence],
+            provider_info: result.ai_response[:provider_info],
+            translated_at: Time.current,
+            completed_at: Time.current
+          )
+      )
 
     BabelReunited.clear_banner_cache_for(post)
 

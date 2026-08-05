@@ -433,6 +433,97 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
       expect(translation.auto_retryable?).to be false
     end
 
+    # The regression this guards: ActiveRecord reports success for an UPDATE
+    # that matched no row, so a translation whose record went away while the
+    # provider ran was dropped without a trace -- after it had been paid for.
+    it "keeps a finished translation whose row was deleted while the provider ran" do
+      translation =
+        BabelReunited::PostTranslation.create_or_update_record(
+          post_record.id,
+          "es"
+        )
+      doomed_id = translation.id
+
+      job_result = success_result
+      fake = Object.new
+      fake.define_singleton_method(:call) do
+        # Staff deleting the translation, or the view lane releasing a claim
+        # it could not turn into work.
+        BabelReunited::PostTranslation.where(id: doomed_id).delete_all
+        job_result
+      end
+      BabelReunited::TranslationService.stubs(:new).returns(fake)
+
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+
+      stored =
+        BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      expect(stored).to be_present
+      expect(stored.status).to eq("completed")
+      expect(stored.translated_content).to include("Hola mundo")
+    end
+
+    it "survives the view lane releasing the claim it is working on" do
+      BabelReunited::PostTranslation.claim_new(post_record.id, "es")
+
+      job_result = success_result
+      target_post_id = post_record.id
+      fake = Object.new
+      fake.define_singleton_method(:call) do
+        BabelReunited::PostTranslation.release_claim(target_post_id, "es", nil)
+        job_result
+      end
+      BabelReunited::TranslationService.stubs(:new).returns(fake)
+
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+
+      stored =
+        BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      expect(stored).to be_present
+      expect(stored.translated_content).to include("Hola mundo")
+    end
+
+    it "writes into a row re-created while the provider ran" do
+      translation =
+        BabelReunited::PostTranslation.create_or_update_record(
+          post_record.id,
+          "es"
+        )
+      doomed_id = translation.id
+      target_post_id = post_record.id
+
+      job_result = success_result
+      fake = Object.new
+      fake.define_singleton_method(:call) do
+        BabelReunited::PostTranslation.where(id: doomed_id).delete_all
+        BabelReunited::PostTranslation.create_or_update_record(
+          target_post_id,
+          "es"
+        )
+        job_result
+      end
+      BabelReunited::TranslationService.stubs(:new).returns(fake)
+
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+
+      rows =
+        BabelReunited::PostTranslation.where(
+          post_id: post_record.id,
+          language: "es"
+        )
+      expect(rows.count).to eq(1)
+      expect(rows.first.translated_content).to include("Hola mundo")
+    end
+
     it "does not push a withheld body to open pages" do
       job_result = success_result
       fake = Object.new
