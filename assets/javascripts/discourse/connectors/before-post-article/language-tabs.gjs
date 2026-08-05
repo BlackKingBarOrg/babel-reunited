@@ -142,9 +142,12 @@ export default class LanguageTabsConnector extends Component {
         const state = this.states[languageCode];
         if (!state || !this.isDisplayableStatus(state.status)) {
           // No readable content yet: show the translating hint and switch
-          // once the completion arrives.
+          // once the completion arrives — unless the reader made or
+          // requested a different choice while this response was in flight.
           this.mergeState(languageCode, { status: "translating" });
-          this._pendingLanguage = languageCode;
+          if (this.currentLanguage === "original" && !this._pendingLanguage) {
+            this._pendingLanguage = languageCode;
+          }
         }
         // Stale content stays on screen; the refresh swaps in silently.
       }

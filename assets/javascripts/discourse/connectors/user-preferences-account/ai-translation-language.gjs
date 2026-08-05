@@ -159,6 +159,7 @@ export default class AiTranslationLanguage extends Component {
               @groupInstant={{true}}
               @showHints={{true}}
               @onSelect={{this.changeLanguage}}
+              @disabled={{this.saving}}
             />
           </div>
         </div>

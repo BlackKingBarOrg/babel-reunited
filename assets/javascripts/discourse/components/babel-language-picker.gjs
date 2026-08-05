@@ -156,6 +156,9 @@ export default class BabelLanguagePicker extends Component {
 
   @action
   select(code) {
+    if (this.args.disabled) {
+      return;
+    }
     // Picking the entry tagged as the source language is the one deliberate
     // way to ask for a same-language translation (when detection got it
     // wrong), so the caller is told which entry this was.
@@ -193,6 +196,7 @@ export default class BabelLanguagePicker extends Component {
                 "babel-language-picker__item --translated"
                 (if (eq entry.code @selectedCode) "--selected")
               }}
+              disabled={{@disabled}}
               {{on "click" (fn this.select entry.code)}}
             >
               {{icon "check"}}
@@ -217,6 +221,7 @@ export default class BabelLanguagePicker extends Component {
                 "babel-language-picker__item"
                 (if (eq entry.code @selectedCode) "--selected")
               }}
+              disabled={{@disabled}}
               {{on "click" (fn this.select entry.code)}}
             >
               <span class="babel-language-picker__name">{{entry.name}}</span>
@@ -242,6 +247,7 @@ export default class BabelLanguagePicker extends Component {
                 "babel-language-picker__item"
                 (if (eq entry.code @selectedCode) "--selected")
               }}
+              disabled={{@disabled}}
               {{on "click" (fn this.select entry.code)}}
             >
               <span class="babel-language-picker__name">{{entry.name}}</span>

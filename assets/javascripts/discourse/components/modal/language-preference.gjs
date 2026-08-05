@@ -87,6 +87,7 @@ export default class LanguagePreferenceModal extends Component {
           @groupInstant={{true}}
           @showHints={{true}}
           @onSelect={{this.selectLanguage}}
+          @disabled={{this.saving}}
         />
 
         <div class="disable-section">

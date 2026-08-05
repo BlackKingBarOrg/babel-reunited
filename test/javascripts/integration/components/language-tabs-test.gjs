@@ -840,6 +840,79 @@ module(
       assert.verifySteps([], "no second request for the same pair");
     });
 
+    test("a late view-trigger response does not steal the reader's own choice", async function (assert) {
+      this.siteSettings.babel_reunited_view_triggered_translation = true;
+      this.siteSettings.babel_reunited_auto_translate_languages = "ja";
+      const currentUser = getOwner(this).lookup("service:current-user");
+      currentUser.set("preferred_language", "th");
+      currentUser.set("preferred_language_enabled", true);
+
+      let resolveViewTrigger;
+      this.set("post", createPost({ babel_translations_meta: [] }));
+      pretender.post(
+        `/babel-reunited/posts/${this.post.id}/translations`,
+        (request) => {
+          const body = new URLSearchParams(request.requestBody);
+          if (body.get("trigger") === "view") {
+            return new Promise((resolve) => (resolveViewTrigger = resolve));
+          }
+          return response({ status: "queued" });
+        }
+      );
+
+      // Deliberately not awaited: the view trigger fires during render's
+      // settling and its POST is the request this test holds in flight, so
+      // awaiting render (or any settling helper) would deadlock. Raw timers
+      // and DOM clicks below for the same reason.
+      const rendered = render(
+        <template>
+          <LanguageTabsConnector @post={{this.post}}>
+            <div class="cooked">{{trustHTML this.post.cooked}}</div>
+          </LanguageTabsConnector>
+        </template>
+      );
+
+      // Wait until the automatic view trigger has fired.
+      for (let i = 0; i < 100 && !resolveViewTrigger; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+
+      // The reader picks Japanese through its fixed tab (original, th, ja).
+      document.querySelector(".ai-language-tabs button:nth-child(3)").click();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // The abandoned view-trigger response lands late.
+      resolveViewTrigger(response({ status: "queued" }));
+      await rendered;
+      await settled();
+
+      // The preferred language finishing first must not hijack the view...
+      await publishToMessageBus(`/post-translations/${this.post.id}`, {
+        status: "completed",
+        language: "th",
+        translation: {
+          language: "th",
+          status: "completed",
+          translated_content: "<p>คำแปลภาษาไทย</p>",
+        },
+      });
+      assert
+        .dom(".cooked")
+        .hasText("Original cooked content", "th completion does not switch");
+
+      // ...while the language the reader actually asked for still does.
+      await publishToMessageBus(`/post-translations/${this.post.id}`, {
+        status: "completed",
+        language: "ja",
+        translation: {
+          language: "ja",
+          status: "completed",
+          translated_content: "<p>日本語訳</p>",
+        },
+      });
+      assert.dom(".cooked").hasText("日本語訳", "the reader's choice wins");
+    });
+
     test("on-demand translation auto-switches on MessageBus completion", async function (assert) {
       this.set("post", createPost());
       pretender.post(

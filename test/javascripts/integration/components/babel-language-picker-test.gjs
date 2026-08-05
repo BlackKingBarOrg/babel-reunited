@@ -1,4 +1,4 @@
-import { render } from "@ember/test-helpers";
+import { click, render, settled } from "@ember/test-helpers";
 import { module, test } from "qunit";
 import { setupRenderingTest } from "discourse/tests/helpers/component-test";
 import BabelLanguagePicker from "discourse/plugins/babel-reunited/discourse/components/babel-language-picker";
@@ -116,6 +116,46 @@ module(
       );
 
       assert.strictEqual(listEl().scrollTop, 0);
+    });
+
+    test("selects a language when enabled", async function (assert) {
+      const picked = [];
+      this.set("onSelect", (code) => picked.push(code));
+
+      await render(
+        <template>
+          <BabelLanguagePicker @onSelect={{this.onSelect}} />
+        </template>
+      );
+
+      await click(".babel-language-picker__item");
+      assert.strictEqual(picked.length, 1);
+    });
+
+    // While a save is in flight the picker is handed @disabled; a click then
+    // must neither look clickable nor reach onSelect (a second selection
+    // racing the first save is how a preference gets silently overwritten).
+    test("ignores selection while disabled", async function (assert) {
+      const picked = [];
+      this.set("onSelect", (code) => picked.push(code));
+
+      await render(
+        <template>
+          <BabelLanguagePicker @disabled={{true}} @onSelect={{this.onSelect}} />
+        </template>
+      );
+
+      const item = document.querySelector(".babel-language-picker__item");
+      assert.true(item.disabled, "items render as disabled buttons");
+
+      // A programmatic dispatch bypasses the browser's disabled handling, so
+      // this exercises the action-level guard as well.
+      item.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, cancelable: true })
+      );
+      await settled();
+
+      assert.strictEqual(picked.length, 0);
     });
   }
 );
