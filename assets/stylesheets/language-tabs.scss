@@ -92,6 +92,7 @@
     flex-direction: column;
     max-height: 40vh;
     overflow-y: auto;
+
     // Makes this the offsetParent of the rows, so opening the list on the
     // current selection is a plain offsetTop read rather than viewport
     // geometry, which any enclosing transform would distort. See
