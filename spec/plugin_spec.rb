@@ -170,6 +170,32 @@ RSpec.describe BabelReunited do
       expect(translation.reload.status).to eq("completed")
     end
 
+    # Failure verdicts are judged by the same fingerprint as completed rows,
+    # or a verdict rendered against an old title outlives the title.
+    it "clears a failure verdict on a title-only edit" do
+      failed =
+        Fabricate(
+          :post_translation,
+          post: post_record,
+          language: "de",
+          status: "failed",
+          source_sha:
+            Jobs::BabelReunited::TranslatePostJob.content_sha(post_record),
+          metadata: {
+            "error" => "Content too long",
+            "error_kind" => "permanent"
+          }
+        )
+
+      post_record.topic.update_columns(title: "A much shorter title")
+      revisor = OpenStruct.new(topic_diff: {})
+      DiscourseEvent.trigger(:post_edited, post_record.reload, false, revisor)
+
+      failed.reload
+      expect(failed.metadata["error_kind"]).to be_nil
+      expect(failed.auto_retryable?).to be true
+    end
+
     # The fingerprint includes the topic title for the first post, so a
     # title-only edit outdates lazy rows even though the raw is unchanged.
     it "marks lazy rows stale on a title-only edit" do
@@ -1163,6 +1189,8 @@ RSpec.describe BabelReunited do
             post: post_record,
             language: "es",
             status: "failed",
+            source_sha:
+              Jobs::BabelReunited::TranslatePostJob.content_sha(post_record),
             metadata: {
               "error_kind" => "permanent",
               "failure_count" => 1
@@ -1172,6 +1200,32 @@ RSpec.describe BabelReunited do
         BabelReunited.trigger_retranslation(post_record)
 
         expect(translation.reload.metadata["error_kind"]).to eq("permanent")
+      end
+
+      # A verdict with no fingerprint predates the column and says nothing
+      # about what the post holds now. Granting it one fresh attempt is the
+      # safe direction: the alternative strands the language forever, and the
+      # retry stamps a fingerprint that makes the row behave from then on.
+      it "gives a verdict with no fingerprint a fresh attempt" do
+        BabelReunited.store_detected_locale(post_record, "en")
+        translation =
+          Fabricate(
+            :post_translation,
+            post: post_record,
+            language: "es",
+            status: "failed",
+            source_sha: nil,
+            metadata: {
+              "error_kind" => "permanent",
+              "failure_count" => 1
+            }
+          )
+
+        BabelReunited.trigger_retranslation(post_record)
+
+        # The verdict is gone, which is the whole point: the row is free to be
+        # attempted again (and here the fan-out claims it right away).
+        expect(translation.reload.metadata["error_kind"]).to be_nil
       end
     end
 

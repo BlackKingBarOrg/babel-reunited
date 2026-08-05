@@ -498,8 +498,11 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
       return
     end
 
+    # Recording which content the verdict was rendered against is what lets
+    # the next edit decide whether it still applies.
     translation.update!(
       status: "failed",
+      source_sha: source_sha,
       metadata:
         failure_metadata(translation, result.error, kind: result.error_kind)
     )

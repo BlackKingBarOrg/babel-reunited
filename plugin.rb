@@ -407,12 +407,16 @@ module ::BabelReunited
     # permanently — "content too long", say — can never run again even after
     # the author shortens the post: auto_retryable? stays false forever and
     # every view trigger noops on failed_not_retryable.
-    if content_changed
-      post
-        .post_translations
-        .where(status: "failed")
-        .find_each(&:clear_failure_metadata!)
-    end
+    #
+    # Judged by the same fingerprint as completed rows, so a title-only edit
+    # clears the verdict too and a metadata-only edit leaves it standing.
+    # Legacy rows with no fingerprint count as outdated: a fresh attempt is
+    # the safe direction for a failure.
+    post
+      .post_translations
+      .where(status: "failed")
+      .where("source_sha IS DISTINCT FROM ?", current_sha)
+      .find_each(&:clear_failure_metadata!)
 
     # Dispatching work, unlike invalidation, ships content to a third-party
     # provider: deleted, hidden, and disabled-category posts stop here.
