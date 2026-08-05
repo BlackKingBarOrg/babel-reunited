@@ -76,6 +76,38 @@ RSpec.describe BabelReunited::Locales do
       )
     end
 
+    # The client decides whether to fire a view trigger and whether to offer a
+    # language at all; if its rule drifts from the server's, a reader pays for
+    # a translation the server then refuses to show.
+    it "agrees with the client-side mirror on language equivalence" do
+      js = File.read(js_mirror_path)
+      body = js[/export function sameLanguage\(a, b\) \{(.*?)\n\}/m, 1]
+      expect(body).to be_present
+
+      cases = [
+        %w[en-us en],
+        %w[en-gb en-us],
+        %w[pt-br pt],
+        %w[zh-cn zh-tw],
+        %w[zh-cn zh-cn],
+        %w[es en]
+      ]
+      cases.each do |a, b|
+        expect(BabelReunited.same_language?(a, b)).to eq(
+          js_same_language?(body, a, b)
+        ),
+        "#{a} vs #{b} disagrees between Ruby and JS"
+      end
+    end
+
+    # Evaluates the mirrored rule rather than restating it, so a change to one
+    # side without the other fails here.
+    def js_same_language?(body, a, b)
+      result =
+        `node -e 'function sameLanguage(a, b) {#{body}\n}; process.stdout.write(String(sameLanguage(#{a.inspect}, #{b.inspect})))'`
+      result == "true"
+    end
+
     def js_mirror_path
       File.expand_path(
         "../../../assets/javascripts/discourse/lib/babel-locales.js",

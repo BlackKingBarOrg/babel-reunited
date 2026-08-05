@@ -90,7 +90,10 @@ module BabelReunited
       # self-translation. Correcting a wrong detection is staff work, and
       # force_update (already staff-only above) is that escape hatch.
       unless force_update
-        if BabelReunited.current_detected_locale_for(@post) == target_language
+        if BabelReunited.same_language?(
+             BabelReunited.current_detected_locale_for(@post),
+             target_language
+           )
           return(
             render json: {
                      status: "noop",
@@ -276,7 +279,10 @@ module BabelReunited
         return render_view_noop("trust_level")
       end
 
-      if BabelReunited.current_detected_locale_for(@post) == target_language
+      if BabelReunited.same_language?(
+           BabelReunited.current_detected_locale_for(@post),
+           target_language
+         )
         return render_view_noop("source_language")
       end
 

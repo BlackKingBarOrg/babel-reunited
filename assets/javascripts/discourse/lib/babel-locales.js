@@ -157,3 +157,28 @@ const PLACE_VARIANTS = new Set([
 export const SELECTABLE_LOCALES = SUPPORTED_LOCALES.filter(
   (code) => !PLACE_VARIANTS.has(code)
 );
+
+// Mirrors BabelReunited.same_language? — a backend spec asserts the two agree.
+// Regional variants translate to the same text, so a reader whose legacy
+// preference is pt-br must not be offered (and charged for) a translation of a
+// post already written in pt. Chinese variants are distinct scripts and never
+// collapse.
+export function sameLanguage(a, b) {
+  if (!a || !b) {
+    return false;
+  }
+
+  a = a.toLowerCase();
+  b = b.toLowerCase();
+  if (a === b) {
+    return true;
+  }
+
+  const primaryA = a.split("-")[0];
+  const primaryB = b.split("-")[0];
+  if (primaryA === "zh" || primaryB === "zh") {
+    return false;
+  }
+
+  return primaryA === primaryB;
+}

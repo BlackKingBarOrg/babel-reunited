@@ -15,6 +15,7 @@ import { popupAjaxError } from "discourse/lib/ajax-error";
 import { eq } from "discourse/truth-helpers";
 import { i18n } from "discourse-i18n";
 import BabelLanguagePicker from "../../components/babel-language-picker";
+import { sameLanguage } from "../../lib/babel-locales";
 import { languageEndonym } from "../../lib/language-display-name";
 import { getSupportedLanguages } from "../../lib/supported-languages";
 import BabelViewDwell from "../../modifiers/babel-view-dwell";
@@ -108,7 +109,7 @@ export default class LanguageTabsConnector extends Component {
     if (!preferred) {
       return;
     }
-    if (this.post?.babel_detected_locale === preferred) {
+    if (sameLanguage(this.post?.babel_detected_locale, preferred)) {
       return;
     }
 
@@ -281,11 +282,11 @@ export default class LanguageTabsConnector extends Component {
     }
 
     this._detectedLocale = locale;
-    if (this.currentLanguage === locale) {
+    if (sameLanguage(this.currentLanguage, locale)) {
       // Whatever was on screen for that language is the post's own content.
       this.currentLanguage = "original";
     }
-    if (this._pendingLanguage === locale) {
+    if (sameLanguage(this._pendingLanguage, locale)) {
       this._pendingLanguage = null;
     }
   }
@@ -303,7 +304,7 @@ export default class LanguageTabsConnector extends Component {
   // language, in which case the original tab covers it.
   get preferredCode() {
     const code = this.currentUser?.preferred_language;
-    if (!code || code === this.detectedLocale) {
+    if (!code || sameLanguage(code, this.detectedLocale)) {
       return null;
     }
     return code;
@@ -320,7 +321,7 @@ export default class LanguageTabsConnector extends Component {
       codes.push(this.preferredCode);
     }
     for (const code of this.instantCodes) {
-      if (code !== this.detectedLocale && !codes.includes(code)) {
+      if (!sameLanguage(code, this.detectedLocale) && !codes.includes(code)) {
         codes.push(code);
       }
     }

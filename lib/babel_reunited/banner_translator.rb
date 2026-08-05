@@ -30,7 +30,7 @@ module BabelReunited
         # translation (a post is never translated into its own language), fall
         # through to the site default, and be shown English instead of the
         # Chinese they asked for.
-        return nil if language == detected
+        return nil if BabelReunited.same_language?(language, detected)
 
         # displayable_translation_for already applies the display guard, so
         # anything that reaches here is a translation of the post's current

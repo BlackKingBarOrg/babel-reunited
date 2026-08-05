@@ -12,7 +12,7 @@ import concatClass from "discourse/helpers/concat-class";
 import icon from "discourse/helpers/d-icon";
 import { eq } from "discourse/truth-helpers";
 import { i18n } from "discourse-i18n";
-import { SELECTABLE_LOCALES } from "../lib/babel-locales";
+import { sameLanguage, SELECTABLE_LOCALES } from "../lib/babel-locales";
 import {
   languageDisplayName,
   languageEndonym,
@@ -61,9 +61,10 @@ export default class BabelLanguagePicker extends Component {
           sortKey: localized,
         };
 
-        if (code === this.args.sourceCode) {
-          // The post's own language stays selectable so readers can override
-          // a wrong detection; a right one just translates to itself once.
+        if (sameLanguage(code, this.args.sourceCode)) {
+          // Tagged rather than hidden, so a reader looking for their own
+          // language finds it and learns the post is already written in it.
+          // Selecting it shows the original.
           entry.hint = i18n(
             "babel_reunited.language_tabs.source_language_hint"
           );
@@ -159,10 +160,10 @@ export default class BabelLanguagePicker extends Component {
     if (this.args.disabled) {
       return;
     }
-    // Picking the entry tagged as the source language is the one deliberate
-    // way to ask for a same-language translation (when detection got it
-    // wrong), so the caller is told which entry this was.
-    this.args.onSelect?.(code, code === this.args.sourceCode);
+    // The caller is told when this was the source-language entry: asking for
+    // the language the post is already written in means "show me the
+    // original", not "translate the post into itself".
+    this.args.onSelect?.(code, sameLanguage(code, this.args.sourceCode));
   }
 
   <template>

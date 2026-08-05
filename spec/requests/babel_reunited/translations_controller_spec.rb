@@ -862,6 +862,51 @@ RSpec.describe BabelReunited::TranslationsController do
     end
   end
 
+  # A legacy regional preference must not buy a translation the reader will
+  # never be shown: the serializer treats pt-br and pt as one language, so the
+  # request entry points have to agree or the reader pays for an invisible row.
+  describe "regional variants at the request entry points" do
+    before do
+      sign_in(user)
+      BabelReunited.store_detected_locale(post_record, "pt")
+    end
+
+    it "refuses a manual request for a regional variant of the post's language" do
+      post "/babel-reunited/posts/#{post_record.id}/translations.json",
+           params: {
+             target_language: "pt-br"
+           }
+
+      expect(response.status).to eq(200)
+      expect(response.parsed_body["status"]).to eq("noop")
+      expect(response.parsed_body["reason"]).to eq("source_language")
+      expect(Jobs::BabelReunited::TranslatePostJob.jobs).to be_empty
+    end
+
+    it "refuses a view-triggered request for one too" do
+      SiteSetting.babel_reunited_view_triggered_translation = true
+
+      post "/babel-reunited/posts/#{post_record.id}/translations.json",
+           params: {
+             target_language: "pt-br",
+             trigger: "view"
+           }
+
+      expect(response.status).to eq(200)
+      expect(response.parsed_body["reason"]).to eq("source_language")
+      expect(Jobs::BabelReunited::TranslatePostJob.jobs).to be_empty
+    end
+
+    it "still accepts a genuinely different language" do
+      post "/babel-reunited/posts/#{post_record.id}/translations.json",
+           params: {
+             target_language: "es"
+           }
+
+      expect(response.parsed_body["status"]).to eq("queued")
+    end
+  end
+
   # A translation into the post's own language is legacy data or the product
   # of a wrong detection, and it is the shape answer-mode output took. No
   # reader path may surface it — the read endpoints included.

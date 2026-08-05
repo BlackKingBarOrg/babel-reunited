@@ -748,6 +748,70 @@ module(
         .hasText("Original cooked content", "newer choice wins");
     });
 
+    // A legacy pt-br preference on a pt post: the serializer treats them as
+    // one language and would hide the result, so the client must not offer
+    // the tab or fire the automatic request that pays for it.
+    test("a regional variant of the post's language gets no tab and no request", async function (assert) {
+      this.siteSettings.babel_reunited_view_triggered_translation = true;
+      const currentUser = getOwner(this).lookup("service:current-user");
+      currentUser.set("preferred_language", "pt-br");
+      currentUser.set("preferred_language_enabled", true);
+
+      this.set(
+        "post",
+        createPost({
+          babel_detected_locale: "pt",
+          babel_translations_meta: [],
+        })
+      );
+      pretender.post(
+        `/babel-reunited/posts/${this.post.id}/translations`,
+        () => {
+          assert.step("POST called");
+          return response({ status: "queued" });
+        }
+      );
+
+      await render(
+        <template>
+          <LanguageTabsConnector @post={{this.post}}>
+            <div class="cooked">{{trustHTML this.post.cooked}}</div>
+          </LanguageTabsConnector>
+        </template>
+      );
+      await waitForViewTrigger();
+
+      assert.verifySteps([], "no paid request for the post's own language");
+      assert
+        .dom(".ai-language-tabs button")
+        .exists({ count: 2 }, "only original and the overflow menu");
+    });
+
+    // Chinese variants are different scripts, not different places.
+    test("a Chinese script variant still gets its own tab", async function (assert) {
+      const currentUser = getOwner(this).lookup("service:current-user");
+      currentUser.set("preferred_language", "zh-tw");
+      currentUser.set("preferred_language_enabled", true);
+
+      this.set(
+        "post",
+        createPost({
+          babel_detected_locale: "zh-cn",
+          babel_translations_meta: [],
+        })
+      );
+
+      await render(
+        <template>
+          <LanguageTabsConnector @post={{this.post}}>
+            <div class="cooked">{{trustHTML this.post.cooked}}</div>
+          </LanguageTabsConnector>
+        </template>
+      );
+
+      assert.dom(".ai-language-tabs button").exists({ count: 3 });
+    });
+
     test("preferred tab is hidden when the post is already in that language", async function (assert) {
       const currentUser = getOwner(this).lookup("service:current-user");
       currentUser.set("preferred_language", "en");
