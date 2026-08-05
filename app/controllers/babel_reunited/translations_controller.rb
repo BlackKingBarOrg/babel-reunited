@@ -158,6 +158,9 @@ module BabelReunited
       end
 
       translation.destroy!
+      # A job may be holding this row across a provider call; without the
+      # tombstone it would write the finished translation right back.
+      BabelReunited.tombstone_translation!(@post.id, translation.language)
       # Deleting a bad translation is the escape hatch for a bad banner, so it
       # has to reach the banner cache too.
       BabelReunited.clear_banner_cache_for(@post)

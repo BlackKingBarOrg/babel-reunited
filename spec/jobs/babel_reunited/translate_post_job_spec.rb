@@ -466,6 +466,44 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
       expect(stored.translated_content).to include("Hola mundo")
     end
 
+    # The counterpart of the write-back above: when the deletion was a
+    # person's deliberate choice, the destroy endpoint stamps a tombstone and
+    # the paid-for result is discarded instead of resurrected.
+    it "drops the result when the row was deliberately deleted mid-flight" do
+      translation =
+        BabelReunited::PostTranslation.create_or_update_record(
+          post_record.id,
+          "es"
+        )
+      doomed_id = translation.id
+      target_post_id = post_record.id
+
+      job_result = success_result
+      fake = Object.new
+      fake.define_singleton_method(:call) do
+        BabelReunited::PostTranslation.where(id: doomed_id).delete_all
+        BabelReunited.tombstone_translation!(target_post_id, "es")
+        job_result
+      end
+      BabelReunited::TranslationService.stubs(:new).returns(fake)
+
+      ::BabelReunited::TranslationLogger.expects(:log_translation_skipped).with(
+        has_entries(
+          post_id: post_record.id,
+          reason: "deleted_while_translating"
+        )
+      )
+
+      described_class.new.execute(
+        post_id: post_record.id,
+        target_language: "es"
+      )
+
+      expect(
+        BabelReunited::PostTranslation.find_translation(post_record.id, "es")
+      ).to be_nil
+    end
+
     it "survives the view lane releasing the claim it is working on" do
       BabelReunited::PostTranslation.claim_new(post_record.id, "es")
 

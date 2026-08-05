@@ -834,6 +834,18 @@ RSpec.describe BabelReunited::TranslationsController do
       delete "/babel-reunited/posts/#{post_record.id}/translations/fr.json"
       expect(response.status).to eq(404)
     end
+
+    # A job may be holding the row across a provider call; the tombstone is
+    # what stops it from writing the finished translation right back.
+    it "stamps a tombstone so an in-flight job cannot resurrect the row" do
+      Fabricate(:post_translation, post: post_record, language: "es")
+
+      delete "/babel-reunited/posts/#{post_record.id}/translations/es.json"
+      expect(response.status).to eq(200)
+      expect(
+        BabelReunited.translation_tombstoned?(post_record.id, "es")
+      ).to be true
+    end
   end
 
   describe "GET /babel-reunited/user-preferred-language" do

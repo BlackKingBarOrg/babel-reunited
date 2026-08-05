@@ -283,6 +283,11 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
   # already paid for would be dropped without a trace. Writing through a
   # fresh lookup puts it back instead.
   def write_result!(post, target_language, attrs)
+    if BabelReunited.translation_tombstoned?(post.id, target_language)
+      log_skipped(post.id, target_language, "deleted_while_translating")
+      return nil
+    end
+
     record =
       ::BabelReunited::PostTranslation.find_or_initialize_by(
         post_id: post.id,
@@ -373,6 +378,8 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
             completed_at: Time.current
           )
       )
+
+    return if translation.nil? # deleted while the provider ran; deletion wins
 
     BabelReunited.clear_banner_cache_for(post)
 

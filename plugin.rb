@@ -53,6 +53,27 @@ module ::BabelReunited
     translation_enabled_for_category?(post.topic&.category_id)
   end
 
+  # A deliberate deletion must win over a translation job that is still
+  # holding the row across a provider call (write_result! re-creates rows
+  # that vanish mid-flight, which is correct for the view lane's mechanical
+  # claim cleanup but must not resurrect content a person chose to remove).
+  # The tombstone outlives the longest possible in-flight job.
+  def self.tombstone_translation!(post_id, language)
+    Discourse.redis.setex(
+      translation_tombstone_key(post_id, language),
+      max_translation_runtime.to_i,
+      "1"
+    )
+  end
+
+  def self.translation_tombstoned?(post_id, language)
+    Discourse.redis.exists?(translation_tombstone_key(post_id, language))
+  end
+
+  def self.translation_tombstone_key(post_id, language)
+    "babel_reunited:deleted:#{post_id}:#{language}"
+  end
+
   # Regional variants (en-us, pt-pt) translate identically to their base
   # language, so treating them as different languages would re-open
   # self-translation for readers with legacy regional preferences. Chinese
