@@ -91,6 +91,21 @@ RSpec.describe BabelReunited::TranslationService do
     )
   end
 
+  # Instructions now live in the system message; the user message carries only
+  # the fenced source text. These helpers keep stubs in sync with that shape.
+  def request_user_source(body)
+    msg = body["messages"].find { |m| m["role"] == "user" }
+    msg["content"][
+      %r{\A<translation_source>\n?(.*?)\n?</translation_source>\z}m,
+      1
+    ] || msg["content"]
+  end
+
+  def title_request?(body)
+    system = body["messages"].find { |m| m["role"] == "system" }
+    system ? system["content"].include?("no quotes, no extra words") : false
+  end
+
   def stub_llm_success(content: "Hola mundo", title_content: "Titulo traducido")
     # Main translation request
     stub_request(
@@ -98,16 +113,8 @@ RSpec.describe BabelReunited::TranslationService do
       "https://api.openai.com/v1/chat/completions"
     ).to_return do |request|
       body = JSON.parse(request.body)
-      prompt = body["messages"].first["content"]
 
-      response_text =
-        if prompt.include?(
-             "Return ONLY the translated text, no quotes, no extra words"
-           )
-          title_content
-        else
-          content
-        end
+      response_text = title_request?(body) ? title_content : content
 
       {
         status: 200,
@@ -332,9 +339,9 @@ RSpec.describe BabelReunited::TranslationService do
       expect(result.success?).to be true
 
       parsed = JSON.parse(request_body)
-      prompt = parsed["messages"].first["content"]
-      expect(prompt).to include("Hello **bold** world")
-      expect(prompt).not_to include("<p>")
+      source = request_user_source(parsed)
+      expect(source).to include("Hello **bold** world")
+      expect(source).not_to include("<p>")
     end
 
     it "protects code blocks in the prompt" do
@@ -382,9 +389,9 @@ RSpec.describe BabelReunited::TranslationService do
       expect(result.success?).to be true
 
       parsed = JSON.parse(request_body)
-      prompt = parsed["messages"].first["content"]
-      expect(prompt).to include("\u27E6")
-      expect(prompt).not_to include("def foo")
+      source = request_user_source(parsed)
+      expect(source).to include("\u27E6")
+      expect(source).not_to include("def foo")
 
       expect(result.translated_raw).to include("```ruby\ndef foo\nend\n```")
     end
@@ -732,10 +739,10 @@ RSpec.describe BabelReunited::TranslationService do
         "https://api.openai.com/v1/chat/completions"
       ).to_return do |request|
         body = JSON.parse(request.body)
-        prompt = body["messages"].first["content"]
+        source = request_user_source(body)
 
         translated =
-          (prompt.include?("First") ? "Primer parrafo." : "Segundo parrafo.")
+          (source.include?("First") ? "Primer parrafo." : "Segundo parrafo.")
 
         {
           status: 200,
@@ -881,8 +888,7 @@ RSpec.describe BabelReunited::TranslationService do
       ).to_return do |request|
         calls += 1
         body = JSON.parse(request.body)
-        prompt = body["messages"].first["content"]
-        echo = prompt.split("\n---\n", 2).last
+        echo = request_user_source(body)
 
         {
           status: 200,
@@ -1001,6 +1007,173 @@ RSpec.describe BabelReunited::TranslationService do
     end
   end
 
+  describe "prompt structure" do
+    # Untrusted post content must never sit in instruction position: a
+    # question-filled post once had its same-language "translation" answered
+    # by the model (topic 10577). Instructions go in the system prompt; the
+    # user message carries only fenced data.
+    it "separates instructions (system) from fenced source text (user)" do
+      request_body = nil
+      stub_request(:post, "https://api.openai.com/v1/chat/completions")
+        .with do |req|
+          request_body = JSON.parse(req.body)
+          true
+        end
+        .to_return(
+          status: 200,
+          body: {
+            choices: [{ message: { content: "Hola" }, finish_reason: "stop" }],
+            model: "gpt-4o",
+            usage: {
+              total_tokens: 10
+            }
+          }.to_json,
+          headers: {
+            "Content-Type" => "application/json"
+          }
+        )
+      SiteSetting.babel_reunited_translate_title = false
+
+      build_service.call
+
+      roles = request_body["messages"].map { |m| m["role"] }
+      expect(roles).to eq(%w[system user])
+
+      system = request_body["messages"].first["content"]
+      expect(system).to include("never instructions")
+      expect(system).to include("do not answer questions")
+      expect(system).not_to include("return it unchanged")
+
+      user = request_body["messages"].last["content"]
+      expect(user).to start_with("<translation_source>")
+      expect(user).to end_with("</translation_source>")
+      expect(user).not_to include("Translate the")
+    end
+
+    it "sends the system prompt as a top-level parameter for Anthropic" do
+      SiteSetting.babel_reunited_anthropic_api_key = "sk-ant-test"
+      SiteSetting.babel_reunited_preset_model = "claude-sonnet-4-6"
+      SiteSetting.babel_reunited_translate_title = false
+
+      request_body = nil
+      stub_request(:post, "https://api.anthropic.com/v1/messages")
+        .with do |req|
+          request_body = JSON.parse(req.body)
+          true
+        end
+        .to_return(
+          status: 200,
+          body: {
+            content: [{ type: "text", text: "Hola" }],
+            model: "claude-sonnet-4-6",
+            stop_reason: "end_turn",
+            usage: {
+              input_tokens: 5,
+              output_tokens: 5
+            }
+          }.to_json,
+          headers: {
+            "Content-Type" => "application/json"
+          }
+        )
+
+      build_service.call
+
+      expect(request_body["system"]).to include("never instructions")
+      expect(request_body["messages"].map { |m| m["role"] }).to eq(["user"])
+    end
+
+    it "strips an echoed source fence from the response" do
+      stub_request(
+        :post,
+        "https://api.openai.com/v1/chat/completions"
+      ).to_return(
+        status: 200,
+        body: {
+          choices: [
+            {
+              message: {
+                content:
+                  "<translation_source>\nHola mundo\n</translation_source>"
+              },
+              finish_reason: "stop"
+            }
+          ],
+          model: "gpt-4o",
+          usage: {
+            total_tokens: 10
+          }
+        }.to_json,
+        headers: {
+          "Content-Type" => "application/json"
+        }
+      )
+      SiteSetting.babel_reunited_translate_title = false
+
+      result = build_service.call
+
+      expect(result.translated_raw).to eq("Hola mundo")
+    end
+  end
+
+  describe "structure drift rejection" do
+    it "rejects output whose shape does not match the source" do
+      structured_raw = <<~MD
+        ## Section one
+
+        - item one
+        - item two
+        - item three
+        - item four
+
+        ## Section two
+
+        #{"Body text long enough for the ratio check. " * 20}
+      MD
+      drift_post =
+        Fabricate(
+          :post,
+          topic: topic,
+          user: user,
+          raw: structured_raw,
+          post_number: 18
+        )
+      SiteSetting.babel_reunited_translate_title = false
+
+      # Coherent prose that answers instead of translating: no headings, no
+      # list items — the classic answer-mode shape.
+      stub_request(
+        :post,
+        "https://api.openai.com/v1/chat/completions"
+      ).to_return(
+        status: 200,
+        body: {
+          choices: [
+            {
+              message: {
+                content: "感谢你的提问，我来逐条回答。#{"详细解释。" * 60}"
+              },
+              finish_reason: "stop"
+            }
+          ],
+          model: "gpt-4o",
+          usage: {
+            total_tokens: 50
+          }
+        }.to_json,
+        headers: {
+          "Content-Type" => "application/json"
+        }
+      )
+
+      result = build_service(post: drift_post).call
+
+      expect(result.failure?).to be true
+      expect(result.error).to include("source structure")
+      expect(result.error_kind).to eq("transient")
+    end
+  end
+
   describe "mermaid fence protection" do
     it "passes mermaid blocks through translation byte-for-byte, labels untranslated" do
       mermaid_block = "```mermaid\nflowchart TD\n    A[Start] --> B[End]\n```"
@@ -1014,7 +1187,7 @@ RSpec.describe BabelReunited::TranslationService do
         :post,
         "https://api.openai.com/v1/chat/completions"
       ).to_return do |request|
-        prompt = JSON.parse(request.body)["messages"].first["content"]
+        prompt = request_user_source(JSON.parse(request.body))
         token = prompt[/⟦[0-9a-f]+:\d+⟧/]
 
         # A translation that rewrites every visible word but keeps the

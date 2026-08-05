@@ -497,6 +497,36 @@ RSpec.describe BabelReunited do
       expect(json).not_to have_key(:babel_preferred_translation)
     end
 
+    # Same-language records are legacy artifacts (fanout skips the detected
+    # locale now) and can be LLM answer-mode output, so no reader path may
+    # surface them — not the language menu, not the preferred-language body.
+    it "hides same-language translations from babel_translations_meta" do
+      BabelReunited.store_detected_locale(post_record, "zh-cn")
+      Fabricate(:post_translation, post: post_record, language: "zh-cn")
+      Fabricate(:post_translation, post: post_record, language: "es")
+
+      json = serialize_post(post_record.reload)
+
+      expect(
+        json[:babel_translations_meta].map { |t| t[:language] }
+      ).to contain_exactly("es")
+    end
+
+    it "never serves a same-language body as the preferred translation" do
+      BabelReunited.store_detected_locale(post_record, "zh-cn")
+      Fabricate(
+        :user_preferred_language,
+        user: user,
+        language: "zh-cn",
+        enabled: true
+      )
+      Fabricate(:post_translation, post: post_record, language: "zh-cn")
+
+      json = serialize_post(post_record.reload)
+
+      expect(json[:babel_preferred_translation]).to be_nil
+    end
+
     it "includes babel_detected_locale when detected" do
       BabelReunited.store_detected_locale(post_record, "en")
       json = serialize_post(post_record.reload)

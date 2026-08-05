@@ -96,7 +96,11 @@ module ::BabelReunited
 
   # Every path that hands a translation body to a reader goes through here,
   # so a stale translation of content that has since been cut never escapes.
+  # Same-language records are legacy data (fanout no longer creates them) and
+  # can be LLM answer-mode artifacts, so they never reach a reader either.
   def self.displayable_translation_for(post, language)
+    return nil if language == current_detected_locale_for(post)
+
     translation = stream_translation_for(post, language)
     return nil if translation.blank?
     return nil unless translation.safe_to_display?
@@ -429,6 +433,7 @@ after_initialize do
   require_relative "lib/babel_reunited/translated_cooked_post_processor"
   require_relative "lib/babel_reunited/translated_cooker"
   require_relative "lib/babel_reunited/translation_recooker"
+  require_relative "lib/babel_reunited/translation_structure"
   require_relative "app/lib/babel_reunited/providers/base"
   require_relative "app/lib/babel_reunited/providers/open_ai_compatible"
   require_relative "app/lib/babel_reunited/providers/anthropic"
@@ -479,6 +484,9 @@ after_initialize do
           .select(:id, :post_id, :language, :status, :source_language)
           .to_a
     rows = rows.select(&:safe_to_display?)
+    # Legacy same-language records must not surface as switchable languages
+    detected = BabelReunited.current_detected_locale_for(object)
+    rows = rows.reject { |t| t.language == detected } if detected
     rows.map do |t|
       {
         language: t.language,

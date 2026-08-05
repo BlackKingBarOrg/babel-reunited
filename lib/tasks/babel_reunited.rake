@@ -169,6 +169,44 @@ namespace :babel_reunited do
     end
   end
 
+  desc "Scan completed translations whose structure drifted from the source (read-only)"
+  task scan_translation_anomalies: :environment do
+    unless SiteSetting.babel_reunited_enabled
+      puts "ERROR: Babel Reunited plugin is not enabled"
+      exit 1
+    end
+
+    limit = ENV["LIMIT"]&.to_i
+    scanned = 0
+    flagged = 0
+
+    scope = BabelReunited::PostTranslation.recookable.order(:id)
+    if ENV["TARGET_LANGUAGE"].present?
+      scope = scope.where(language: ENV["TARGET_LANGUAGE"])
+    end
+
+    scope.find_each(batch_size: 200) do |t|
+      break if limit && scanned >= limit
+      post = Post.find_by(id: t.post_id)
+      next if post.nil? || post.raw.blank?
+
+      scanned += 1
+      reasons =
+        BabelReunited::TranslationStructure.drift(post.raw, t.translated_raw)
+      next if reasons.empty?
+
+      flagged += 1
+      puts "translation #{t.id} post #{t.post_id} topic #{post.topic_id} " \
+             "#{t.language}: #{reasons.join(", ")}"
+    end
+
+    puts ""
+    puts "Scanned: #{scanned}, flagged: #{flagged}"
+    if flagged > 0
+      puts "Review flagged records, then re-translate (force_update) or delete them."
+    end
+  end
+
   desc "Recook completed translations from stored translated_raw (no LLM calls)"
   task recook_translations: :environment do
     unless SiteSetting.babel_reunited_enabled

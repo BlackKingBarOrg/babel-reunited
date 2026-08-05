@@ -22,9 +22,11 @@ module BabelReunited
         messages:,
         max_tokens:,
         token_param:,
-        supports_temperature:
+        supports_temperature:,
+        system: nil
       )
         body = { model: model, messages: messages, max_tokens: max_tokens }
+        body[:system] = system if system.present?
         body[:temperature] = 0.3 if supports_temperature != false
         body
       end

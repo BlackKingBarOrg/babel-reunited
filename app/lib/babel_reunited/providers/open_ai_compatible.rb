@@ -19,8 +19,12 @@ module BabelReunited
         messages:,
         max_tokens:,
         token_param:,
-        supports_temperature:
+        supports_temperature:,
+        system: nil
       )
+        if system.present?
+          messages = [{ role: "system", content: system }] + messages
+        end
         body = {
           :model => model,
           :messages => messages,
