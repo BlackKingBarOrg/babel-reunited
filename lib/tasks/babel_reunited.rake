@@ -314,73 +314,115 @@ namespace :babel_reunited do
       ).to_i
     per_minute = 1 if per_minute < 1
 
-    post_ids = BabelReunited::PostTranslation.distinct.pluck(:post_id)
+    # The schedule cursor lives in Redis, not in this process: LIMIT batches
+    # and concurrent runs would otherwise each start counting slots from zero
+    # and stack their jobs into the same minutes, which is the very thing the
+    # pacing exists to prevent.
+    cursor_key = "babel_reunited:backfill_cursor"
+
+    # A subquery rather than a plucked id list, so nothing is materialized
+    # whole and BATCH_SIZE really does bound what is in memory.
+    scope = Post.where(id: BabelReunited::PostTranslation.select(:post_id))
+    total = scope.count
 
     queued = 0
     deduplicated = 0
     already = 0
     ineligible = 0
+    undetectable = 0
     samples = []
+    truncated = false
 
-    post_ids.each_slice(batch_size) do |slice|
-      # includes(:topic): the eligibility check reads the post's category
-      # through its topic, which would be one query per post otherwise.
-      posts = Post.where(id: slice).includes(:topic).to_a
-      Post.preload_custom_fields(
-        posts,
-        [
-          BabelReunited::DETECTED_LOCALE_FIELD,
-          BabelReunited::DETECTED_SHA_FIELD
-        ]
-      )
+    # includes(:topic): the eligibility check reads the post's category
+    # through its topic, which would be one query per post otherwise.
+    scope
+      .includes(:topic)
+      .find_in_batches(batch_size: batch_size) do |posts|
+        Post.preload_custom_fields(
+          posts,
+          [
+            BabelReunited::DETECTED_LOCALE_FIELD,
+            BabelReunited::DETECTED_SHA_FIELD
+          ]
+        )
 
-      posts.each do |post|
-        break if limit && queued >= limit
+        posts.each do |post|
+          if limit && queued >= limit
+            truncated = true
+            break
+          end
 
-        if BabelReunited.detection_current?(post)
-          already += 1
-          next
+          if BabelReunited.detection_current?(post)
+            already += 1
+            next
+          end
+
+          # Deleted, hidden and disabled-category posts are refused by the job
+          # itself; counting them here keeps the reported total honest.
+          unless BabelReunited.translatable_post?(post)
+            ineligible += 1
+            next
+          end
+
+          # A post with nothing but a code block or a link fails detection the
+          # same way on every attempt. Counting it here is what lets this task
+          # ever report itself finished.
+          unless BabelReunited::LanguageDetectionService.new(
+                   post: post
+                 ).detectable?
+            undetectable += 1
+            next
+          end
+
+          if samples.size < 10
+            samples << "  Post ID: #{post.id}, Topic ID: #{post.topic_id}"
+          end
+
+          if dry_run
+            queued += 1
+            next
+          end
+
+          position = Discourse.redis.incr(cursor_key) - 1
+          delay = (position / per_minute) * 60
+          # Outlive the schedule it is pacing, or a later run would restart
+          # from zero while these jobs are still pending.
+          Discourse.redis.expire(cursor_key, delay + 3600)
+
+          if BabelReunited.enqueue_detection_backfill(post, delay: delay)
+            queued += 1
+          else
+            # Already queued by an earlier run: hand the slot back rather than
+            # leaving a hole in the schedule.
+            Discourse.redis.decr(cursor_key)
+            deduplicated += 1
+          end
         end
 
-        # Deleted, hidden and disabled-category posts are refused by the job
-        # itself; counting them here keeps the reported total honest.
-        unless BabelReunited.translatable_post?(post)
-          ineligible += 1
-          next
-        end
-
-        if samples.size < 10
-          samples << "  Post ID: #{post.id}, Topic ID: #{post.topic_id}"
-        end
-
-        if dry_run
-          queued += 1
-          next
-        end
-
-        # Paced by how many have actually been accepted, so a run that hits
-        # dedup does not leave gaps in the schedule.
-        delay = (queued / per_minute) * 60
-        if BabelReunited.enqueue_detection_backfill(post, delay: delay)
-          queued += 1
-        else
-          deduplicated += 1
-        end
+        break if truncated
       end
 
-      break if limit && queued >= limit
-    end
+    # Outstanding is what the operator actually needs: a post whose job is
+    # scheduled but has not run yet still has no detected locale, so counting
+    # it as done would send them to cleanup too early -- the same silent
+    # failure the pacing above exists to prevent.
+    outstanding = queued + deduplicated
 
-    puts "Posts with translations: #{post_ids.size}"
+    puts "Posts with translations: #{total}"
     puts "  already detected against current content: #{already}"
     puts "  not eligible (deleted, hidden, disabled category): #{ineligible}"
-    puts "  needing detection: #{queued}"
-    if deduplicated > 0
-      puts "  already queued by an earlier run: #{deduplicated}"
+    puts "  too short to ever detect: #{undetectable}"
+    puts "  still needing detection: #{outstanding}"
+    if !dry_run && outstanding > 0
+      puts "    newly queued by this run: #{queued}"
+      puts "    already queued by an earlier run: #{deduplicated}"
     end
+    puts "  (stopped early at LIMIT, counts above are partial)" if truncated
 
-    if queued == 0
-      puts "Nothing to do"
+    if outstanding == 0
+      puts ""
+      puts "Nothing left to detect."
+      puts "cleanup_same_language_copies can run now." unless truncated
       next
     end
 
@@ -401,10 +443,10 @@ namespace :babel_reunited do
       puts "Enqueued #{queued} detection job(s), spread over ~#{minutes} " \
              "minute(s) at #{per_minute}/minute."
       puts ""
-      puts "Do NOT run cleanup_same_language_copies until this has finished."
+      puts "Do NOT run cleanup_same_language_copies yet."
       puts "An empty Sidekiq queue is not the signal: a job that fails leaves " \
-             "it empty too."
-      puts "Re-run this task and wait until it reports 'needing detection: 0'."
+             "it empty too, and jobs scheduled for later are not in it at all."
+      puts "Re-run this task and wait until 'still needing detection' reaches 0."
     end
   end
 

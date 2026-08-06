@@ -43,11 +43,21 @@ module BabelReunited
       @post = post
     end
 
+    # Whether this post carries enough natural language for detection to have
+    # any chance. Public because a bulk caller needs to tell "not tried yet"
+    # apart from "will never succeed": a post that is only a code block or a
+    # link fails identically on every attempt, and re-queueing it forever
+    # would keep a backfill from ever reporting itself finished.
+    def detectable?
+      return false if @post.blank?
+
+      sample.gsub(/\s+/, "").length >= MIN_SAMPLE_LENGTH
+    end
+
     def call
       return Result.new(error: "Post not found") if @post.blank?
 
-      sample = build_sample
-      if sample.gsub(/\s+/, "").length < MIN_SAMPLE_LENGTH
+      unless detectable?
         return Result.new(error: "Content too short for detection")
       end
 
@@ -89,6 +99,10 @@ module BabelReunited
     end
 
     private
+
+    def sample
+      @sample ||= build_sample
+    end
 
     def build_sample
       # Code blocks carry no language signal and can contain secrets that

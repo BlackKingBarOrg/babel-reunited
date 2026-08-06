@@ -108,7 +108,11 @@ RSpec.describe "babel_reunited:backfill_detected_locales" do
     expect(delays.max - delays.min).to be >= 100
   end
 
-  it "reports what an earlier run already queued instead of counting it again" do
+  # A job that is scheduled but has not run yet has produced no locale, so a
+  # re-run must still count that post as outstanding. Reporting it as done is
+  # how an operator ends up running cleanup against posts that were never
+  # detected -- the same silent failure the pacing exists to prevent.
+  it "still counts a post whose job is only queued as needing detection" do
     ENV["DRY_RUN"] = "false"
     Fabricate(:post_translation, post: post_record, language: "es")
 
@@ -117,9 +121,56 @@ RSpec.describe "babel_reunited:backfill_detected_locales" do
 
     task.reenable
     expect { task.invoke }.to output(
-      /needing detection: 0.*already queued by an earlier run: 1/m
+      /still needing detection: 1.*newly queued by this run: 0.*already queued by an earlier run: 1/m
     ).to_stdout
     expect(Jobs::BabelReunited::DetectPostLanguageJob.jobs.size).to eq(1)
+  end
+
+  it "reports nothing left once detection has actually landed" do
+    ENV["DRY_RUN"] = "false"
+    Fabricate(:post_translation, post: post_record, language: "es")
+    BabelReunited.store_detected_locale(post_record, "en")
+
+    expect { task.invoke }.to output(
+      /still needing detection: 0.*Nothing left to detect/m
+    ).to_stdout
+  end
+
+  # Only a code block: every attempt fails identically, so counting it as
+  # outstanding would keep the runbook from ever reaching zero.
+  it "counts content that can never be detected as such, not as outstanding" do
+    ENV["DRY_RUN"] = "false"
+    post_record.update!(raw: "[code]\nx=1\n[/code]")
+    Fabricate(:post_translation, post: post_record, language: "es")
+
+    expect { task.invoke }.to output(
+      /too short to ever detect: 1.*still needing detection: 0/m
+    ).to_stdout
+    expect(Jobs::BabelReunited::DetectPostLanguageJob.jobs).to be_empty
+  end
+
+  # Two LIMIT batches must not both start their schedule at minute zero, or
+  # the second lands on top of the first and doubles the rate.
+  it "keeps pacing across separate runs" do
+    ENV["DRY_RUN"] = "false"
+    ENV["PER_MINUTE"] = "1"
+    ENV["LIMIT"] = "1"
+
+    first = Fabricate(:post, topic: topic, user: user)
+    second = Fabricate(:post, topic: topic, user: user)
+    [first, second].each do |p|
+      Fabricate(:post_translation, post: p, language: "es")
+    end
+
+    task.invoke
+    task.reenable
+    task.invoke
+
+    delays =
+      Jobs::BabelReunited::DetectPostLanguageJob.jobs.map { |j| j["at"].to_i }
+    expect(delays.size).to eq(2)
+    expect(delays.uniq.size).to eq(2),
+    "the second run reused the first run's slot"
   end
 
   it "honors LIMIT so a first pass can be sized" do
