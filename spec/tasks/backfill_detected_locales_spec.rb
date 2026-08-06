@@ -18,6 +18,7 @@ RSpec.describe "babel_reunited:backfill_detected_locales" do
   after do
     ENV.delete("DRY_RUN")
     ENV.delete("LIMIT")
+    ENV.delete("PER_MINUTE")
   end
 
   it "defaults to a dry run that enqueues nothing" do
@@ -82,6 +83,43 @@ RSpec.describe "babel_reunited:backfill_detected_locales" do
 
     expect { task.invoke }.to output(/not eligible.*: 1/).to_stdout
     expect(Jobs::BabelReunited::DetectPostLanguageJob.jobs).to be_empty
+  end
+
+  # Detection shares one per-minute allowance with translation and the job
+  # retries three times over about three minutes. Enqueued all at once, most
+  # jobs burn those retries waiting for a slot and then die without a trace,
+  # leaving the cleanup that follows just as blind as before.
+  it "spreads the jobs out instead of dumping them into one minute" do
+    ENV["DRY_RUN"] = "false"
+    ENV["PER_MINUTE"] = "2"
+
+    posts = 5.times.map { Fabricate(:post, topic: topic, user: user) }
+    posts.each { |p| Fabricate(:post_translation, post: p, language: "es") }
+
+    task.invoke
+
+    delays =
+      Jobs::BabelReunited::DetectPostLanguageJob
+        .jobs
+        .map { |j| j["at"].to_i }
+        .sort
+    # Five jobs at two per minute: three distinct scheduling slots.
+    expect(delays.uniq.size).to be >= 3
+    expect(delays.max - delays.min).to be >= 100
+  end
+
+  it "reports what an earlier run already queued instead of counting it again" do
+    ENV["DRY_RUN"] = "false"
+    Fabricate(:post_translation, post: post_record, language: "es")
+
+    task.invoke
+    expect(Jobs::BabelReunited::DetectPostLanguageJob.jobs.size).to eq(1)
+
+    task.reenable
+    expect { task.invoke }.to output(
+      /needing detection: 0.*already queued by an earlier run: 1/m
+    ).to_stdout
+    expect(Jobs::BabelReunited::DetectPostLanguageJob.jobs.size).to eq(1)
   end
 
   it "honors LIMIT so a first pass can be sized" do

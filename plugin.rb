@@ -330,13 +330,28 @@ module ::BabelReunited
 
   # Lazy convergence for posts created before detection existed. Deduplicated
   # via Redis so a burst of translate jobs enqueues one detection, not N.
-  def self.enqueue_detection_backfill(post)
-    return if post.blank?
+  # Returns whether this call is the one that queued the job, so a caller
+  # counting work has something truthful to count.
+  def self.enqueue_detection_backfill(post, delay: nil)
+    return false if post.blank?
 
+    delay = delay.to_i
     key = "babel_reunited:detect_enqueued:#{post.id}"
-    return unless Discourse.redis.set(key, "1", nx: true, ex: 600)
+    # The dedup window has to outlive the delay, or a bulk run scheduling work
+    # minutes ahead would let a second run queue the same post again before
+    # the first job has even started.
+    return false unless Discourse.redis.set(key, "1", nx: true, ex: delay + 600)
 
-    Jobs.enqueue(Jobs::BabelReunited::DetectPostLanguageJob, post_id: post.id)
+    if delay > 0
+      Jobs.enqueue_in(
+        delay,
+        Jobs::BabelReunited::DetectPostLanguageJob,
+        post_id: post.id
+      )
+    else
+      Jobs.enqueue(Jobs::BabelReunited::DetectPostLanguageJob, post_id: post.id)
+    end
+    true
   end
 
   # Enqueues pre-translate layer jobs, skipping the post's own language when

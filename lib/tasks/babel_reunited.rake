@@ -298,16 +298,34 @@ namespace :babel_reunited do
     # pre-existing translations that cleanup would be a near no-op until this
     # backfill has run. Detection only: the job fans out translations solely
     # when asked to, and asking here would start thousands of them.
+    # Detection shares one per-minute allowance with translation, and the job
+    # only retries three times with a short backoff. Dumping thousands of jobs
+    # in at once means most of them burn those retries waiting for a slot and
+    # then die -- silently, because the exhaustion handler only acts when a
+    # fan-out was requested. The queue drains, the detection never happened,
+    # and cleanup afterwards still skips those posts.
+    #
+    # So the jobs are spread instead: PER_MINUTE of them per minute, defaulting
+    # to half the allowance so ordinary translation traffic still gets through.
+    per_minute =
+      (
+        ENV["PER_MINUTE"] ||
+          SiteSetting.babel_reunited_rate_limit_per_minute / 2
+      ).to_i
+    per_minute = 1 if per_minute < 1
+
     post_ids = BabelReunited::PostTranslation.distinct.pluck(:post_id)
 
-    considered = 0
-    enqueued = 0
+    queued = 0
+    deduplicated = 0
     already = 0
     ineligible = 0
     samples = []
 
     post_ids.each_slice(batch_size) do |slice|
-      posts = Post.where(id: slice).to_a
+      # includes(:topic): the eligibility check reads the post's category
+      # through its topic, which would be one query per post otherwise.
+      posts = Post.where(id: slice).includes(:topic).to_a
       Post.preload_custom_fields(
         posts,
         [
@@ -317,8 +335,7 @@ namespace :babel_reunited do
       )
 
       posts.each do |post|
-        break if limit && enqueued >= limit
-        considered += 1
+        break if limit && queued >= limit
 
         if BabelReunited.detection_current?(post)
           already += 1
@@ -336,37 +353,58 @@ namespace :babel_reunited do
           samples << "  Post ID: #{post.id}, Topic ID: #{post.topic_id}"
         end
 
-        enqueued += 1
-        BabelReunited.enqueue_detection_backfill(post) unless dry_run
+        if dry_run
+          queued += 1
+          next
+        end
+
+        # Paced by how many have actually been accepted, so a run that hits
+        # dedup does not leave gaps in the schedule.
+        delay = (queued / per_minute) * 60
+        if BabelReunited.enqueue_detection_backfill(post, delay: delay)
+          queued += 1
+        else
+          deduplicated += 1
+        end
       end
 
-      break if limit && enqueued >= limit
+      break if limit && queued >= limit
     end
 
     puts "Posts with translations: #{post_ids.size}"
     puts "  already detected against current content: #{already}"
     puts "  not eligible (deleted, hidden, disabled category): #{ineligible}"
-    puts "  needing detection: #{enqueued}"
+    puts "  needing detection: #{queued}"
+    if deduplicated > 0
+      puts "  already queued by an earlier run: #{deduplicated}"
+    end
 
-    if enqueued == 0
+    if queued == 0
       puts "Nothing to do"
       next
     end
+
+    minutes = (queued.to_f / per_minute).ceil
 
     if dry_run
       puts ""
       puts "DRY RUN mode - no detection jobs were enqueued"
       puts "Use DRY_RUN=false to enqueue them"
       puts ""
+      puts "Would spread them over ~#{minutes} minute(s) at #{per_minute}/minute"
+      puts ""
       puts "Sample posts:"
       samples.each { |line| puts line }
-      if enqueued > samples.size
-        puts "  ... and #{enqueued - samples.size} more"
-      end
+      puts "  ... and #{queued - samples.size} more" if queued > samples.size
     else
       puts ""
-      puts "Enqueued #{enqueued} detection job(s)."
-      puts "Wait for the queue to drain before running cleanup_same_language_copies."
+      puts "Enqueued #{queued} detection job(s), spread over ~#{minutes} " \
+             "minute(s) at #{per_minute}/minute."
+      puts ""
+      puts "Do NOT run cleanup_same_language_copies until this has finished."
+      puts "An empty Sidekiq queue is not the signal: a job that fails leaves " \
+             "it empty too."
+      puts "Re-run this task and wait until it reports 'needing detection: 0'."
     end
   end
 
