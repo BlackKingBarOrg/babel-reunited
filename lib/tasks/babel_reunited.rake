@@ -281,6 +281,95 @@ namespace :babel_reunited do
            "migrate the data."
   end
 
+  desc "Detect the source language of posts that already have translations but no current detection (one micro call each; no translations are started)"
+  task backfill_detected_locales: :environment do
+    dry_run = ENV["DRY_RUN"] != "false"
+    limit = ENV["LIMIT"]&.to_i
+    batch_size = (ENV["BATCH_SIZE"] || 500).to_i
+
+    unless SiteSetting.babel_reunited_enabled
+      puts "ERROR: Babel Reunited plugin is not enabled"
+      exit 1
+    end
+
+    # cleanup_same_language_copies treats the detected locale as ground truth
+    # and leaves every post without one alone. Detection only ever ran for
+    # posts created, edited or translated since it shipped, so on a forum with
+    # pre-existing translations that cleanup would be a near no-op until this
+    # backfill has run. Detection only: the job fans out translations solely
+    # when asked to, and asking here would start thousands of them.
+    post_ids = BabelReunited::PostTranslation.distinct.pluck(:post_id)
+
+    considered = 0
+    enqueued = 0
+    already = 0
+    ineligible = 0
+    samples = []
+
+    post_ids.each_slice(batch_size) do |slice|
+      posts = Post.where(id: slice).to_a
+      Post.preload_custom_fields(
+        posts,
+        [
+          BabelReunited::DETECTED_LOCALE_FIELD,
+          BabelReunited::DETECTED_SHA_FIELD
+        ]
+      )
+
+      posts.each do |post|
+        break if limit && enqueued >= limit
+        considered += 1
+
+        if BabelReunited.detection_current?(post)
+          already += 1
+          next
+        end
+
+        # Deleted, hidden and disabled-category posts are refused by the job
+        # itself; counting them here keeps the reported total honest.
+        unless BabelReunited.translatable_post?(post)
+          ineligible += 1
+          next
+        end
+
+        if samples.size < 10
+          samples << "  Post ID: #{post.id}, Topic ID: #{post.topic_id}"
+        end
+
+        enqueued += 1
+        BabelReunited.enqueue_detection_backfill(post) unless dry_run
+      end
+
+      break if limit && enqueued >= limit
+    end
+
+    puts "Posts with translations: #{post_ids.size}"
+    puts "  already detected against current content: #{already}"
+    puts "  not eligible (deleted, hidden, disabled category): #{ineligible}"
+    puts "  needing detection: #{enqueued}"
+
+    if enqueued == 0
+      puts "Nothing to do"
+      next
+    end
+
+    if dry_run
+      puts ""
+      puts "DRY RUN mode - no detection jobs were enqueued"
+      puts "Use DRY_RUN=false to enqueue them"
+      puts ""
+      puts "Sample posts:"
+      samples.each { |line| puts line }
+      if enqueued > samples.size
+        puts "  ... and #{enqueued - samples.size} more"
+      end
+    else
+      puts ""
+      puts "Enqueued #{enqueued} detection job(s)."
+      puts "Wait for the queue to drain before running cleanup_same_language_copies."
+    end
+  end
+
   desc "Remove translation records whose language matches the post's detected language (legacy source-to-source copies)"
   task cleanup_same_language_copies: :environment do
     dry_run = ENV["DRY_RUN"] != "false"
