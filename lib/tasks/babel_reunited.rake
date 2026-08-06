@@ -292,6 +292,30 @@ namespace :babel_reunited do
       exit 1
     end
 
+    if batch_size < 1
+      puts "ERROR: BATCH_SIZE must be a positive integer"
+      exit 1
+    end
+
+    if limit && limit < 1
+      puts "ERROR: LIMIT must be a positive integer"
+      exit 1
+    end
+
+    # Without a provider every job fails on the same missing setting and
+    # records nothing, so the run would queue thousands of certain failures
+    # and this task could never report zero. A dry run still works: seeing the
+    # scale is useful before the key is in place.
+    unless dry_run
+      config_error = BabelReunited::LanguageDetectionService.configuration_error
+      if config_error
+        puts "ERROR: #{config_error}"
+        puts "Detection cannot run, so every job would fail without recording " \
+               "anything and this task would never reach zero."
+        exit 1
+      end
+    end
+
     # cleanup_same_language_copies treats the detected locale as ground truth
     # and leaves every post without one alone. Detection only ever ran for
     # posts created, edited or translated since it shipped, so on a forum with
@@ -307,12 +331,17 @@ namespace :babel_reunited do
     #
     # So the jobs are spread instead: PER_MINUTE of them per minute, defaulting
     # to half the allowance so ordinary translation traffic still gets through.
-    per_minute =
-      (
-        ENV["PER_MINUTE"] ||
-          SiteSetting.babel_reunited_rate_limit_per_minute / 2
-      ).to_i
+    site_limit = SiteSetting.babel_reunited_rate_limit_per_minute
+    per_minute = (ENV["PER_MINUTE"] || site_limit / 2).to_i
     per_minute = 1 if per_minute < 1
+    # Pacing above the allowance is not pacing: the jobs would queue at a rate
+    # the limiter refuses and burn their retries exactly as before.
+    if per_minute > site_limit
+      puts "PER_MINUTE #{per_minute} is above " \
+             "babel_reunited_rate_limit_per_minute (#{site_limit}); " \
+             "using #{site_limit}"
+      per_minute = site_limit
+    end
 
     # A subquery rather than a plucked id list, so nothing is materialized
     # whole and BATCH_SIZE really does bound what is in memory.
@@ -425,8 +454,8 @@ namespace :babel_reunited do
       puts "Use DRY_RUN=false to enqueue them"
       puts ""
       puts "Would spread them over ~#{(queued.to_f / per_minute).ceil} " \
-             "minute(s) at #{per_minute}/minute, sooner if a schedule from an " \
-             "earlier run is still draining"
+             "minute(s) at #{per_minute}/minute, and later still if a schedule " \
+             "from an earlier run has not finished draining"
       puts ""
       puts "Sample posts:"
       samples.each { |line| puts line }
@@ -434,10 +463,27 @@ namespace :babel_reunited do
     else
       # Reported from the slots actually handed out, not from the count
       # divided by the pace: a run that lands behind a schedule still
-      # draining is scheduled further out than its own size suggests.
+      # draining is scheduled further out than its own size suggests. When
+      # this run queued nothing, its own max delay says nothing at all -- the
+      # outstanding work belongs to an earlier run, so read the schedule.
+      remaining =
+        (
+          if queued > 0
+            max_delay
+          else
+            BabelReunited.backfill_schedule_remaining
+          end
+        )
+
       puts ""
-      puts "Enqueued #{queued} detection job(s); the last one runs in " \
-             "~#{(max_delay / 60.0).ceil} minute(s) at #{per_minute}/minute."
+      if queued > 0
+        puts "Enqueued #{queued} detection job(s); the last one runs in " \
+               "~#{(remaining / 60.0).ceil} minute(s) at #{per_minute}/minute."
+      else
+        puts "Queued nothing new: all #{deduplicated} are already scheduled " \
+               "by an earlier run, the last in ~#{(remaining / 60.0).ceil} " \
+               "minute(s)."
+      end
       puts ""
       puts "Do NOT run cleanup_same_language_copies yet."
       puts "An empty Sidekiq queue is not the signal: a job that fails leaves " \

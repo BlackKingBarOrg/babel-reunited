@@ -10,6 +10,10 @@ RSpec.describe "babel_reunited:backfill_detected_locales" do
   before do
     enable_current_plugin
     SiteSetting.babel_reunited_enabled = true
+    # A configured provider is the normal state; the task refuses to queue
+    # anything without one, which two examples below check deliberately.
+    SiteSetting.babel_reunited_openai_api_key = "sk-test-key"
+    SiteSetting.babel_reunited_preset_model = "gpt-4o"
     Discourse.redis.flushdb
     Jobs.run_later!
     task.reenable
@@ -19,6 +23,9 @@ RSpec.describe "babel_reunited:backfill_detected_locales" do
     ENV.delete("DRY_RUN")
     ENV.delete("LIMIT")
     ENV.delete("PER_MINUTE")
+    # The task exits the process on a bad value, so a leaked one does not fail
+    # one example -- it kills the run at whichever example comes next.
+    ENV.delete("BATCH_SIZE")
   end
 
   it "defaults to a dry run that enqueues nothing" do
@@ -193,8 +200,13 @@ RSpec.describe "babel_reunited:backfill_detected_locales" do
       Jobs::BabelReunited::DetectPostLanguageJob.jobs.map { |j| j["at"].to_i }
     ).not_to be_empty
 
-    # The whole schedule is in the past now, and the claims have lapsed.
-    Discourse.redis.del(BabelReunited.backfill_cursor_key)
+    # The cursor is left in place but now points into the past, which is what
+    # a consumed schedule actually looks like -- deleting it would exercise
+    # the empty-cursor path instead of the stale one.
+    Discourse.redis.set(
+      BabelReunited.backfill_cursor_key,
+      Time.current.to_i - 3600
+    )
     [first, second].each do |p|
       Discourse.redis.del(BabelReunited.detection_backfill_key(p.id))
     end
@@ -203,11 +215,89 @@ RSpec.describe "babel_reunited:backfill_detected_locales" do
     task.reenable
     task.invoke
 
+    # A job taking the very next slot is enqueued outright and carries no
+    # "at" at all, so treat its absence as zero rather than as a timestamp.
+    now = Time.current.to_i
     delays =
       Jobs::BabelReunited::DetectPostLanguageJob.jobs.map do |j|
-        j["at"].to_i - Time.current.to_i
+        j["at"] ? j["at"].to_i - now : 0
       end
     expect(delays.min).to be < 60
+    # And never scheduled in the past, which a stale cursor used verbatim
+    # would produce.
+    expect(delays.min).to be >= 0
+  end
+
+  it "refuses to queue anything when detection is not configured" do
+    ENV["DRY_RUN"] = "false"
+    SiteSetting.babel_reunited_openai_api_key = ""
+    SiteSetting.babel_reunited_anthropic_api_key = ""
+    Fabricate(:post_translation, post: post_record, language: "es")
+
+    expect {
+      expect { task.invoke }.to output(/API key not configured/).to_stdout
+    }.to raise_error(SystemExit)
+    expect(Jobs::BabelReunited::DetectPostLanguageJob.jobs).to be_empty
+  end
+
+  it "still surveys the scale in a dry run without a provider" do
+    SiteSetting.babel_reunited_openai_api_key = ""
+    SiteSetting.babel_reunited_anthropic_api_key = ""
+    Fabricate(:post_translation, post: post_record, language: "es")
+
+    expect { task.invoke }.to output(/still needing detection: 1/).to_stdout
+  end
+
+  # Pacing above the allowance is not pacing: the jobs would arrive at a rate
+  # the limiter refuses and burn their retries exactly as before.
+  it "clamps PER_MINUTE to the site rate limit" do
+    ENV["DRY_RUN"] = "false"
+    SiteSetting.babel_reunited_rate_limit_per_minute = 2
+    ENV["PER_MINUTE"] = "100"
+
+    posts = 3.times.map { Fabricate(:post, topic: topic, user: user) }
+    posts.each { |p| Fabricate(:post_translation, post: p, language: "es") }
+
+    expect { task.invoke }.to output(/using 2/).to_stdout
+
+    # Two per minute means the third job waits a full minute. Unclamped at
+    # 100/minute it would wait under a second, so the span is what proves the
+    # clamp rather than the message that announces it.
+    now = Time.current.to_i
+    delays =
+      Jobs::BabelReunited::DetectPostLanguageJob.jobs.map do |j|
+        j["at"] ? j["at"].to_i - now : 0
+      end
+    expect(delays.max).to be >= 30
+  end
+
+  it "rejects a nonsensical BATCH_SIZE" do
+    ENV["BATCH_SIZE"] = "0"
+
+    expect {
+      expect { task.invoke }.to output(
+        /BATCH_SIZE must be a positive integer/
+      ).to_stdout
+    }.to raise_error(SystemExit)
+  end
+
+  # A re-run that queues nothing knows nothing about when the outstanding work
+  # runs; reporting its own zero would read as "finished".
+  it "reports the earlier schedule when it queued nothing itself" do
+    ENV["DRY_RUN"] = "false"
+    ENV["PER_MINUTE"] = "1"
+    Fabricate(:post_translation, post: post_record, language: "es")
+
+    task.invoke
+    Discourse.redis.set(
+      BabelReunited.backfill_cursor_key,
+      Time.current.to_i + 1800
+    )
+
+    task.reenable
+    expect { task.invoke }.to output(
+      /Queued nothing new: all 1 are already scheduled.*~30 minute/m
+    ).to_stdout
   end
 
   it "reports the span it actually scheduled, not the one its size implies" do

@@ -43,6 +43,21 @@ module BabelReunited
       @post = post
     end
 
+    # What is missing before any detection can succeed, or nil when nothing
+    # is. Checked without making a call, so a bulk caller can refuse to queue
+    # thousands of jobs that would each fail the same way on a missing key --
+    # none of which records anything, leaving a backfill unable to ever report
+    # itself finished.
+    def self.configuration_error
+      config = BabelReunited::ModelConfig.get_config
+      return "Invalid preset model" if config.nil?
+      return "API key not configured" if config[:api_key].blank?
+      return "Base URL not configured" if config[:base_url].blank?
+      return "Model name not configured" if config[:model_name].blank?
+
+      nil
+    end
+
     # Whether this post carries enough natural language for detection to have
     # any chance. Public because a bulk caller needs to tell "not tried yet"
     # apart from "will never succeed": a post that is only a code block or a
@@ -161,15 +176,10 @@ module BabelReunited
     end
 
     def api_config
-      config = BabelReunited::ModelConfig.get_config
-      return { error: "Invalid preset model" } if config.nil?
-      return { error: "API key not configured" } if config[:api_key].blank?
-      return { error: "Base URL not configured" } if config[:base_url].blank?
-      if config[:model_name].blank?
-        return { error: "Model name not configured" }
-      end
+      error = self.class.configuration_error
+      return { error: error } if error
 
-      config
+      BabelReunited::ModelConfig.get_config
     end
 
     def request_detection(sample, config)

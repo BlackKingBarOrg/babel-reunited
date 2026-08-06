@@ -355,6 +355,16 @@ module ::BabelReunited
     return math.floor(slot - now)
   LUA
 
+  # Seconds until the last slot handed out so far comes due, or 0 when no
+  # schedule is outstanding. Lets a caller that queued nothing itself still
+  # say when the work already in flight will be done.
+  def self.backfill_schedule_remaining
+    slot = Discourse.redis.get(backfill_cursor_key).to_f
+    return 0 if slot <= 0
+
+    [(slot - Time.current.to_i).round, 0].max
+  end
+
   # Claims the post first and takes a slot only once the claim is won, so a
   # post another run already queued never consumes one and nothing has to be
   # handed back. Returns the delay in seconds, or nil when already claimed.
