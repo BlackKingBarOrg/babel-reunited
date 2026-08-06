@@ -330,13 +330,72 @@ module ::BabelReunited
 
   # Lazy convergence for posts created before detection existed. Deduplicated
   # via Redis so a burst of translate jobs enqueues one detection, not N.
+  def self.detection_backfill_key(post_id)
+    "babel_reunited:detect_enqueued:#{post_id}"
+  end
+
+  def self.backfill_cursor_key
+    "babel_reunited:backfill_cursor"
+  end
+
+  # The cursor holds the next free slot as an absolute time, not a count of
+  # jobs ever queued. A count keeps growing after the schedule it described
+  # has been consumed, so a later run would push a single retry an hour into
+  # an allowance that is idle by then, and changing the pace would reinterpret
+  # the old count in new units. Allocating and re-arming the expiry in one
+  # script also means two runs can never be handed the same slot.
+  TAKE_BACKFILL_SLOT = <<~LUA
+    local now = tonumber(ARGV[1])
+    local interval = tonumber(ARGV[2])
+    local slack = tonumber(ARGV[3])
+    local slot = tonumber(redis.call('get', KEYS[1]) or '0')
+    if slot < now then slot = now end
+    local nxt = slot + interval
+    redis.call('set', KEYS[1], nxt, 'EX', math.ceil(nxt - now) + slack)
+    return math.floor(slot - now)
+  LUA
+
+  # Claims the post first and takes a slot only once the claim is won, so a
+  # post another run already queued never consumes one and nothing has to be
+  # handed back. Returns the delay in seconds, or nil when already claimed.
+  def self.schedule_detection_backfill(post, per_minute:)
+    return nil if post.blank?
+
+    key = detection_backfill_key(post.id)
+    return nil unless Discourse.redis.set(key, "1", nx: true, ex: 600)
+
+    delay =
+      Discourse
+        .redis
+        .eval(
+          TAKE_BACKFILL_SLOT,
+          keys: [Discourse.redis.namespace_key(backfill_cursor_key)],
+          argv: [Time.current.to_i, 60.0 / per_minute, 600]
+        )
+        .to_i
+
+    # The claim has to outlive the delay it is now bound to.
+    Discourse.redis.expire(key, delay + 600)
+
+    if delay > 0
+      Jobs.enqueue_in(
+        delay,
+        Jobs::BabelReunited::DetectPostLanguageJob,
+        post_id: post.id
+      )
+    else
+      Jobs.enqueue(Jobs::BabelReunited::DetectPostLanguageJob, post_id: post.id)
+    end
+    delay
+  end
+
   # Returns whether this call is the one that queued the job, so a caller
   # counting work has something truthful to count.
   def self.enqueue_detection_backfill(post, delay: nil)
     return false if post.blank?
 
     delay = delay.to_i
-    key = "babel_reunited:detect_enqueued:#{post.id}"
+    key = detection_backfill_key(post.id)
     # The dedup window has to outlive the delay, or a bulk run scheduling work
     # minutes ahead would let a second run queue the same post again before
     # the first job has even started.

@@ -173,6 +173,59 @@ RSpec.describe "babel_reunited:backfill_detected_locales" do
     "the second run reused the first run's slot"
   end
 
+  # The cursor holds a time, not a running count. Once a schedule has been
+  # consumed the allowance is idle again, so a later run must start from now
+  # rather than from wherever the old count had reached -- otherwise a single
+  # retry an hour later is pushed another hour out, and the task reports the
+  # short span its own size implies.
+  it "starts from now once the earlier schedule has been consumed" do
+    ENV["DRY_RUN"] = "false"
+    ENV["PER_MINUTE"] = "1"
+
+    first = Fabricate(:post, topic: topic, user: user)
+    second = Fabricate(:post, topic: topic, user: user)
+    [first, second].each do |p|
+      Fabricate(:post_translation, post: p, language: "es")
+    end
+
+    task.invoke
+    expect(
+      Jobs::BabelReunited::DetectPostLanguageJob.jobs.map { |j| j["at"].to_i }
+    ).not_to be_empty
+
+    # The whole schedule is in the past now, and the claims have lapsed.
+    Discourse.redis.del(BabelReunited.backfill_cursor_key)
+    [first, second].each do |p|
+      Discourse.redis.del(BabelReunited.detection_backfill_key(p.id))
+    end
+    Jobs::BabelReunited::DetectPostLanguageJob.jobs.clear
+
+    task.reenable
+    task.invoke
+
+    delays =
+      Jobs::BabelReunited::DetectPostLanguageJob.jobs.map do |j|
+        j["at"].to_i - Time.current.to_i
+      end
+    expect(delays.min).to be < 60
+  end
+
+  it "reports the span it actually scheduled, not the one its size implies" do
+    ENV["DRY_RUN"] = "false"
+    ENV["PER_MINUTE"] = "1"
+
+    # Somebody else's schedule is already an hour deep.
+    Discourse.redis.set(
+      BabelReunited.backfill_cursor_key,
+      Time.current.to_i + 3600
+    )
+    Fabricate(:post_translation, post: post_record, language: "es")
+
+    expect { task.invoke }.to output(
+      /the last one runs in ~6[0-9] minute\(s\)/
+    ).to_stdout
+  end
+
   it "honors LIMIT so a first pass can be sized" do
     ENV["DRY_RUN"] = "false"
     ENV["LIMIT"] = "1"

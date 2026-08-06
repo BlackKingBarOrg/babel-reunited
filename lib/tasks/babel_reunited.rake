@@ -314,12 +314,6 @@ namespace :babel_reunited do
       ).to_i
     per_minute = 1 if per_minute < 1
 
-    # The schedule cursor lives in Redis, not in this process: LIMIT batches
-    # and concurrent runs would otherwise each start counting slots from zero
-    # and stack their jobs into the same minutes, which is the very thing the
-    # pacing exists to prevent.
-    cursor_key = "babel_reunited:backfill_cursor"
-
     # A subquery rather than a plucked id list, so nothing is materialized
     # whole and BATCH_SIZE really does bound what is in memory.
     scope = Post.where(id: BabelReunited::PostTranslation.select(:post_id))
@@ -330,6 +324,7 @@ namespace :babel_reunited do
     already = 0
     ineligible = 0
     undetectable = 0
+    max_delay = 0
     samples = []
     truncated = false
 
@@ -383,18 +378,16 @@ namespace :babel_reunited do
             next
           end
 
-          position = Discourse.redis.incr(cursor_key) - 1
-          delay = (position / per_minute) * 60
-          # Outlive the schedule it is pacing, or a later run would restart
-          # from zero while these jobs are still pending.
-          Discourse.redis.expire(cursor_key, delay + 3600)
+          delay =
+            BabelReunited.schedule_detection_backfill(
+              post,
+              per_minute: per_minute
+            )
 
-          if BabelReunited.enqueue_detection_backfill(post, delay: delay)
+          if delay
             queued += 1
+            max_delay = delay if delay > max_delay
           else
-            # Already queued by an earlier run: hand the slot back rather than
-            # leaving a hole in the schedule.
-            Discourse.redis.decr(cursor_key)
             deduplicated += 1
           end
         end
@@ -426,22 +419,25 @@ namespace :babel_reunited do
       next
     end
 
-    minutes = (queued.to_f / per_minute).ceil
-
     if dry_run
       puts ""
       puts "DRY RUN mode - no detection jobs were enqueued"
       puts "Use DRY_RUN=false to enqueue them"
       puts ""
-      puts "Would spread them over ~#{minutes} minute(s) at #{per_minute}/minute"
+      puts "Would spread them over ~#{(queued.to_f / per_minute).ceil} " \
+             "minute(s) at #{per_minute}/minute, sooner if a schedule from an " \
+             "earlier run is still draining"
       puts ""
       puts "Sample posts:"
       samples.each { |line| puts line }
       puts "  ... and #{queued - samples.size} more" if queued > samples.size
     else
+      # Reported from the slots actually handed out, not from the count
+      # divided by the pace: a run that lands behind a schedule still
+      # draining is scheduled further out than its own size suggests.
       puts ""
-      puts "Enqueued #{queued} detection job(s), spread over ~#{minutes} " \
-             "minute(s) at #{per_minute}/minute."
+      puts "Enqueued #{queued} detection job(s); the last one runs in " \
+             "~#{(max_delay / 60.0).ceil} minute(s) at #{per_minute}/minute."
       puts ""
       puts "Do NOT run cleanup_same_language_copies yet."
       puts "An empty Sidekiq queue is not the signal: a job that fails leaves " \
