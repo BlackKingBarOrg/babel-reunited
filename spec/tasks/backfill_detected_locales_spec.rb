@@ -3,7 +3,15 @@
 RSpec.describe "babel_reunited:backfill_detected_locales" do
   fab!(:user)
   fab!(:topic) { Fabricate(:topic, user: user) }
-  fab!(:post_record) { Fabricate(:post, topic: topic, user: user) }
+  fab!(:post_record) do
+    Fabricate(
+      :post,
+      topic: topic,
+      user: user,
+      raw:
+        "This is a long enough English sentence for language detection to work."
+    )
+  end
 
   let(:task) { Rake::Task["babel_reunited:backfill_detected_locales"] }
 
@@ -14,8 +22,11 @@ RSpec.describe "babel_reunited:backfill_detected_locales" do
     # without one, which two examples below check deliberately.
     SiteSetting.babel_reunited_openai_api_key = "sk-test-key"
     SiteSetting.babel_reunited_preset_model = "gpt-4o"
+    # The task paces itself with real sleeps. A high allowance keeps the pause
+    # between posts down to a tenth of a second without stubbing out the very
+    # pacing these examples run through.
+    SiteSetting.babel_reunited_rate_limit_per_minute = 1000
     Discourse.redis.flushdb
-    Jobs.run_later!
     task.reenable
   end
 
@@ -28,23 +39,80 @@ RSpec.describe "babel_reunited:backfill_detected_locales" do
     ENV.delete("BATCH_SIZE")
   end
 
-  def dispatcher_jobs
-    Jobs::BabelReunited::BackfillDetectionDispatcher.jobs
+  def stub_detection(reply)
+    stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
+      status: 200,
+      headers: {
+        "Content-Type" => "application/json"
+      },
+      body: {
+        choices: [{ message: { content: reply }, finish_reason: "stop" }],
+        usage: {
+          total_tokens: 42
+        }
+      }.to_json
+    )
   end
 
-  it "defaults to a dry run that starts nothing" do
+  def stub_detection_failure
+    stub_request(:post, "https://api.openai.com/v1/chat/completions").to_return(
+      status: 500
+    )
+  end
+
+  it "defaults to a dry run that detects nothing" do
     Fabricate(:post_translation, post: post_record, language: "es")
 
     expect { task.invoke }.to output(/DRY RUN/).to_stdout
-    expect(dispatcher_jobs).to be_empty
+    expect(BabelReunited.detection_current?(post_record.reload)).to be false
   end
 
-  it "starts a dispatcher when there is work" do
+  it "detects in this process and records the locale" do
     ENV["DRY_RUN"] = "false"
     Fabricate(:post_translation, post: post_record, language: "es")
+    stub_detection("en")
 
-    expect { task.invoke }.to output(/Started the dispatcher/).to_stdout
-    expect(dispatcher_jobs.size).to eq(1)
+    expect { task.invoke }.to output(/Detected: 1/).to_stdout
+
+    post_record.reload
+    expect(BabelReunited.detected_locale_for(post_record)).to eq("en")
+    expect(BabelReunited.detection_current?(post_record)).to be true
+  end
+
+  # The prompt asks for "und" when the language cannot be determined, and the
+  # model may name a real language outside the supported list. Both are
+  # answers about the content: without recording them the post stays
+  # outstanding and every re-run pays to ask the same question again.
+  it "records an undetermined answer instead of retrying it forever" do
+    ENV["DRY_RUN"] = "false"
+    Fabricate(:post_translation, post: post_record, language: "es")
+    stub_detection("und")
+
+    expect { task.invoke }.to output(
+      /No supported language \(recorded, will not be retried\): 1/
+    ).to_stdout
+
+    post_record.reload
+    expect(BabelReunited.detection_current?(post_record)).to be true
+    # Readers still see an unlabelled post: this is not a language.
+    expect(BabelReunited.detected_locale_for(post_record)).to be_nil
+
+    task.reenable
+    expect { task.invoke }.to output(
+      /answered as no supported language: 1.*still needing detection: 0/m
+    ).to_stdout
+  end
+
+  # No queue means no retry to inherit: leaving the post unrecorded is what
+  # makes the next run pick it up.
+  it "leaves a failed detection for a re-run" do
+    ENV["DRY_RUN"] = "false"
+    Fabricate(:post_translation, post: post_record, language: "es")
+    stub_detection_failure
+
+    expect { task.invoke }.to output(/Failed, left for a re-run: 1/).to_stdout
+
+    expect(BabelReunited.detection_current?(post_record.reload)).to be false
   end
 
   it "counts a post that already has current detection as done" do
@@ -55,7 +123,6 @@ RSpec.describe "babel_reunited:backfill_detected_locales" do
     expect { task.invoke }.to output(
       /still needing detection: 0.*Nothing left to detect/m
     ).to_stdout
-    expect(dispatcher_jobs).to be_empty
   end
 
   it "ignores posts that have no translations at all" do
@@ -73,7 +140,7 @@ RSpec.describe "babel_reunited:backfill_detected_locales" do
     post_record.update!(hidden: true)
 
     expect { task.invoke }.to output(/not eligible.*: 1/).to_stdout
-    expect(dispatcher_jobs).to be_empty
+    expect(BabelReunited.detection_current?(post_record.reload)).to be false
   end
 
   # Only a code block: every attempt fails identically, so counting it as
@@ -86,7 +153,6 @@ RSpec.describe "babel_reunited:backfill_detected_locales" do
     expect { task.invoke }.to output(
       /too short to ever detect: 1.*still needing detection: 0/m
     ).to_stdout
-    expect(dispatcher_jobs).to be_empty
   end
 
   it "refuses to start when detection is not configured" do
@@ -98,7 +164,6 @@ RSpec.describe "babel_reunited:backfill_detected_locales" do
     expect {
       expect { task.invoke }.to output(/API key not configured/).to_stdout
     }.to raise_error(SystemExit)
-    expect(dispatcher_jobs).to be_empty
   end
 
   it "still surveys the scale in a dry run without a provider" do
@@ -109,16 +174,16 @@ RSpec.describe "babel_reunited:backfill_detected_locales" do
     expect { task.invoke }.to output(/still needing detection: 1/).to_stdout
   end
 
-  # Pacing above the allowance is not pacing: the jobs would arrive at a rate
-  # the limiter refuses and burn their retries exactly as before.
+  # Pacing above the allowance is not pacing: the calls would arrive at a rate
+  # the limiter refuses, and every refusal is a wait anyway.
   it "clamps PER_MINUTE to the site rate limit" do
     ENV["DRY_RUN"] = "false"
     SiteSetting.babel_reunited_rate_limit_per_minute = 2
     ENV["PER_MINUTE"] = "100"
     Fabricate(:post_translation, post: post_record, language: "es")
+    BabelReunited.store_detected_locale(post_record, "en")
 
     expect { task.invoke }.to output(/using 2/).to_stdout
-    expect(dispatcher_jobs.first["args"].first["per_minute"]).to eq(2)
   end
 
   it "rejects a nonsensical BATCH_SIZE" do
@@ -142,46 +207,28 @@ RSpec.describe "babel_reunited:backfill_detected_locales" do
     ).to_stdout
   end
 
-  # Reporting one post and then handing the dispatcher the whole forum is the
-  # opposite of the cautious first pass LIMIT exists for.
-  it "passes LIMIT to the dispatcher on a live run" do
+  # LIMIT is the cautious first pass on a production run. Reporting one post
+  # and then detecting the whole forum is the opposite of cautious.
+  it "stops the run at LIMIT" do
     ENV["DRY_RUN"] = "false"
     ENV["LIMIT"] = "1"
     Fabricate(:post_translation, post: post_record, language: "es")
-    second = Fabricate(:post, topic: topic, user: user)
+    second =
+      Fabricate(
+        :post,
+        topic: topic,
+        user: user,
+        raw: "Another long enough English sentence for detection to work on."
+      )
     Fabricate(:post_translation, post: second, language: "es")
+    stub_detection("en")
 
-    task.invoke
+    expect { task.invoke }.to output(/Detected: 1/).to_stdout
 
-    expect(dispatcher_jobs.first["args"].first["remaining"]).to eq(1)
-  end
-
-  # The runbook asks for repeated runs to watch progress; each one starting
-  # another chain would quietly multiply the rate.
-  it "does not start a second dispatcher while one is running" do
-    ENV["DRY_RUN"] = "false"
-    Fabricate(:post_translation, post: post_record, language: "es")
-
-    task.invoke
-    expect(dispatcher_jobs.size).to eq(1)
-
-    task.reenable
-    expect { task.invoke }.to output(/already running/).to_stdout
-    expect(dispatcher_jobs.size).to eq(1)
-  end
-
-  it "starts one again after the previous chain finished" do
-    ENV["DRY_RUN"] = "false"
-    Fabricate(:post_translation, post: post_record, language: "es")
-
-    task.invoke
-    BabelReunited.release_backfill_lease(
-      Discourse.redis.get(BabelReunited.backfill_lease_key)
-    )
-    dispatcher_jobs.clear
-
-    task.reenable
-    expect { task.invoke }.to output(/Started the dispatcher/).to_stdout
-    expect(dispatcher_jobs.size).to eq(1)
+    detected =
+      [post_record, second].count do |post|
+        BabelReunited.detection_current?(post.reload)
+      end
+    expect(detected).to eq(1)
   end
 end

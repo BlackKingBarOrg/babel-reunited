@@ -349,133 +349,19 @@ module ::BabelReunited
   end
 
   # Every post that carries a translation, as a relation rather than a list of
-  # ids: the dispatcher and the rake task both stream it, and a subquery keeps
-  # translations whose post is gone from being counted as work.
+  # ids: the rake backfill streams it, and a subquery keeps translations whose
+  # post is gone from being counted as work.
   def self.posts_needing_detection
     Post.where(id: BabelReunited::PostTranslation.select(:post_id))
   end
 
-  # Only one dispatcher chain may run. The per-post claim stops two chains
-  # handing out the same post; it does nothing about two chains each finding
-  # a different batch, which would double the rate the pacing exists to hold.
-  # The lease is short so a chain that dies frees it within a couple of
-  # passes, and every pass renews it.
-  BACKFILL_LEASE_TTL = 180
-
-  def self.backfill_lease_key
-    "babel_reunited:backfill_dispatcher"
-  end
-
-  def self.backfill_lease_active?
-    Discourse.redis.exists?(backfill_lease_key)
-  end
-
-  # Returns a token, or nil when a chain already holds the lease.
-  def self.acquire_backfill_lease
-    token = SecureRandom.hex(16)
-    unless Discourse.redis.set(
-             backfill_lease_key,
-             token,
-             nx: true,
-             ex: BACKFILL_LEASE_TTL
-           )
-      return nil
-    end
-
-    token
-  end
-
-  # Compare-and-set, so a chain that lost its lease to a restart cannot renew
-  # it out from under the chain that replaced it.
-  # Holds the lease for another term: renews it when it is still ours, and
-  # takes it back when nobody holds it. That second case is the one that
-  # matters -- an outage longer than the TTL expires the lease while the
-  # chain's next pass is still queued, and refusing it there would abandon
-  # the backfill rather than delay it, which is the whole reason a dispatcher
-  # exists. Only a lease held by somebody else means this chain is finished.
-  HOLD_BACKFILL_LEASE = <<~LUA
-    local current = redis.call('get', KEYS[1])
-    if current == false or current == ARGV[1] then
-      redis.call('set', KEYS[1], ARGV[1], 'EX', ARGV[2])
-      return 1
-    else
-      return 0
-    end
-  LUA
-
-  def self.hold_backfill_lease(token)
-    return false if token.blank?
-
-    Discourse
-      .redis
-      .eval(
-        HOLD_BACKFILL_LEASE,
-        keys: [Discourse.redis.namespace_key(backfill_lease_key)],
-        argv: [token, BACKFILL_LEASE_TTL]
-      )
-      .to_i == 1
-  end
-
-  # Lets a chain stop without opening the gate this instant: the detections it
-  # just handed out have not run yet, so a chain starting now would put two
-  # batches into one pacing window.
-  EXPIRE_BACKFILL_LEASE = <<~LUA
-    if redis.call('get', KEYS[1]) == ARGV[1] then
-      return redis.call('expire', KEYS[1], ARGV[2])
-    else
-      return 0
-    end
-  LUA
-
-  def self.expire_backfill_lease(token, seconds)
-    return if token.blank?
-
-    Discourse.redis.eval(
-      EXPIRE_BACKFILL_LEASE,
-      keys: [Discourse.redis.namespace_key(backfill_lease_key)],
-      argv: [token, seconds]
-    )
-  end
-
-  RELEASE_BACKFILL_LEASE = <<~LUA
-    if redis.call('get', KEYS[1]) == ARGV[1] then
-      return redis.call('del', KEYS[1])
-    else
-      return 0
-    end
-  LUA
-
-  def self.release_backfill_lease(token)
-    return if token.blank?
-
-    Discourse.redis.eval(
-      RELEASE_BACKFILL_LEASE,
-      keys: [Discourse.redis.namespace_key(backfill_lease_key)],
-      argv: [token]
-    )
-  end
-
-  # Returns whether this call is the one that queued the job, so a caller
-  # counting work has something truthful to count.
-  def self.enqueue_detection_backfill(post, delay: nil)
+  def self.enqueue_detection_backfill(post)
     return false if post.blank?
 
-    delay = delay.to_i
     key = detection_backfill_key(post.id)
-    # The dedup window has to outlive the delay, or a bulk run scheduling work
-    # minutes ahead would let a second run queue the same post again before
-    # the first job has even started.
-    return false unless Discourse.redis.set(key, "1", nx: true, ex: delay + 600)
+    return false unless Discourse.redis.set(key, "1", nx: true, ex: 600)
 
-    if delay > 0
-      Jobs.enqueue_in(
-        delay,
-        Jobs::BabelReunited::DetectPostLanguageJob,
-        post_id: post.id
-      )
-    else
-      Jobs.enqueue(Jobs::BabelReunited::DetectPostLanguageJob, post_id: post.id)
-    end
+    Jobs.enqueue(Jobs::BabelReunited::DetectPostLanguageJob, post_id: post.id)
     true
   end
 
