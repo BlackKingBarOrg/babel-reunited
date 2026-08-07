@@ -1031,6 +1031,164 @@ RSpec.describe BabelReunited do
   end
 
   describe "BabelReunited module methods" do
+    # The single write path for a detection result. Everything it refuses is
+    # something that became true while the provider call was in flight, and
+    # every refusal is silent unless it is checked here.
+    describe ".record_detected_locale" do
+      let(:sampled_sha) { BabelReunited.detection_raw_sha(post_record) }
+
+      it "records a real language and publishes it" do
+        messages =
+          MessageBus.track_publish("/post-translations/#{post_record.id}") do
+            expect(
+              BabelReunited.record_detected_locale(
+                post_record,
+                "en",
+                sampled_sha
+              )
+            ).to be true
+          end
+
+        expect(BabelReunited.detected_locale_for(post_record.reload)).to eq(
+          "en"
+        )
+        expect(messages.length).to eq(1)
+      end
+
+      it "records an undetermined answer without publishing it" do
+        messages =
+          MessageBus.track_publish("/post-translations/#{post_record.id}") do
+            expect(
+              BabelReunited.record_detected_locale(
+                post_record,
+                BabelReunited::UNDETERMINED_LOCALE,
+                sampled_sha
+              )
+            ).to be true
+          end
+
+        expect(BabelReunited.detection_current?(post_record.reload)).to be true
+        expect(messages).to be_empty
+      end
+
+      # The answer describes content the post no longer has, and the edit has
+      # triggered its own detection: whatever lands from that is newer than
+      # this, so writing this over it would replace a correct result.
+      it "refuses an answer whose content has moved on" do
+        stale_sha = "0" * 64
+
+        expect(
+          BabelReunited.record_detected_locale(post_record, "en", stale_sha)
+        ).to be false
+        expect(BabelReunited.detected_locale_for(post_record.reload)).to be_nil
+      end
+
+      # reload is unscoped, so neither of these looks like a missing row.
+      it "refuses a post trashed while the call was in flight" do
+        post_record.trash!
+
+        messages =
+          MessageBus.track_publish("/post-translations/#{post_record.id}") do
+            expect(
+              BabelReunited.record_detected_locale(
+                post_record,
+                "en",
+                sampled_sha
+              )
+            ).to be false
+          end
+
+        expect(BabelReunited.detected_locale_for(post_record.reload)).to be_nil
+        expect(messages).to be_empty
+      end
+
+      it "refuses a post hidden while the call was in flight" do
+        post_record.update!(hidden: true)
+
+        messages =
+          MessageBus.track_publish("/post-translations/#{post_record.id}") do
+            expect(
+              BabelReunited.record_detected_locale(
+                post_record,
+                "en",
+                sampled_sha
+              )
+            ).to be false
+          end
+
+        expect(BabelReunited.detected_locale_for(post_record.reload)).to be_nil
+        expect(messages).to be_empty
+      end
+
+      # A queued job and the backfill can land on the same post. Two answers
+      # for one sha may disagree, and because publishing happens after the
+      # transaction the second write can reach clients before the first --
+      # leaving them on a locale the database does not hold.
+      it "lets the first result for a sha win and the second stand down" do
+        expect(
+          BabelReunited.record_detected_locale(post_record, "en", sampled_sha)
+        ).to be true
+
+        messages =
+          MessageBus.track_publish("/post-translations/#{post_record.id}") do
+            expect(
+              BabelReunited.record_detected_locale(
+                post_record,
+                "zh-cn",
+                sampled_sha
+              )
+            ).to be false
+          end
+
+        expect(BabelReunited.detected_locale_for(post_record.reload)).to eq(
+          "en"
+        )
+        expect(messages).to be_empty
+      end
+
+      # The lock reloads the row but not the detection preload, which is a
+      # plain ivar. The backfill preloads every post in a batch before it
+      # starts calling the provider, so without dropping it here the check
+      # above answers from a snapshot taken before any of this happened.
+      it "sees a concurrent write even when holding a stale preload" do
+        second = Post.find(post_record.id)
+        BabelReunited.preload_detection_fields([second])
+
+        expect(
+          BabelReunited.record_detected_locale(post_record, "en", sampled_sha)
+        ).to be true
+        expect(
+          BabelReunited.record_detected_locale(second, "zh-cn", sampled_sha)
+        ).to be false
+
+        expect(BabelReunited.detected_locale_for(post_record.reload)).to eq(
+          "en"
+        )
+      end
+
+      it "refuses everything once the plugin is switched off" do
+        SiteSetting.babel_reunited_enabled = false
+
+        expect(
+          BabelReunited.record_detected_locale(post_record, "en", sampled_sha)
+        ).to be false
+        expect(BabelReunited.detected_locale_for(post_record.reload)).to be_nil
+      end
+
+      it "refuses a post deleted outright while the call was in flight" do
+        id = post_record.id
+        post_record.destroy!
+
+        expect(
+          BabelReunited.record_detected_locale(
+            Post.new(id: id),
+            "en",
+            sampled_sha
+          )
+        ).to be false
+      end
+    end
+
     describe ".same_language?" do
       it "matches identical codes" do
         expect(BabelReunited.same_language?("es", "es")).to be true

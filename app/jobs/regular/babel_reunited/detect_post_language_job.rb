@@ -32,25 +32,27 @@ class Jobs::BabelReunited::DetectPostLanguageJob < ::Jobs::Base
       sampled_sha = BabelReunited.detection_raw_sha(post)
       result = BabelReunited::LanguageDetectionService.new(post: post).call
 
-      if result.success?
-        post.reload
-        if BabelReunited.detection_raw_sha(post) == sampled_sha
-          BabelReunited.store_detected_locale(
-            post,
-            result.locale,
-            raw_sha: sampled_sha
-          )
-          publish_detected_locale(post, result.locale)
-        else
-          # The post changed while detection ran; the result may describe the
-          # old content. Discard it and try again shortly.
-          Jobs.enqueue_in(
-            5.seconds,
-            Jobs::BabelReunited::DetectPostLanguageJob,
-            post_id: post.id,
-            then_fanout: then_fanout
-          )
-          return
+      if result.success? || result.undetermined?
+        # The undetermined answer is recorded like any other: it is a fact
+        # about this content, and leaving it unrecorded is what makes a post
+        # get re-detected on every pass forever.
+        locale = result.locale || BabelReunited::UNDETERMINED_LOCALE
+
+        unless BabelReunited.record_detected_locale(post, locale, sampled_sha)
+          # Either the post changed while detection ran, so this result
+          # describes content it no longer has, or another detection recorded
+          # one for this same content first. Only the first case needs another
+          # pass; the second already holds what this job was going to write,
+          # so it falls through to the fan-out.
+          unless BabelReunited.detection_current?(post)
+            Jobs.enqueue_in(
+              5.seconds,
+              Jobs::BabelReunited::DetectPostLanguageJob,
+              post_id: post.id,
+              then_fanout: then_fanout
+            )
+            return
+          end
         end
       else
         ::BabelReunited::TranslationLogger.log_translation_skipped(
@@ -72,18 +74,5 @@ class Jobs::BabelReunited::DetectPostLanguageJob < ::Jobs::Base
     BabelReunited.fanout_translations(post) if then_fanout
   rescue BabelReunited::RateLimitError, BabelReunited::DetectionError
     raise
-  end
-
-  private
-
-  # Detection lands seconds after the page renders, so a client that loaded
-  # during the gap believes the post's language is unknown and offers to
-  # translate it into itself. Reuse the translation channel to correct it.
-  def publish_detected_locale(post, locale)
-    MessageBus.publish(
-      "/post-translations/#{post.id}",
-      { post_id: post.id, detected_locale: locale },
-      **::BabelReunited::MessageBusAudience.options_for(post)
-    )
   end
 end

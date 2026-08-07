@@ -281,6 +281,318 @@ namespace :babel_reunited do
            "migrate the data."
   end
 
+  desc "Detect the source language of posts that already have translations but no current detection (one micro call each; no translations are started)"
+  task backfill_detected_locales: :environment do
+    dry_run = ENV["DRY_RUN"] != "false"
+    limit = ENV["LIMIT"]&.to_i
+    batch_size = (ENV["BATCH_SIZE"] || 500).to_i
+
+    unless SiteSetting.babel_reunited_enabled
+      puts "ERROR: Babel Reunited plugin is not enabled"
+      exit 1
+    end
+
+    if batch_size < 1
+      puts "ERROR: BATCH_SIZE must be a positive integer"
+      exit 1
+    end
+
+    if limit && limit < 1
+      puts "ERROR: LIMIT must be a positive integer"
+      exit 1
+    end
+
+    # Without a provider every job fails on the same missing setting and
+    # records nothing, so the run would queue thousands of certain failures
+    # and this task could never report zero. A dry run still works: seeing the
+    # scale is useful before the key is in place.
+    unless dry_run
+      config_error = BabelReunited::LanguageDetectionService.configuration_error
+      if config_error
+        puts "ERROR: #{config_error}"
+        puts "Detection cannot run, so every job would fail without recording " \
+               "anything and this task would never reach zero."
+        exit 1
+      end
+    end
+
+    # cleanup_same_language_copies treats the detected locale as ground truth
+    # and leaves every post without one alone. Detection only ever ran for
+    # posts created, edited or translated since it shipped, so on a forum with
+    # pre-existing translations that cleanup would be a near no-op until this
+    # backfill has run. Detection only: no translations are started.
+    #
+    # The detection runs here, in this process, rather than being handed to
+    # Sidekiq. Detection shares one per-minute allowance with live translation
+    # traffic, so the work has to be paced; and anything that paces by queueing
+    # -- scheduled jobs, or a dispatcher enqueueing a batch a minute -- only
+    # promises "not before T". A Sidekiq outage during a run of this length
+    # leaves the whole backlog runnable at once, and the burst dies against the
+    # rate limiter three short retries later without recording anything.
+    # In-process there is no queue to burst: one call, then a sleep.
+    #
+    # It costs a held terminal for the duration, and that is the trade. What it
+    # buys is that interrupting the run is exact -- what is recorded stays
+    # recorded, nothing is in flight -- and a re-run resumes from the database
+    # with no cursor, lease or chain to reconcile.
+    site_limit = SiteSetting.babel_reunited_rate_limit_per_minute
+    per_minute = (ENV["PER_MINUTE"] || site_limit / 2).to_i
+    per_minute = 1 if per_minute < 1
+    # Pacing above the allowance is not pacing: the calls would arrive at a
+    # rate the limiter refuses, and every refusal is a wait anyway.
+    if per_minute > site_limit
+      puts "PER_MINUTE #{per_minute} is above " \
+             "babel_reunited_rate_limit_per_minute (#{site_limit}); " \
+             "using #{site_limit}"
+      per_minute = site_limit
+    end
+
+    # A relation rather than a plucked id list, so nothing is materialized
+    # whole and BATCH_SIZE really does bound what is in memory.
+    scope = BabelReunited.posts_needing_detection
+    total = scope.count
+
+    outstanding = 0
+    already = 0
+    unclassifiable = 0
+    ineligible = 0
+    undetectable = 0
+    samples = []
+    truncated = false
+
+    # includes(:topic): the eligibility check reads the post's category
+    # through its topic, which would be one query per post otherwise.
+    scope
+      .includes(:topic)
+      .find_in_batches(batch_size: batch_size) do |posts|
+        Post.preload_custom_fields(
+          posts,
+          [
+            BabelReunited::DETECTED_LOCALE_FIELD,
+            BabelReunited::DETECTED_SHA_FIELD
+          ]
+        )
+
+        posts.each do |post|
+          if limit && outstanding >= limit
+            truncated = true
+            break
+          end
+
+          # Answered against this content, one way or the other. The detector
+          # reporting "no language I support" is an answer and stays one until
+          # the post is edited; counting it as outstanding is what would keep
+          # this task from ever reaching zero.
+          if BabelReunited.detection_current?(post)
+            if BabelReunited.detected_locale_for(post)
+              already += 1
+            else
+              unclassifiable += 1
+            end
+            next
+          end
+
+          # Deleted, hidden and disabled-category posts are refused by the job
+          # itself; counting them here keeps the reported total honest.
+          unless BabelReunited.translatable_post?(post)
+            ineligible += 1
+            next
+          end
+
+          # A post with nothing but a code block or a link fails detection the
+          # same way on every attempt. Counting it here is what lets this task
+          # ever report itself finished.
+          unless BabelReunited::LanguageDetectionService.new(
+                   post: post
+                 ).detectable?
+            undetectable += 1
+            next
+          end
+
+          if samples.size < 10
+            samples << "  Post ID: #{post.id}, Topic ID: #{post.topic_id}"
+          end
+
+          outstanding += 1
+        end
+
+        break if truncated
+      end
+
+    puts "Posts with translations: #{total}"
+    puts "  already detected against current content: #{already}"
+    puts "  answered as no supported language: #{unclassifiable}"
+    puts "  not eligible (deleted, hidden, disabled category): #{ineligible}"
+    puts "  too short to ever detect: #{undetectable}"
+    puts "  still needing detection: #{outstanding}"
+    puts "  (stopped early at LIMIT, counts above are partial)" if truncated
+
+    if outstanding == 0
+      puts ""
+      puts "Nothing left to detect."
+      puts "cleanup_same_language_copies can run now." unless truncated
+      next
+    end
+
+    minutes = (outstanding.to_f / per_minute).ceil
+
+    if dry_run
+      puts ""
+      puts "DRY RUN mode - nothing was detected"
+      puts "Use DRY_RUN=false to run it"
+      puts ""
+      puts "Would take ~#{minutes} minute(s) at #{per_minute}/minute"
+      puts ""
+      puts "Sample posts:"
+      samples.each { |line| puts line }
+      if outstanding > samples.size
+        puts "  ... and #{outstanding - samples.size} more"
+      end
+      next
+    end
+
+    # Re-read before every wait rather than fixed at startup: an admin
+    # lowering the allowance means it now, and this run may have started an
+    # hour ago. Pacing on the value it had then would keep asking at the old
+    # rate, and every ask the limiter refuses spends part of a post's retry
+    # budget for nothing. PER_MINUTE stays the ceiling -- raising the site
+    # limit mid-run does not speed the backfill past what was asked for.
+    current_interval =
+      lambda do
+        allowed = [
+          per_minute,
+          SiteSetting.babel_reunited_rate_limit_per_minute.to_i
+        ].min
+        allowed = 1 if allowed < 1
+        60.0 / allowed
+      end
+
+    puts ""
+    puts "Detecting #{outstanding} post(s) at #{per_minute}/minute " \
+           "(~#{minutes} minute(s)). Leave this process running."
+    puts "Interrupting is safe: results are recorded as they land, and " \
+           "re-running picks up whatever is left."
+    puts "Run only one at a time. A second process cannot push past the site " \
+           "rate limit, but it can detect the same post twice and pay twice."
+    puts ""
+
+    detected = 0
+    unresolved = 0
+    failed = 0
+    superseded = 0
+    interrupted = false
+    stop = false
+    disabled = false
+
+    begin
+      scope
+        .includes(:topic)
+        .find_in_batches(batch_size: batch_size) do |posts|
+          # Not Post.preload_custom_fields: that installs a read-only proxy,
+          # and this pass writes the field it is reading.
+          BabelReunited.preload_detection_fields(posts)
+
+          posts.each do |post|
+            processed = detected + unresolved + failed + superseded
+            if limit && processed >= limit
+              stop = true
+              break
+            end
+
+            # translatable_post? refuses everything once the switch is off, so
+            # nothing would go out either way. Stopping on it explicitly is so
+            # the operator sees why, instead of watching the run skip eighteen
+            # hundred posts and claim it finished.
+            unless SiteSetting.babel_reunited_enabled
+              disabled = true
+              stop = true
+              break
+            end
+
+            next if BabelReunited.detection_current?(post)
+            next unless BabelReunited.translatable_post?(post)
+
+            service = BabelReunited::LanguageDetectionService.new(post: post)
+            next unless service.detectable?
+
+            started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+            # Taken before the call, checked after it: this is a live forum,
+            # and a post edited mid-call may already carry a newer detection
+            # that the edit itself triggered. record_detected_locale is what
+            # refuses to write this answer over that one.
+            sampled_sha = BabelReunited.detection_raw_sha(post)
+            # A taken slot ends this post's turn instead of starting a wait.
+            # Holding it here meant sleeping a full pacing window and then
+            # sending again -- and a second send re-opens every question the
+            # first one answered: the sample was captured before the wait, so
+            # an edit made during it went to the provider as the post's
+            # current content, and the switch, the post and its category all
+            # needed re-checking too. Re-running the task is what picks the
+            # post up, on fresh content. That is the contract it already has.
+            result =
+              begin
+                service.call
+              rescue BabelReunited::RateLimitError
+                BabelReunited::LanguageDetectionService::Result.new(
+                  error: "Rate limited",
+                  retryable: true
+                )
+              end
+
+            if result.success? || result.undetermined?
+              locale = result.locale || BabelReunited::UNDETERMINED_LOCALE
+              if BabelReunited.record_detected_locale(post, locale, sampled_sha)
+                result.success? ? detected += 1 : unresolved += 1
+              else
+                # The content moved under this answer, or another detection
+                # recorded one for it first. Either way what is on record now
+                # is at least as current as this, so there is nothing to do
+                # and nothing to fix.
+                superseded += 1
+              end
+            else
+              # Nothing recorded, so the next run finds this post again. That
+              # is the retry: there is no queue here to hold one.
+              failed += 1
+              ::BabelReunited::TranslationLogger.log_translation_skipped(
+                post_id: post.id,
+                target_language: "detect",
+                reason: "backfill_detection_failed: #{result.error}"
+              )
+            end
+
+            processed = detected + unresolved + failed + superseded
+            if (processed % 25).zero?
+              puts "  #{processed}/#{outstanding} " \
+                     "(detected #{detected}, unresolved #{unresolved}, " \
+                     "failed #{failed})"
+            end
+
+            interval = current_interval.call
+            elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+            sleep(interval - elapsed) if elapsed < interval
+          end
+
+          break if stop
+        end
+    rescue Interrupt
+      interrupted = true
+    end
+
+    puts ""
+    puts "Interrupted; stopping here." if interrupted
+    if disabled
+      puts "Plugin was disabled mid-run; stopped without sending more."
+    end
+    puts "Detected: #{detected}"
+    puts "No supported language (recorded, will not be retried): #{unresolved}"
+    puts "Failed, left for a re-run: #{failed}"
+    puts "Superseded mid-detection, discarded: #{superseded}" if superseded > 0
+    puts ""
+    puts "Do NOT run cleanup_same_language_copies yet."
+    puts "Re-run this task and wait until 'still needing detection' reaches 0."
+  end
+
   desc "Remove translation records whose language matches the post's detected language (legacy source-to-source copies)"
   task cleanup_same_language_copies: :environment do
     dry_run = ENV["DRY_RUN"] != "false"

@@ -23,6 +23,14 @@ module ::BabelReunited
   DETECTED_LOCALE_FIELD = "babel_detected_locale"
   DETECTED_SHA_FIELD = "babel_detected_sha"
 
+  # Recorded when the detector answers in a well-formed way we cannot use: it
+  # reports the language as undetermined, or names one outside the supported
+  # list. Asking again sends the same text and gets the same answer, so this
+  # is stored against the content like any other result. Readers still see
+  # "unknown" -- detected_locale_for filters it out -- but the backfill counts
+  # the post as answered, which is what lets a re-run reach zero.
+  UNDETERMINED_LOCALE = "und"
+
   def self.preferred_language_for(user)
     return nil unless user
 
@@ -275,7 +283,8 @@ module ::BabelReunited
 
   def self.detected_locale_for(post)
     return nil if post.blank?
-    detection_field(post, DETECTED_LOCALE_FIELD).presence
+    locale = detection_field(post, DETECTED_LOCALE_FIELD).presence
+    locale == UNDETERMINED_LOCALE ? nil : locale
   end
 
   # Detection is bound to the raw content it sampled: a post rewritten in
@@ -284,9 +293,14 @@ module ::BabelReunited
     Digest::SHA256.hexdigest(post.raw.to_s)
   end
 
+  # Whether an answer is on record for the post's current content -- a
+  # language, or UNDETERMINED_LOCALE. Deliberately not the same question as
+  # "do we know the language"; callers that need that ask
+  # current_detected_locale_for. Keeping the two apart is what lets a post the
+  # detector cannot classify count as answered instead of outstanding.
   def self.detection_current?(post)
     return false if post.blank?
-    detected_locale_for(post).present? &&
+    detection_field(post, DETECTED_LOCALE_FIELD).present? &&
       detection_field(post, DETECTED_SHA_FIELD) == detection_raw_sha(post)
   end
 
@@ -300,7 +314,15 @@ module ::BabelReunited
 
   # Mirrors the translate job's guards. Detection ships post content to a
   # third-party provider, so it must refuse the same posts translation does.
+  #
+  # The global switch belongs here rather than only at the entry points: it is
+  # what an admin flips when something is wrong, and callers that check it
+  # once and then work through a queue -- a job that was already enqueued, an
+  # hour-long backfill -- would keep sending content after it was thrown.
+  # Asked immediately before each call, throwing it stops everything that has
+  # not gone out yet.
   def self.translatable_post?(post)
+    return false unless SiteSetting.babel_reunited_enabled
     return false if post.blank? || post.raw.blank?
     return false if post.deleted_at.present? || post.hidden?
     translation_enabled_for_post?(post)
@@ -317,26 +339,121 @@ module ::BabelReunited
     ApplicationLayoutPreloader.banner_json_cache.clear
   end
 
+  # A preload is a snapshot, and reload does not touch it: it is a plain ivar,
+  # not an association cache. Any code that has to see the field as it is now
+  # -- after a write here, or after taking a lock somebody else may have
+  # written under -- has to drop it first.
+  def self.clear_detection_preload(post)
+    return if post.blank?
+    return unless post.instance_variable_defined?(DETECTION_PRELOAD_IVAR)
+
+    post.remove_instance_variable(DETECTION_PRELOAD_IVAR)
+  end
+
   def self.store_detected_locale(post, locale, raw_sha: nil)
     return if post.blank? || locale.blank?
     post.custom_fields[DETECTED_LOCALE_FIELD] = locale
     post.custom_fields[DETECTED_SHA_FIELD] = raw_sha || detection_raw_sha(post)
     post.save_custom_fields
-    # A preload taken before this write would now be wrong.
-    if post.instance_variable_defined?(DETECTION_PRELOAD_IVAR)
-      post.remove_instance_variable(DETECTION_PRELOAD_IVAR)
+    clear_detection_preload(post)
+  end
+
+  # The one way a detection result becomes a record. Both the job and the rake
+  # backfill go through here, because the two guards below are easy to have in
+  # one path and not the other, and each is silent when it is missing.
+  #
+  # The result is refused unless it still describes the post's current content.
+  # A post edited mid-call may already carry a newer, correct detection -- the
+  # edit triggers one -- and writing the older answer over it does not just
+  # miss, it destroys a result that was right and leaves the post needing
+  # detection again.
+  #
+  # Publishing is the other half: detection lands seconds after a page
+  # renders, so a client that loaded in the gap believes the language is
+  # unknown and offers to translate the post into itself. Only a real language
+  # corrects that; an undetermined post already renders as one with no
+  # detection, so it stays quiet.
+  #
+  # Returns whether the result was recorded.
+  def self.record_detected_locale(post, locale, sampled_sha)
+    return false if post.blank?
+
+    recorded = false
+
+    begin
+      # The row lock is what makes deciding and writing one step. Checking and
+      # then writing leaves a gap, and the writer that fits in it is the one
+      # that matters: a detection triggered by the edit, holding the answer
+      # for the new content. Every writer takes this lock, so they serialize
+      # and the loser re-reads and stands down.
+      post.with_lock do
+        # with_lock reloads the row, but the detection preload is an ivar and
+        # survives that. A caller that preloaded before its provider call --
+        # the backfill does, for every post in the batch -- is holding a
+        # snapshot taken before any of this, and reading it here would make
+        # the check below answer about the past.
+        clear_detection_preload(post)
+
+        # Another detection of this same content may have finished while this
+        # one was in flight -- a queued job and the backfill can overlap on
+        # one post. Two answers for one sha are two calls that may disagree,
+        # and since publishing happens after the transaction the second write
+        # can reach clients before the first, leaving them on a locale the
+        # database does not hold. First result recorded wins; this one stands
+        # down having changed nothing.
+        next if detection_current?(post)
+
+        # Eligibility is checked before the call as well, but a post can be
+        # hidden or trashed while it is in flight and neither shows up as a
+        # missing row -- reload is unscoped, so only a hard delete raises.
+        if detection_raw_sha(post) == sampled_sha && translatable_post?(post)
+          store_detected_locale(post, locale, raw_sha: sampled_sha)
+          recorded = true
+        end
+      end
+    rescue ActiveRecord::RecordNotFound
+      # Deleted outright while the call was in flight. Nothing to record, and
+      # nothing to retry either.
+      return false
     end
+
+    # After the transaction: a message about a write that has not committed
+    # describes something that may never become true.
+    if recorded && locale != UNDETERMINED_LOCALE
+      publish_detected_locale(post, locale)
+    end
+    recorded
+  end
+
+  def self.publish_detected_locale(post, locale)
+    MessageBus.publish(
+      "/post-translations/#{post.id}",
+      { post_id: post.id, detected_locale: locale },
+      **BabelReunited::MessageBusAudience.options_for(post)
+    )
   end
 
   # Lazy convergence for posts created before detection existed. Deduplicated
   # via Redis so a burst of translate jobs enqueues one detection, not N.
-  def self.enqueue_detection_backfill(post)
-    return if post.blank?
+  def self.detection_backfill_key(post_id)
+    "babel_reunited:detect_enqueued:#{post_id}"
+  end
 
-    key = "babel_reunited:detect_enqueued:#{post.id}"
-    return unless Discourse.redis.set(key, "1", nx: true, ex: 600)
+  # Every post that carries a translation, as a relation rather than a list of
+  # ids: the rake backfill streams it, and a subquery keeps translations whose
+  # post is gone from being counted as work.
+  def self.posts_needing_detection
+    Post.where(id: BabelReunited::PostTranslation.select(:post_id))
+  end
+
+  def self.enqueue_detection_backfill(post)
+    return false if post.blank?
+
+    key = detection_backfill_key(post.id)
+    return false unless Discourse.redis.set(key, "1", nx: true, ex: 600)
 
     Jobs.enqueue(Jobs::BabelReunited::DetectPostLanguageJob, post_id: post.id)
+    true
   end
 
   # Enqueues pre-translate layer jobs, skipping the post's own language when

@@ -32,22 +32,59 @@ module BabelReunited
     # the distinction: fanning out with no detection result pays to translate
     # a post into the language it is already written in, and that record then
     # looks completed to everything downstream.
+    #
+    # undetermined is the third case, and the one a backfill needs: the model
+    # answered properly and the answer is that this text has no language we
+    # support. That is a result about the content, not a failure to get one,
+    # so the caller records it instead of retrying it forever.
     Result =
-      Struct.new(:locale, :error, :retryable, keyword_init: true) do
+      Struct.new(
+        :locale,
+        :error,
+        :retryable,
+        :undetermined,
+        keyword_init: true
+      ) do
         def success? = error.nil?
         def failure? = !success?
         def retryable? = !!retryable
+        def undetermined? = !!undetermined
       end
 
     def initialize(post:)
       @post = post
     end
 
+    # What is missing before any detection can succeed, or nil when nothing
+    # is. Checked without making a call, so a bulk caller can refuse to queue
+    # thousands of jobs that would each fail the same way on a missing key --
+    # none of which records anything, leaving a backfill unable to ever report
+    # itself finished.
+    def self.configuration_error
+      config = BabelReunited::ModelConfig.get_config
+      return "Invalid preset model" if config.nil?
+      return "API key not configured" if config[:api_key].blank?
+      return "Base URL not configured" if config[:base_url].blank?
+      return "Model name not configured" if config[:model_name].blank?
+
+      nil
+    end
+
+    # Whether this post carries enough natural language for detection to have
+    # any chance. Public because a bulk caller needs to tell "not tried yet"
+    # apart from "will never succeed": a post that is only a code block or a
+    # link fails identically on every attempt, and re-queueing it forever
+    # would keep a backfill from ever reporting itself finished.
+    def detectable?
+      return false if @post.blank?
+
+      sample.gsub(/\s+/, "").length >= MIN_SAMPLE_LENGTH
+    end
+
     def call
       return Result.new(error: "Post not found") if @post.blank?
 
-      sample = build_sample
-      if sample.gsub(/\s+/, "").length < MIN_SAMPLE_LENGTH
+      unless detectable?
         return Result.new(error: "Content too short for detection")
       end
 
@@ -69,16 +106,26 @@ module BabelReunited
         )
       end
 
-      locale = normalize_locale(response[:text])
-      if locale
-        Result.new(locale: locale)
-      else
-        Result.new(
-          error:
-            "Unrecognized detection response: #{response[:text].to_s.strip[0, 40]}",
-          retryable: true
+      code = normalize_code(response[:text])
+      return Result.new(locale: code) if BabelReunited::Locales.valid?(code)
+
+      # A well-formed code we do not support -- including the "und" the prompt
+      # asks for when the language cannot be determined. The model did its job;
+      # retrying sends the same sample and gets the same answer back.
+      if BabelReunited::Locales.format_valid?(code)
+        return(
+          Result.new(
+            error: "Undetermined language: #{code}",
+            undetermined: true
+          )
         )
       end
+
+      Result.new(
+        error:
+          "Unrecognized detection response: #{response[:text].to_s.strip[0, 40]}",
+        retryable: true
+      )
     rescue BabelReunited::RateLimitError
       raise
     rescue Faraday::Error => e
@@ -89,6 +136,10 @@ module BabelReunited
     end
 
     private
+
+    def sample
+      @sample ||= build_sample
+    end
 
     def build_sample
       # Code blocks carry no language signal and can contain secrets that
@@ -131,10 +182,9 @@ module BabelReunited
       "<#{sample_tag}>\n#{sample}\n</#{sample_tag}>"
     end
 
-    def normalize_locale(text)
+    def normalize_code(text)
       code = text.to_s.strip.downcase.gsub(/\A["'`\s]+|["'`.\s]+\z/, "")
-      code = LOCALE_ALIASES.fetch(code, code)
-      BabelReunited::Locales.valid?(code) ? code : nil
+      LOCALE_ALIASES.fetch(code, code)
     end
 
     # Only statuses another attempt could clear. A 400/401/403 means the
@@ -147,15 +197,10 @@ module BabelReunited
     end
 
     def api_config
-      config = BabelReunited::ModelConfig.get_config
-      return { error: "Invalid preset model" } if config.nil?
-      return { error: "API key not configured" } if config[:api_key].blank?
-      return { error: "Base URL not configured" } if config[:base_url].blank?
-      if config[:model_name].blank?
-        return { error: "Model name not configured" }
-      end
+      error = self.class.configuration_error
+      return { error: error } if error
 
-      config
+      BabelReunited::ModelConfig.get_config
     end
 
     def request_detection(sample, config)
