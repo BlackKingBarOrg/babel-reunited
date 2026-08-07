@@ -341,6 +341,77 @@ module ::BabelReunited
     Post.where(id: BabelReunited::PostTranslation.select(:post_id))
   end
 
+  # Only one dispatcher chain may run. The per-post claim stops two chains
+  # handing out the same post; it does nothing about two chains each finding
+  # a different batch, which would double the rate the pacing exists to hold.
+  # The lease is short so a chain that dies frees it within a couple of
+  # passes, and every pass renews it.
+  BACKFILL_LEASE_TTL = 180
+
+  def self.backfill_lease_key
+    "babel_reunited:backfill_dispatcher"
+  end
+
+  def self.backfill_lease_active?
+    Discourse.redis.exists?(backfill_lease_key)
+  end
+
+  # Returns a token, or nil when a chain already holds the lease.
+  def self.acquire_backfill_lease
+    token = SecureRandom.hex(16)
+    unless Discourse.redis.set(
+             backfill_lease_key,
+             token,
+             nx: true,
+             ex: BACKFILL_LEASE_TTL
+           )
+      return nil
+    end
+
+    token
+  end
+
+  # Compare-and-set, so a chain that lost its lease to a restart cannot renew
+  # it out from under the chain that replaced it.
+  RENEW_BACKFILL_LEASE = <<~LUA
+    if redis.call('get', KEYS[1]) == ARGV[1] then
+      return redis.call('expire', KEYS[1], ARGV[2])
+    else
+      return 0
+    end
+  LUA
+
+  def self.renew_backfill_lease(token)
+    return false if token.blank?
+
+    Discourse
+      .redis
+      .eval(
+        RENEW_BACKFILL_LEASE,
+        keys: [Discourse.redis.namespace_key(backfill_lease_key)],
+        argv: [token, BACKFILL_LEASE_TTL]
+      )
+      .to_i == 1
+  end
+
+  RELEASE_BACKFILL_LEASE = <<~LUA
+    if redis.call('get', KEYS[1]) == ARGV[1] then
+      return redis.call('del', KEYS[1])
+    else
+      return 0
+    end
+  LUA
+
+  def self.release_backfill_lease(token)
+    return if token.blank?
+
+    Discourse.redis.eval(
+      RELEASE_BACKFILL_LEASE,
+      keys: [Discourse.redis.namespace_key(backfill_lease_key)],
+      argv: [token]
+    )
+  end
+
   # Returns whether this call is the one that queued the job, so a caller
   # counting work has something truthful to count.
   def self.enqueue_detection_backfill(post, delay: nil)

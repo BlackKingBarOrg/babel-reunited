@@ -440,14 +440,33 @@ namespace :babel_reunited do
       # PER_MINUTE per minute measured from when it actually runs, so a
       # Sidekiq restart delays the backfill instead of collapsing it into a
       # burst that the rate limiter refuses.
+      #
+      # And exactly one: this task is meant to be re-run to check progress,
+      # and a second chain would quietly double the rate. The per-post claim
+      # does not help -- two chains simply find different posts.
+      token = BabelReunited.acquire_backfill_lease
+      if token.nil?
+        puts ""
+        puts "A dispatcher is already running; not starting another."
+        puts "Re-run this task to watch 'still needing detection' fall."
+        next
+      end
+
       Jobs.enqueue(
         Jobs::BabelReunited::BackfillDetectionDispatcher,
-        per_minute: per_minute
+        per_minute: per_minute,
+        remaining: limit,
+        lease_token: token
       )
 
       puts ""
-      puts "Started the dispatcher: #{per_minute} detection(s) per minute, " \
-             "~#{minutes} minute(s) for #{outstanding} post(s)."
+      if limit
+        puts "Started the dispatcher for #{limit} post(s) at " \
+               "#{per_minute}/minute (LIMIT)."
+      else
+        puts "Started the dispatcher: #{per_minute} detection(s) per minute, " \
+               "~#{minutes} minute(s) for #{outstanding} post(s)."
+      end
       puts "It re-arms itself each minute and stops when nothing is left, so " \
              "a restart delays it rather than losing it."
       puts ""

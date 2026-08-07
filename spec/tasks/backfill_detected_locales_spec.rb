@@ -141,4 +141,47 @@ RSpec.describe "babel_reunited:backfill_detected_locales" do
       /still needing detection: 1.*stopped early at LIMIT/m
     ).to_stdout
   end
+
+  # Reporting one post and then handing the dispatcher the whole forum is the
+  # opposite of the cautious first pass LIMIT exists for.
+  it "passes LIMIT to the dispatcher on a live run" do
+    ENV["DRY_RUN"] = "false"
+    ENV["LIMIT"] = "1"
+    Fabricate(:post_translation, post: post_record, language: "es")
+    second = Fabricate(:post, topic: topic, user: user)
+    Fabricate(:post_translation, post: second, language: "es")
+
+    task.invoke
+
+    expect(dispatcher_jobs.first["args"].first["remaining"]).to eq(1)
+  end
+
+  # The runbook asks for repeated runs to watch progress; each one starting
+  # another chain would quietly multiply the rate.
+  it "does not start a second dispatcher while one is running" do
+    ENV["DRY_RUN"] = "false"
+    Fabricate(:post_translation, post: post_record, language: "es")
+
+    task.invoke
+    expect(dispatcher_jobs.size).to eq(1)
+
+    task.reenable
+    expect { task.invoke }.to output(/already running/).to_stdout
+    expect(dispatcher_jobs.size).to eq(1)
+  end
+
+  it "starts one again after the previous chain finished" do
+    ENV["DRY_RUN"] = "false"
+    Fabricate(:post_translation, post: post_record, language: "es")
+
+    task.invoke
+    BabelReunited.release_backfill_lease(
+      Discourse.redis.get(BabelReunited.backfill_lease_key)
+    )
+    dispatcher_jobs.clear
+
+    task.reenable
+    expect { task.invoke }.to output(/Started the dispatcher/).to_stdout
+    expect(dispatcher_jobs.size).to eq(1)
+  end
 end

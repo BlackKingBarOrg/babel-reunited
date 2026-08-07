@@ -22,25 +22,54 @@ class Jobs::BabelReunited::BackfillDetectionDispatcher < ::Jobs::Base
   INTERVAL = 60
 
   def execute(args)
-    return unless SiteSetting.babel_reunited_enabled
-    # A missing provider makes every dispatch a certain failure that records
-    # nothing, and this would keep re-arming itself forever.
-    return if BabelReunited::LanguageDetectionService.configuration_error
+    token = args[:lease_token]
 
+    # Renewing first is also the check that this chain is still the one that
+    # should be running: a chain whose lease expired has been replaced, and
+    # two chains dispatching would double the rate this exists to hold.
+    return unless BabelReunited.renew_backfill_lease(token)
+
+    unless SiteSetting.babel_reunited_enabled &&
+             BabelReunited::LanguageDetectionService.configuration_error.nil?
+      # A missing provider makes every dispatch a certain failure that records
+      # nothing. Give the lease back rather than re-arming forever.
+      BabelReunited.release_backfill_lease(token)
+      return
+    end
+
+    # Read from the setting every pass, not once at the start: an admin who
+    # lowers the allowance mid-run means it now, and this chain may have been
+    # started an hour ago.
     per_minute = args[:per_minute].to_i
     per_minute = 1 if per_minute < 1
+    per_minute = [
+      per_minute,
+      SiteSetting.babel_reunited_rate_limit_per_minute
+    ].min
+    per_minute = 1 if per_minute < 1
+
+    # nil means "everything"; a number is what LIMIT asked for and has to
+    # survive the whole chain, or a cautious first pass turns into a full run.
+    remaining = args[:remaining]
+    per_minute = [per_minute, remaining.to_i].min if remaining
 
     dispatched = dispatch(per_minute)
 
-    # Nothing left means nothing to come back for. The rake task is what
-    # starts a new dispatcher once there is.
-    return if dispatched.zero?
+    remaining = remaining.to_i - dispatched if remaining
+
+    # Nothing left to hand out, or the requested share is spent. Either way
+    # this chain is done and the lease belongs to whoever comes next.
+    if dispatched.zero? || (remaining && remaining <= 0)
+      BabelReunited.release_backfill_lease(token)
+      return
+    end
 
     Jobs.enqueue_in(
       INTERVAL,
       self.class,
-      per_minute: per_minute,
-      dispatcher_id: args[:dispatcher_id]
+      per_minute: args[:per_minute],
+      remaining: remaining,
+      lease_token: token
     )
   end
 
@@ -48,6 +77,7 @@ class Jobs::BabelReunited::BackfillDetectionDispatcher < ::Jobs::Base
 
   def dispatch(per_minute)
     dispatched = 0
+    return dispatched if per_minute < 1
 
     BabelReunited
       .posts_needing_detection
