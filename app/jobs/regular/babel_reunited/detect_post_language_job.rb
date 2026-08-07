@@ -32,15 +32,21 @@ class Jobs::BabelReunited::DetectPostLanguageJob < ::Jobs::Base
       sampled_sha = BabelReunited.detection_raw_sha(post)
       result = BabelReunited::LanguageDetectionService.new(post: post).call
 
-      if result.success?
+      if result.success? || result.undetermined?
         post.reload
         if BabelReunited.detection_raw_sha(post) == sampled_sha
+          # The undetermined answer is recorded like any other: it is a fact
+          # about this content, and leaving it unrecorded is what makes a post
+          # get re-detected on every pass forever.
+          locale = result.locale || BabelReunited::UNDETERMINED_LOCALE
           BabelReunited.store_detected_locale(
             post,
-            result.locale,
+            locale,
             raw_sha: sampled_sha
           )
-          publish_detected_locale(post, result.locale)
+          # Only a real language corrects what the reader is looking at; an
+          # undetermined post already renders as one with no detection.
+          publish_detected_locale(post, locale) if result.success?
         else
           # The post changed while detection ran; the result may describe the
           # old content. Discard it and try again shortly.

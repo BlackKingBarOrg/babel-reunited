@@ -23,6 +23,14 @@ module ::BabelReunited
   DETECTED_LOCALE_FIELD = "babel_detected_locale"
   DETECTED_SHA_FIELD = "babel_detected_sha"
 
+  # Recorded when the detector answers in a well-formed way we cannot use: it
+  # reports the language as undetermined, or names one outside the supported
+  # list. Asking again sends the same text and gets the same answer, so this
+  # is stored against the content like any other result. Readers still see
+  # "unknown" -- detected_locale_for filters it out -- but the backfill counts
+  # the post as answered, which is what lets a re-run reach zero.
+  UNDETERMINED_LOCALE = "und"
+
   def self.preferred_language_for(user)
     return nil unless user
 
@@ -275,7 +283,8 @@ module ::BabelReunited
 
   def self.detected_locale_for(post)
     return nil if post.blank?
-    detection_field(post, DETECTED_LOCALE_FIELD).presence
+    locale = detection_field(post, DETECTED_LOCALE_FIELD).presence
+    locale == UNDETERMINED_LOCALE ? nil : locale
   end
 
   # Detection is bound to the raw content it sampled: a post rewritten in
@@ -284,9 +293,14 @@ module ::BabelReunited
     Digest::SHA256.hexdigest(post.raw.to_s)
   end
 
+  # Whether an answer is on record for the post's current content -- a
+  # language, or UNDETERMINED_LOCALE. Deliberately not the same question as
+  # "do we know the language"; callers that need that ask
+  # current_detected_locale_for. Keeping the two apart is what lets a post the
+  # detector cannot classify count as answered instead of outstanding.
   def self.detection_current?(post)
     return false if post.blank?
-    detected_locale_for(post).present? &&
+    detection_field(post, DETECTED_LOCALE_FIELD).present? &&
       detection_field(post, DETECTED_SHA_FIELD) == detection_raw_sha(post)
   end
 

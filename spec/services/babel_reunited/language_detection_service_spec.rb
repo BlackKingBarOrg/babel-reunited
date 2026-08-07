@@ -59,11 +59,36 @@ RSpec.describe BabelReunited::LanguageDetectionService do
     end
   end
 
-  it "fails on codes outside the supported list" do
+  # The prompt asks for "und" when the language cannot be determined, so this
+  # is the model answering correctly, not failing. Retrying sends the same
+  # sample and gets the same answer, which is why the caller records it
+  # instead: an unrecorded post is re-detected on every backfill pass forever.
+  it "reports an undetermined answer as terminal, not retryable" do
     stub_detection("und")
 
     result = described_class.new(post: post_record).call
     expect(result.failure?).to be true
+    expect(result.undetermined?).to be true
+    expect(result.retryable?).to be false
+  end
+
+  # A real language we do not support is the same kind of answer.
+  it "treats a well-formed code outside the supported list as undetermined" do
+    stub_detection("bo")
+
+    result = described_class.new(post: post_record).call
+    expect(result.undetermined?).to be true
+    expect(result.retryable?).to be false
+  end
+
+  # A sentence rather than a code means the call went wrong, not that the
+  # text has no language: that is worth another attempt.
+  it "still retries an answer that is not a language code at all" do
+    stub_detection("I think this text is written in English.")
+
+    result = described_class.new(post: post_record).call
+    expect(result.undetermined?).to be false
+    expect(result.retryable?).to be true
     expect(result.error).to include("Unrecognized detection response")
   end
 

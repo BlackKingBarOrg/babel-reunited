@@ -31,6 +31,18 @@ RSpec.describe Jobs::BabelReunited::DetectPostLanguageJob do
       )
   end
 
+  def stub_detection_undetermined
+    BabelReunited::LanguageDetectionService
+      .any_instance
+      .stubs(:call)
+      .returns(
+        BabelReunited::LanguageDetectionService::Result.new(
+          error: "Undetermined language: und",
+          undetermined: true
+        )
+      )
+  end
+
   it "stores the detected locale and content fingerprint on the post" do
     stub_detection_success("en")
 
@@ -67,6 +79,36 @@ RSpec.describe Jobs::BabelReunited::DetectPostLanguageJob do
       end
 
     expect(messages).to be_empty
+  end
+
+  # "No language I support" is an answer about the post, not a failure to get
+  # one. Recording it against the current content is what stops every later
+  # pass from paying to ask the same question again.
+  it "records an undetermined answer without publishing it" do
+    stub_detection_undetermined
+
+    messages =
+      MessageBus.track_publish("/post-translations/#{post_record.id}") do
+        described_class.new.execute(post_id: post_record.id)
+      end
+
+    post_record.reload
+    expect(BabelReunited.detection_current?(post_record)).to be true
+    # Readers keep seeing an unlabelled post: this is not a language.
+    expect(BabelReunited.detected_locale_for(post_record)).to be_nil
+    expect(messages).to be_empty
+  end
+
+  it "fans out to every language when the answer is undetermined" do
+    stub_detection_undetermined
+
+    described_class.new.execute(post_id: post_record.id, then_fanout: true)
+
+    expect(
+      BabelReunited::PostTranslation.where(post_id: post_record.id).pluck(
+        :language
+      )
+    ).to contain_exactly("zh-cn", "en", "es")
   end
 
   it "does not re-detect when the detection is current" do

@@ -32,11 +32,23 @@ module BabelReunited
     # the distinction: fanning out with no detection result pays to translate
     # a post into the language it is already written in, and that record then
     # looks completed to everything downstream.
+    #
+    # undetermined is the third case, and the one a backfill needs: the model
+    # answered properly and the answer is that this text has no language we
+    # support. That is a result about the content, not a failure to get one,
+    # so the caller records it instead of retrying it forever.
     Result =
-      Struct.new(:locale, :error, :retryable, keyword_init: true) do
+      Struct.new(
+        :locale,
+        :error,
+        :retryable,
+        :undetermined,
+        keyword_init: true
+      ) do
         def success? = error.nil?
         def failure? = !success?
         def retryable? = !!retryable
+        def undetermined? = !!undetermined
       end
 
     def initialize(post:)
@@ -94,16 +106,26 @@ module BabelReunited
         )
       end
 
-      locale = normalize_locale(response[:text])
-      if locale
-        Result.new(locale: locale)
-      else
-        Result.new(
-          error:
-            "Unrecognized detection response: #{response[:text].to_s.strip[0, 40]}",
-          retryable: true
+      code = normalize_code(response[:text])
+      return Result.new(locale: code) if BabelReunited::Locales.valid?(code)
+
+      # A well-formed code we do not support -- including the "und" the prompt
+      # asks for when the language cannot be determined. The model did its job;
+      # retrying sends the same sample and gets the same answer back.
+      if BabelReunited::Locales.format_valid?(code)
+        return(
+          Result.new(
+            error: "Undetermined language: #{code}",
+            undetermined: true
+          )
         )
       end
+
+      Result.new(
+        error:
+          "Unrecognized detection response: #{response[:text].to_s.strip[0, 40]}",
+        retryable: true
+      )
     rescue BabelReunited::RateLimitError
       raise
     rescue Faraday::Error => e
@@ -160,10 +182,9 @@ module BabelReunited
       "<#{sample_tag}>\n#{sample}\n</#{sample_tag}>"
     end
 
-    def normalize_locale(text)
+    def normalize_code(text)
       code = text.to_s.strip.downcase.gsub(/\A["'`\s]+|["'`.\s]+\z/, "")
-      code = LOCALE_ALIASES.fetch(code, code)
-      BabelReunited::Locales.valid?(code) ? code : nil
+      LOCALE_ALIASES.fetch(code, code)
     end
 
     # Only statuses another attempt could clear. A 400/401/403 means the
