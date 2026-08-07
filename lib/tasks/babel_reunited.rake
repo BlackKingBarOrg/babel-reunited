@@ -476,53 +476,6 @@ namespace :babel_reunited do
            "rate limit, but it can detect the same post twice and pay twice."
     puts ""
 
-    # The allowance is shared with live translation traffic, so a slot can be
-    # taken even while this loop paces itself correctly. Waiting for the next
-    # one keeps the post in this run; giving up on it after a few tries keeps
-    # a busy forum from stalling the whole backfill on one post.
-    detect =
-      lambda do |post, service|
-        attempts = 0
-        begin
-          service.call
-        rescue BabelReunited::RateLimitError
-          attempts += 1
-          if attempts > 5
-            next(
-              BabelReunited::LanguageDetectionService::Result.new(
-                error: "Rate limited",
-                retryable: true
-              )
-            )
-          end
-
-          sleep(current_interval.call)
-
-          # The wait is a full pacing window, up to a minute. A retry is
-          # another call to the provider, so it has to clear the gate the
-          # first one cleared -- the switch may have been thrown, or the post
-          # hidden or removed, while this slept. The row is re-read because
-          # none of that shows up in the copy loaded before the call.
-          sendable =
-            begin
-              post.reload
-              BabelReunited.translatable_post?(post)
-            rescue ActiveRecord::RecordNotFound
-              false
-            end
-          unless sendable
-            next(
-              BabelReunited::LanguageDetectionService::Result.new(
-                error: "No longer allowed to send",
-                retryable: true
-              )
-            )
-          end
-
-          retry
-        end
-      end
-
     detected = 0
     unresolved = 0
     failed = 0
@@ -568,7 +521,23 @@ namespace :babel_reunited do
             # that the edit itself triggered. record_detected_locale is what
             # refuses to write this answer over that one.
             sampled_sha = BabelReunited.detection_raw_sha(post)
-            result = detect.call(post, service)
+            # A taken slot ends this post's turn instead of starting a wait.
+            # Holding it here meant sleeping a full pacing window and then
+            # sending again -- and a second send re-opens every question the
+            # first one answered: the sample was captured before the wait, so
+            # an edit made during it went to the provider as the post's
+            # current content, and the switch, the post and its category all
+            # needed re-checking too. Re-running the task is what picks the
+            # post up, on fresh content. That is the contract it already has.
+            result =
+              begin
+                service.call
+              rescue BabelReunited::RateLimitError
+                BabelReunited::LanguageDetectionService::Result.new(
+                  error: "Rate limited",
+                  retryable: true
+                )
+              end
 
             if result.success? || result.undetermined?
               locale = result.locale || BabelReunited::UNDETERMINED_LOCALE
