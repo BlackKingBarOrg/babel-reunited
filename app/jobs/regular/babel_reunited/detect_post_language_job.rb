@@ -33,21 +33,12 @@ class Jobs::BabelReunited::DetectPostLanguageJob < ::Jobs::Base
       result = BabelReunited::LanguageDetectionService.new(post: post).call
 
       if result.success? || result.undetermined?
-        post.reload
-        if BabelReunited.detection_raw_sha(post) == sampled_sha
-          # The undetermined answer is recorded like any other: it is a fact
-          # about this content, and leaving it unrecorded is what makes a post
-          # get re-detected on every pass forever.
-          locale = result.locale || BabelReunited::UNDETERMINED_LOCALE
-          BabelReunited.store_detected_locale(
-            post,
-            locale,
-            raw_sha: sampled_sha
-          )
-          # Only a real language corrects what the reader is looking at; an
-          # undetermined post already renders as one with no detection.
-          publish_detected_locale(post, locale) if result.success?
-        else
+        # The undetermined answer is recorded like any other: it is a fact
+        # about this content, and leaving it unrecorded is what makes a post
+        # get re-detected on every pass forever.
+        locale = result.locale || BabelReunited::UNDETERMINED_LOCALE
+
+        unless BabelReunited.record_detected_locale(post, locale, sampled_sha)
           # The post changed while detection ran; the result may describe the
           # old content. Discard it and try again shortly.
           Jobs.enqueue_in(
@@ -78,18 +69,5 @@ class Jobs::BabelReunited::DetectPostLanguageJob < ::Jobs::Base
     BabelReunited.fanout_translations(post) if then_fanout
   rescue BabelReunited::RateLimitError, BabelReunited::DetectionError
     raise
-  end
-
-  private
-
-  # Detection lands seconds after the page renders, so a client that loaded
-  # during the gap believes the post's language is unknown and offers to
-  # translate it into itself. Reuse the translation channel to correct it.
-  def publish_detected_locale(post, locale)
-    MessageBus.publish(
-      "/post-translations/#{post.id}",
-      { post_id: post.id, detected_locale: locale },
-      **::BabelReunited::MessageBusAudience.options_for(post)
-    )
   end
 end

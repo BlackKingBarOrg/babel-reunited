@@ -79,6 +79,66 @@ RSpec.describe "babel_reunited:backfill_detected_locales" do
     expect(BabelReunited.detection_current?(post_record)).to be true
   end
 
+  # The backfill runs for an hour against a live forum, so a page open at the
+  # moment a post is detected has to be corrected the same way the job
+  # corrects it -- otherwise the reader is still offered a translation into
+  # the language the post is already written in.
+  it "publishes a detected locale so open pages stop offering it" do
+    ENV["DRY_RUN"] = "false"
+    Fabricate(:post_translation, post: post_record, language: "es")
+    stub_detection("en")
+
+    messages =
+      MessageBus.track_publish("/post-translations/#{post_record.id}") do
+        task.invoke
+      end
+
+    expect(messages.length).to eq(1)
+    expect(messages.first.data[:detected_locale]).to eq("en")
+  end
+
+  it "stays quiet about an undetermined answer" do
+    ENV["DRY_RUN"] = "false"
+    Fabricate(:post_translation, post: post_record, language: "es")
+    stub_detection("und")
+
+    messages =
+      MessageBus.track_publish("/post-translations/#{post_record.id}") do
+        task.invoke
+      end
+
+    expect(messages).to be_empty
+  end
+
+  # An edit during the call triggers its own detection, so by the time this
+  # answer comes back the post may already carry a newer, correct one.
+  # Writing the older answer over it would not just miss -- it would destroy
+  # a result that was right and leave the post needing detection again.
+  it "discards an answer whose content changed while the call was in flight" do
+    ENV["DRY_RUN"] = "false"
+    Fabricate(:post_translation, post: post_record, language: "es")
+
+    edited_raw = "Ceci est une phrase francaise assez longue pour la detection."
+    fake_service = Object.new
+    target = post_record
+    fake_service.define_singleton_method(:detectable?) { true }
+    fake_service.define_singleton_method(:call) do
+      # The reader edits, and the edit's own detection lands first.
+      target.update_columns(raw: edited_raw)
+      BabelReunited.store_detected_locale(target, "fr")
+      BabelReunited::LanguageDetectionService::Result.new(locale: "en")
+    end
+    BabelReunited::LanguageDetectionService.stubs(:new).returns(fake_service)
+
+    expect { task.invoke }.to output(
+      /Edited mid-detection, discarded: 1/
+    ).to_stdout
+
+    post_record.reload
+    expect(BabelReunited.detected_locale_for(post_record)).to eq("fr")
+    expect(BabelReunited.detection_current?(post_record)).to be true
+  end
+
   # The prompt asks for "und" when the language cannot be determined, and the
   # model may name a real language outside the supported list. Both are
   # answers about the content: without recording them the post stays

@@ -81,6 +81,19 @@ RSpec.describe BabelReunited::LanguageDetectionService do
     expect(result.retryable?).to be false
   end
 
+  # The boundary is the shape of the answer, not a full ISO register: "ok" is
+  # indistinguishable from a real code we happen not to support. Recording it
+  # as undetermined is the safe direction -- the post reads as undetected and
+  # fans out to every language, exactly as it does today -- and the
+  # alternative, retrying forever, is the bug this replaced.
+  it "treats a code-shaped answer it cannot place as undetermined" do
+    stub_detection("ok")
+
+    result = described_class.new(post: post_record).call
+    expect(result.undetermined?).to be true
+    expect(result.retryable?).to be false
+  end
+
   # A sentence rather than a code means the call went wrong, not that the
   # text has no language: that is worth another attempt.
   it "still retries an answer that is not a language code at all" do

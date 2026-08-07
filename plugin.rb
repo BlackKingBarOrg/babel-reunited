@@ -342,6 +342,48 @@ module ::BabelReunited
     end
   end
 
+  # The one way a detection result becomes a record. Both the job and the rake
+  # backfill go through here, because the two guards below are easy to have in
+  # one path and not the other, and each is silent when it is missing.
+  #
+  # The result is refused unless it still describes the post's current content.
+  # A post edited mid-call may already carry a newer, correct detection -- the
+  # edit triggers one -- and writing the older answer over it does not just
+  # miss, it destroys a result that was right and leaves the post needing
+  # detection again.
+  #
+  # Publishing is the other half: detection lands seconds after a page
+  # renders, so a client that loaded in the gap believes the language is
+  # unknown and offers to translate the post into itself. Only a real language
+  # corrects that; an undetermined post already renders as one with no
+  # detection, so it stays quiet.
+  #
+  # Returns whether the result was recorded.
+  def self.record_detected_locale(post, locale, sampled_sha)
+    return false if post.blank?
+
+    begin
+      post.reload
+    rescue ActiveRecord::RecordNotFound
+      # Deleted while the call was in flight. Nothing to record, and nothing
+      # to retry either.
+      return false
+    end
+    return false unless detection_raw_sha(post) == sampled_sha
+
+    store_detected_locale(post, locale, raw_sha: sampled_sha)
+    publish_detected_locale(post, locale) unless locale == UNDETERMINED_LOCALE
+    true
+  end
+
+  def self.publish_detected_locale(post, locale)
+    MessageBus.publish(
+      "/post-translations/#{post.id}",
+      { post_id: post.id, detected_locale: locale },
+      **BabelReunited::MessageBusAudience.options_for(post)
+    )
+  end
+
   # Lazy convergence for posts created before detection existed. Deduplicated
   # via Redis so a burst of translate jobs enqueues one detection, not N.
   def self.detection_backfill_key(post_id)

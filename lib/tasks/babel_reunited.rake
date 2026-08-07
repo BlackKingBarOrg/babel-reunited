@@ -458,6 +458,8 @@ namespace :babel_reunited do
            "(~#{minutes} minute(s)). Leave this process running."
     puts "Interrupting is safe: results are recorded as they land, and " \
            "re-running picks up whatever is left."
+    puts "Run only one at a time. A second process cannot push past the site " \
+           "rate limit, but it can detect the same post twice and pay twice."
     puts ""
 
     # The allowance is shared with live translation traffic, so a slot can be
@@ -487,6 +489,7 @@ namespace :babel_reunited do
     detected = 0
     unresolved = 0
     failed = 0
+    stale = 0
     interrupted = false
     stop = false
 
@@ -499,7 +502,7 @@ namespace :babel_reunited do
           BabelReunited.preload_detection_fields(posts)
 
           posts.each do |post|
-            processed = detected + unresolved + failed
+            processed = detected + unresolved + failed + stale
             if limit && processed >= limit
               stop = true
               break
@@ -512,21 +515,23 @@ namespace :babel_reunited do
             next unless service.detectable?
 
             started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-            # Taken before the call: the result describes the content that was
-            # sampled. If the post is edited while the call is in flight, the
-            # record simply does not apply to the new content and the normal
-            # detection path re-runs -- no reload needed to notice.
+            # Taken before the call, checked after it: this is a live forum,
+            # and a post edited mid-call may already carry a newer detection
+            # that the edit itself triggered. record_detected_locale is what
+            # refuses to write this answer over that one.
             sampled_sha = BabelReunited.detection_raw_sha(post)
             result = detect.call(service)
 
             if result.success? || result.undetermined?
               locale = result.locale || BabelReunited::UNDETERMINED_LOCALE
-              BabelReunited.store_detected_locale(
-                post,
-                locale,
-                raw_sha: sampled_sha
-              )
-              result.success? ? detected += 1 : unresolved += 1
+              if BabelReunited.record_detected_locale(post, locale, sampled_sha)
+                result.success? ? detected += 1 : unresolved += 1
+              else
+                # The content moved under this answer. Whatever is on record
+                # now is newer than what this call was looking at, so there is
+                # nothing to do and nothing to fix.
+                stale += 1
+              end
             else
               # Nothing recorded, so the next run finds this post again. That
               # is the retry: there is no queue here to hold one.
@@ -538,7 +543,7 @@ namespace :babel_reunited do
               )
             end
 
-            processed = detected + unresolved + failed
+            processed = detected + unresolved + failed + stale
             if (processed % 25).zero?
               puts "  #{processed}/#{outstanding} " \
                      "(detected #{detected}, unresolved #{unresolved}, " \
@@ -560,6 +565,7 @@ namespace :babel_reunited do
     puts "Detected: #{detected}"
     puts "No supported language (recorded, will not be retried): #{unresolved}"
     puts "Failed, left for a re-run: #{failed}"
+    puts "Edited mid-detection, discarded: #{stale}" if stale > 0
     puts ""
     puts "Do NOT run cleanup_same_language_copies yet."
     puts "Re-run this task and wait until 'still needing detection' reaches 0."
