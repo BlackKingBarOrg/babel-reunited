@@ -10,8 +10,8 @@ RSpec.describe "babel_reunited:backfill_detected_locales" do
   before do
     enable_current_plugin
     SiteSetting.babel_reunited_enabled = true
-    # A configured provider is the normal state; the task refuses to queue
-    # anything without one, which two examples below check deliberately.
+    # A configured provider is the normal state; the task refuses to start
+    # without one, which two examples below check deliberately.
     SiteSetting.babel_reunited_openai_api_key = "sk-test-key"
     SiteSetting.babel_reunited_preset_model = "gpt-4o"
     Discourse.redis.flushdb
@@ -28,50 +28,34 @@ RSpec.describe "babel_reunited:backfill_detected_locales" do
     ENV.delete("BATCH_SIZE")
   end
 
-  it "defaults to a dry run that enqueues nothing" do
+  def dispatcher_jobs
+    Jobs::BabelReunited::BackfillDetectionDispatcher.jobs
+  end
+
+  it "defaults to a dry run that starts nothing" do
     Fabricate(:post_translation, post: post_record, language: "es")
 
     expect { task.invoke }.to output(/DRY RUN/).to_stdout
-    expect(Jobs::BabelReunited::DetectPostLanguageJob.jobs).to be_empty
+    expect(dispatcher_jobs).to be_empty
   end
 
-  it "enqueues detection for a post whose translations predate detection" do
+  it "starts a dispatcher when there is work" do
     ENV["DRY_RUN"] = "false"
     Fabricate(:post_translation, post: post_record, language: "es")
 
-    task.invoke
-
-    expect(
-      job_enqueued?(
-        job: Jobs::BabelReunited::DetectPostLanguageJob,
-        args: {
-          post_id: post_record.id
-        }
-      )
-    ).to be true
+    expect { task.invoke }.to output(/Started the dispatcher/).to_stdout
+    expect(dispatcher_jobs.size).to eq(1)
   end
 
-  # The whole point of the backfill is to make cleanup_same_language_copies
-  # able to see these posts; asking for a fan-out here would start a
-  # translation for every language on every legacy post instead.
-  it "asks for detection only, never a fan-out" do
-    ENV["DRY_RUN"] = "false"
-    Fabricate(:post_translation, post: post_record, language: "es")
-
-    task.invoke
-
-    args = Jobs::BabelReunited::DetectPostLanguageJob.jobs.first["args"].first
-    expect(args["then_fanout"]).to be_falsey
-    expect(Jobs::BabelReunited::TranslatePostJob.jobs).to be_empty
-  end
-
-  it "skips a post already detected against its current content" do
+  it "counts a post that already has current detection as done" do
     ENV["DRY_RUN"] = "false"
     Fabricate(:post_translation, post: post_record, language: "es")
     BabelReunited.store_detected_locale(post_record, "en")
 
-    expect { task.invoke }.to output(/needing detection: 0/).to_stdout
-    expect(Jobs::BabelReunited::DetectPostLanguageJob.jobs).to be_empty
+    expect { task.invoke }.to output(
+      /still needing detection: 0.*Nothing left to detect/m
+    ).to_stdout
+    expect(dispatcher_jobs).to be_empty
   end
 
   it "ignores posts that have no translations at all" do
@@ -89,58 +73,7 @@ RSpec.describe "babel_reunited:backfill_detected_locales" do
     post_record.update!(hidden: true)
 
     expect { task.invoke }.to output(/not eligible.*: 1/).to_stdout
-    expect(Jobs::BabelReunited::DetectPostLanguageJob.jobs).to be_empty
-  end
-
-  # Detection shares one per-minute allowance with translation and the job
-  # retries three times over about three minutes. Enqueued all at once, most
-  # jobs burn those retries waiting for a slot and then die without a trace,
-  # leaving the cleanup that follows just as blind as before.
-  it "spreads the jobs out instead of dumping them into one minute" do
-    ENV["DRY_RUN"] = "false"
-    ENV["PER_MINUTE"] = "2"
-
-    posts = 5.times.map { Fabricate(:post, topic: topic, user: user) }
-    posts.each { |p| Fabricate(:post_translation, post: p, language: "es") }
-
-    task.invoke
-
-    delays =
-      Jobs::BabelReunited::DetectPostLanguageJob
-        .jobs
-        .map { |j| j["at"].to_i }
-        .sort
-    # Five jobs at two per minute: three distinct scheduling slots.
-    expect(delays.uniq.size).to be >= 3
-    expect(delays.max - delays.min).to be >= 100
-  end
-
-  # A job that is scheduled but has not run yet has produced no locale, so a
-  # re-run must still count that post as outstanding. Reporting it as done is
-  # how an operator ends up running cleanup against posts that were never
-  # detected -- the same silent failure the pacing exists to prevent.
-  it "still counts a post whose job is only queued as needing detection" do
-    ENV["DRY_RUN"] = "false"
-    Fabricate(:post_translation, post: post_record, language: "es")
-
-    task.invoke
-    expect(Jobs::BabelReunited::DetectPostLanguageJob.jobs.size).to eq(1)
-
-    task.reenable
-    expect { task.invoke }.to output(
-      /still needing detection: 1.*newly queued by this run: 0.*already queued by an earlier run: 1/m
-    ).to_stdout
-    expect(Jobs::BabelReunited::DetectPostLanguageJob.jobs.size).to eq(1)
-  end
-
-  it "reports nothing left once detection has actually landed" do
-    ENV["DRY_RUN"] = "false"
-    Fabricate(:post_translation, post: post_record, language: "es")
-    BabelReunited.store_detected_locale(post_record, "en")
-
-    expect { task.invoke }.to output(
-      /still needing detection: 0.*Nothing left to detect/m
-    ).to_stdout
+    expect(dispatcher_jobs).to be_empty
   end
 
   # Only a code block: every attempt fails identically, so counting it as
@@ -153,82 +86,10 @@ RSpec.describe "babel_reunited:backfill_detected_locales" do
     expect { task.invoke }.to output(
       /too short to ever detect: 1.*still needing detection: 0/m
     ).to_stdout
-    expect(Jobs::BabelReunited::DetectPostLanguageJob.jobs).to be_empty
+    expect(dispatcher_jobs).to be_empty
   end
 
-  # Two LIMIT batches must not both start their schedule at minute zero, or
-  # the second lands on top of the first and doubles the rate.
-  it "keeps pacing across separate runs" do
-    ENV["DRY_RUN"] = "false"
-    ENV["PER_MINUTE"] = "1"
-    ENV["LIMIT"] = "1"
-
-    first = Fabricate(:post, topic: topic, user: user)
-    second = Fabricate(:post, topic: topic, user: user)
-    [first, second].each do |p|
-      Fabricate(:post_translation, post: p, language: "es")
-    end
-
-    task.invoke
-    task.reenable
-    task.invoke
-
-    delays =
-      Jobs::BabelReunited::DetectPostLanguageJob.jobs.map { |j| j["at"].to_i }
-    expect(delays.size).to eq(2)
-    expect(delays.uniq.size).to eq(2),
-    "the second run reused the first run's slot"
-  end
-
-  # The cursor holds a time, not a running count. Once a schedule has been
-  # consumed the allowance is idle again, so a later run must start from now
-  # rather than from wherever the old count had reached -- otherwise a single
-  # retry an hour later is pushed another hour out, and the task reports the
-  # short span its own size implies.
-  it "starts from now once the earlier schedule has been consumed" do
-    ENV["DRY_RUN"] = "false"
-    ENV["PER_MINUTE"] = "1"
-
-    first = Fabricate(:post, topic: topic, user: user)
-    second = Fabricate(:post, topic: topic, user: user)
-    [first, second].each do |p|
-      Fabricate(:post_translation, post: p, language: "es")
-    end
-
-    task.invoke
-    expect(
-      Jobs::BabelReunited::DetectPostLanguageJob.jobs.map { |j| j["at"].to_i }
-    ).not_to be_empty
-
-    # The cursor is left in place but now points into the past, which is what
-    # a consumed schedule actually looks like -- deleting it would exercise
-    # the empty-cursor path instead of the stale one.
-    Discourse.redis.set(
-      BabelReunited.backfill_cursor_key,
-      Time.current.to_i - 3600
-    )
-    [first, second].each do |p|
-      Discourse.redis.del(BabelReunited.detection_backfill_key(p.id))
-    end
-    Jobs::BabelReunited::DetectPostLanguageJob.jobs.clear
-
-    task.reenable
-    task.invoke
-
-    # A job taking the very next slot is enqueued outright and carries no
-    # "at" at all, so treat its absence as zero rather than as a timestamp.
-    now = Time.current.to_i
-    delays =
-      Jobs::BabelReunited::DetectPostLanguageJob.jobs.map do |j|
-        j["at"] ? j["at"].to_i - now : 0
-      end
-    expect(delays.min).to be < 60
-    # And never scheduled in the past, which a stale cursor used verbatim
-    # would produce.
-    expect(delays.min).to be >= 0
-  end
-
-  it "refuses to queue anything when detection is not configured" do
+  it "refuses to start when detection is not configured" do
     ENV["DRY_RUN"] = "false"
     SiteSetting.babel_reunited_openai_api_key = ""
     SiteSetting.babel_reunited_anthropic_api_key = ""
@@ -237,7 +98,7 @@ RSpec.describe "babel_reunited:backfill_detected_locales" do
     expect {
       expect { task.invoke }.to output(/API key not configured/).to_stdout
     }.to raise_error(SystemExit)
-    expect(Jobs::BabelReunited::DetectPostLanguageJob.jobs).to be_empty
+    expect(dispatcher_jobs).to be_empty
   end
 
   it "still surveys the scale in a dry run without a provider" do
@@ -254,21 +115,10 @@ RSpec.describe "babel_reunited:backfill_detected_locales" do
     ENV["DRY_RUN"] = "false"
     SiteSetting.babel_reunited_rate_limit_per_minute = 2
     ENV["PER_MINUTE"] = "100"
-
-    posts = 3.times.map { Fabricate(:post, topic: topic, user: user) }
-    posts.each { |p| Fabricate(:post_translation, post: p, language: "es") }
+    Fabricate(:post_translation, post: post_record, language: "es")
 
     expect { task.invoke }.to output(/using 2/).to_stdout
-
-    # Two per minute means the third job waits a full minute. Unclamped at
-    # 100/minute it would wait under a second, so the span is what proves the
-    # clamp rather than the message that announces it.
-    now = Time.current.to_i
-    delays =
-      Jobs::BabelReunited::DetectPostLanguageJob.jobs.map do |j|
-        j["at"] ? j["at"].to_i - now : 0
-      end
-    expect(delays.max).to be >= 30
+    expect(dispatcher_jobs.first["args"].first["per_minute"]).to eq(2)
   end
 
   it "rejects a nonsensical BATCH_SIZE" do
@@ -281,50 +131,14 @@ RSpec.describe "babel_reunited:backfill_detected_locales" do
     }.to raise_error(SystemExit)
   end
 
-  # A re-run that queues nothing knows nothing about when the outstanding work
-  # runs; reporting its own zero would read as "finished".
-  it "reports the earlier schedule when it queued nothing itself" do
-    ENV["DRY_RUN"] = "false"
-    ENV["PER_MINUTE"] = "1"
-    Fabricate(:post_translation, post: post_record, language: "es")
-
-    task.invoke
-    Discourse.redis.set(
-      BabelReunited.backfill_cursor_key,
-      Time.current.to_i + 1800
-    )
-
-    task.reenable
-    expect { task.invoke }.to output(
-      /Queued nothing new: all 1 are already scheduled.*~30 minute/m
-    ).to_stdout
-  end
-
-  it "reports the span it actually scheduled, not the one its size implies" do
-    ENV["DRY_RUN"] = "false"
-    ENV["PER_MINUTE"] = "1"
-
-    # Somebody else's schedule is already an hour deep.
-    Discourse.redis.set(
-      BabelReunited.backfill_cursor_key,
-      Time.current.to_i + 3600
-    )
-    Fabricate(:post_translation, post: post_record, language: "es")
-
-    expect { task.invoke }.to output(
-      /the last one runs in ~6[0-9] minute\(s\)/
-    ).to_stdout
-  end
-
-  it "honors LIMIT so a first pass can be sized" do
-    ENV["DRY_RUN"] = "false"
+  it "honors LIMIT when sizing a first pass" do
     ENV["LIMIT"] = "1"
     Fabricate(:post_translation, post: post_record, language: "es")
     second = Fabricate(:post, topic: topic, user: user)
     Fabricate(:post_translation, post: second, language: "es")
 
-    task.invoke
-
-    expect(Jobs::BabelReunited::DetectPostLanguageJob.jobs.size).to eq(1)
+    expect { task.invoke }.to output(
+      /still needing detection: 1.*stopped early at LIMIT/m
+    ).to_stdout
   end
 end

@@ -323,14 +323,15 @@ namespace :babel_reunited do
     # backfill has run. Detection only: the job fans out translations solely
     # when asked to, and asking here would start thousands of them.
     # Detection shares one per-minute allowance with translation, and the job
-    # only retries three times with a short backoff. Dumping thousands of jobs
-    # in at once means most of them burn those retries waiting for a slot and
-    # then die -- silently, because the exhaustion handler only acts when a
-    # fan-out was requested. The queue drains, the detection never happened,
-    # and cleanup afterwards still skips those posts.
+    # only retries three times with a short backoff, so the work has to be
+    # paced or most of it dies waiting for a slot -- silently, because the
+    # exhaustion handler only acts when a fan-out was requested.
     #
-    # So the jobs are spread instead: PER_MINUTE of them per minute, defaulting
-    # to half the allowance so ordinary translation traffic still gets through.
+    # The pacing lives in a dispatcher job rather than here: scheduling the
+    # jobs themselves only promises "not before T", and a Sidekiq restart
+    # during the run makes every overdue job runnable at once. This task sizes
+    # the work and starts the dispatcher; the dispatcher hands out PER_MINUTE
+    # per minute measured from when it actually runs.
     site_limit = SiteSetting.babel_reunited_rate_limit_per_minute
     per_minute = (ENV["PER_MINUTE"] || site_limit / 2).to_i
     per_minute = 1 if per_minute < 1
@@ -343,17 +344,15 @@ namespace :babel_reunited do
       per_minute = site_limit
     end
 
-    # A subquery rather than a plucked id list, so nothing is materialized
+    # A relation rather than a plucked id list, so nothing is materialized
     # whole and BATCH_SIZE really does bound what is in memory.
-    scope = Post.where(id: BabelReunited::PostTranslation.select(:post_id))
+    scope = BabelReunited.posts_needing_detection
     total = scope.count
 
-    queued = 0
-    deduplicated = 0
+    outstanding = 0
     already = 0
     ineligible = 0
     undetectable = 0
-    max_delay = 0
     samples = []
     truncated = false
 
@@ -371,7 +370,7 @@ namespace :babel_reunited do
         )
 
         posts.each do |post|
-          if limit && queued >= limit
+          if limit && outstanding >= limit
             truncated = true
             break
           end
@@ -402,43 +401,17 @@ namespace :babel_reunited do
             samples << "  Post ID: #{post.id}, Topic ID: #{post.topic_id}"
           end
 
-          if dry_run
-            queued += 1
-            next
-          end
-
-          delay =
-            BabelReunited.schedule_detection_backfill(
-              post,
-              per_minute: per_minute
-            )
-
-          if delay
-            queued += 1
-            max_delay = delay if delay > max_delay
-          else
-            deduplicated += 1
-          end
+          outstanding += 1
         end
 
         break if truncated
       end
-
-    # Outstanding is what the operator actually needs: a post whose job is
-    # scheduled but has not run yet still has no detected locale, so counting
-    # it as done would send them to cleanup too early -- the same silent
-    # failure the pacing above exists to prevent.
-    outstanding = queued + deduplicated
 
     puts "Posts with translations: #{total}"
     puts "  already detected against current content: #{already}"
     puts "  not eligible (deleted, hidden, disabled category): #{ineligible}"
     puts "  too short to ever detect: #{undetectable}"
     puts "  still needing detection: #{outstanding}"
-    if !dry_run && outstanding > 0
-      puts "    newly queued by this run: #{queued}"
-      puts "    already queued by an earlier run: #{deduplicated}"
-    end
     puts "  (stopped early at LIMIT, counts above are partial)" if truncated
 
     if outstanding == 0
@@ -448,46 +421,39 @@ namespace :babel_reunited do
       next
     end
 
+    minutes = (outstanding.to_f / per_minute).ceil
+
     if dry_run
       puts ""
-      puts "DRY RUN mode - no detection jobs were enqueued"
-      puts "Use DRY_RUN=false to enqueue them"
+      puts "DRY RUN mode - no dispatcher was started"
+      puts "Use DRY_RUN=false to start it"
       puts ""
-      puts "Would spread them over ~#{(queued.to_f / per_minute).ceil} " \
-             "minute(s) at #{per_minute}/minute, and later still if a schedule " \
-             "from an earlier run has not finished draining"
+      puts "Would take ~#{minutes} minute(s) at #{per_minute}/minute"
       puts ""
       puts "Sample posts:"
       samples.each { |line| puts line }
-      puts "  ... and #{queued - samples.size} more" if queued > samples.size
+      if outstanding > samples.size
+        puts "  ... and #{outstanding - samples.size} more"
+      end
     else
-      # Reported from the slots actually handed out, not from the count
-      # divided by the pace: a run that lands behind a schedule still
-      # draining is scheduled further out than its own size suggests. When
-      # this run queued nothing, its own max delay says nothing at all -- the
-      # outstanding work belongs to an earlier run, so read the schedule.
-      remaining =
-        (
-          if queued > 0
-            max_delay
-          else
-            BabelReunited.backfill_schedule_remaining
-          end
-        )
+      # One dispatcher, not one scheduled job per post: it hands out
+      # PER_MINUTE per minute measured from when it actually runs, so a
+      # Sidekiq restart delays the backfill instead of collapsing it into a
+      # burst that the rate limiter refuses.
+      Jobs.enqueue(
+        Jobs::BabelReunited::BackfillDetectionDispatcher,
+        per_minute: per_minute
+      )
 
       puts ""
-      if queued > 0
-        puts "Enqueued #{queued} detection job(s); the last one runs in " \
-               "~#{(remaining / 60.0).ceil} minute(s) at #{per_minute}/minute."
-      else
-        puts "Queued nothing new: all #{deduplicated} are already scheduled " \
-               "by an earlier run, the last in ~#{(remaining / 60.0).ceil} " \
-               "minute(s)."
-      end
+      puts "Started the dispatcher: #{per_minute} detection(s) per minute, " \
+             "~#{minutes} minute(s) for #{outstanding} post(s)."
+      puts "It re-arms itself each minute and stops when nothing is left, so " \
+             "a restart delays it rather than losing it."
       puts ""
       puts "Do NOT run cleanup_same_language_copies yet."
-      puts "An empty Sidekiq queue is not the signal: a job that fails leaves " \
-             "it empty too, and jobs scheduled for later are not in it at all."
+      puts "An empty Sidekiq queue is not the signal: the dispatcher hands out " \
+             "small batches, so the queue is nearly empty the whole time."
       puts "Re-run this task and wait until 'still needing detection' reaches 0."
     end
   end

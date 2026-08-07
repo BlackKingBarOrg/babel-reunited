@@ -334,69 +334,11 @@ module ::BabelReunited
     "babel_reunited:detect_enqueued:#{post_id}"
   end
 
-  def self.backfill_cursor_key
-    "babel_reunited:backfill_cursor"
-  end
-
-  # The cursor holds the next free slot as an absolute time, not a count of
-  # jobs ever queued. A count keeps growing after the schedule it described
-  # has been consumed, so a later run would push a single retry an hour into
-  # an allowance that is idle by then, and changing the pace would reinterpret
-  # the old count in new units. Allocating and re-arming the expiry in one
-  # script also means two runs can never be handed the same slot.
-  TAKE_BACKFILL_SLOT = <<~LUA
-    local now = tonumber(ARGV[1])
-    local interval = tonumber(ARGV[2])
-    local slack = tonumber(ARGV[3])
-    local slot = tonumber(redis.call('get', KEYS[1]) or '0')
-    if slot < now then slot = now end
-    local nxt = slot + interval
-    redis.call('set', KEYS[1], nxt, 'EX', math.ceil(nxt - now) + slack)
-    return math.floor(slot - now)
-  LUA
-
-  # Seconds until the last slot handed out so far comes due, or 0 when no
-  # schedule is outstanding. Lets a caller that queued nothing itself still
-  # say when the work already in flight will be done.
-  def self.backfill_schedule_remaining
-    slot = Discourse.redis.get(backfill_cursor_key).to_f
-    return 0 if slot <= 0
-
-    [(slot - Time.current.to_i).round, 0].max
-  end
-
-  # Claims the post first and takes a slot only once the claim is won, so a
-  # post another run already queued never consumes one and nothing has to be
-  # handed back. Returns the delay in seconds, or nil when already claimed.
-  def self.schedule_detection_backfill(post, per_minute:)
-    return nil if post.blank?
-
-    key = detection_backfill_key(post.id)
-    return nil unless Discourse.redis.set(key, "1", nx: true, ex: 600)
-
-    delay =
-      Discourse
-        .redis
-        .eval(
-          TAKE_BACKFILL_SLOT,
-          keys: [Discourse.redis.namespace_key(backfill_cursor_key)],
-          argv: [Time.current.to_i, 60.0 / per_minute, 600]
-        )
-        .to_i
-
-    # The claim has to outlive the delay it is now bound to.
-    Discourse.redis.expire(key, delay + 600)
-
-    if delay > 0
-      Jobs.enqueue_in(
-        delay,
-        Jobs::BabelReunited::DetectPostLanguageJob,
-        post_id: post.id
-      )
-    else
-      Jobs.enqueue(Jobs::BabelReunited::DetectPostLanguageJob, post_id: post.id)
-    end
-    delay
+  # Every post that carries a translation, as a relation rather than a list of
+  # ids: the dispatcher and the rake task both stream it, and a subquery keeps
+  # translations whose post is gone from being counted as work.
+  def self.posts_needing_detection
+    Post.where(id: BabelReunited::PostTranslation.select(:post_id))
   end
 
   # Returns whether this call is the one that queued the job, so a caller
