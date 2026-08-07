@@ -314,7 +314,15 @@ module ::BabelReunited
 
   # Mirrors the translate job's guards. Detection ships post content to a
   # third-party provider, so it must refuse the same posts translation does.
+  #
+  # The global switch belongs here rather than only at the entry points: it is
+  # what an admin flips when something is wrong, and callers that check it
+  # once and then work through a queue -- a job that was already enqueued, an
+  # hour-long backfill -- would keep sending content after it was thrown.
+  # Asked immediately before each call, throwing it stops everything that has
+  # not gone out yet.
   def self.translatable_post?(post)
+    return false unless SiteSetting.babel_reunited_enabled
     return false if post.blank? || post.raw.blank?
     return false if post.deleted_at.present? || post.hidden?
     translation_enabled_for_post?(post)
@@ -371,6 +379,15 @@ module ::BabelReunited
       # for the new content. Every writer takes this lock, so they serialize
       # and the loser re-reads and stands down.
       post.with_lock do
+        # Another detection of this same content may have finished while this
+        # one was in flight -- a queued job and the backfill can overlap on
+        # one post. Two answers for one sha are two calls that may disagree,
+        # and since publishing happens after the transaction the second write
+        # can reach clients before the first, leaving them on a locale the
+        # database does not hold. First result recorded wins; this one stands
+        # down having changed nothing.
+        next if detection_current?(post)
+
         # Eligibility is checked before the call as well, but a post can be
         # hidden or trashed while it is in flight and neither shows up as a
         # missing row -- reload is unscoped, so only a hard delete raises.

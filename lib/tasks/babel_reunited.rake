@@ -451,7 +451,21 @@ namespace :babel_reunited do
       next
     end
 
-    interval = 60.0 / per_minute
+    # Re-read before every wait rather than fixed at startup: an admin
+    # lowering the allowance means it now, and this run may have started an
+    # hour ago. Pacing on the value it had then would keep asking at the old
+    # rate, and every ask the limiter refuses spends part of a post's retry
+    # budget for nothing. PER_MINUTE stays the ceiling -- raising the site
+    # limit mid-run does not speed the backfill past what was asked for.
+    current_interval =
+      lambda do
+        allowed = [
+          per_minute,
+          SiteSetting.babel_reunited_rate_limit_per_minute.to_i
+        ].min
+        allowed = 1 if allowed < 1
+        60.0 / allowed
+      end
 
     puts ""
     puts "Detecting #{outstanding} post(s) at #{per_minute}/minute " \
@@ -481,7 +495,7 @@ namespace :babel_reunited do
               )
             )
           end
-          sleep(interval)
+          sleep(current_interval.call)
           retry
         end
       end
@@ -489,9 +503,10 @@ namespace :babel_reunited do
     detected = 0
     unresolved = 0
     failed = 0
-    stale = 0
+    superseded = 0
     interrupted = false
     stop = false
+    disabled = false
 
     begin
       scope
@@ -502,8 +517,18 @@ namespace :babel_reunited do
           BabelReunited.preload_detection_fields(posts)
 
           posts.each do |post|
-            processed = detected + unresolved + failed + stale
+            processed = detected + unresolved + failed + superseded
             if limit && processed >= limit
+              stop = true
+              break
+            end
+
+            # translatable_post? refuses everything once the switch is off, so
+            # nothing would go out either way. Stopping on it explicitly is so
+            # the operator sees why, instead of watching the run skip eighteen
+            # hundred posts and claim it finished.
+            unless SiteSetting.babel_reunited_enabled
+              disabled = true
               stop = true
               break
             end
@@ -527,10 +552,11 @@ namespace :babel_reunited do
               if BabelReunited.record_detected_locale(post, locale, sampled_sha)
                 result.success? ? detected += 1 : unresolved += 1
               else
-                # The content moved under this answer. Whatever is on record
-                # now is newer than what this call was looking at, so there is
-                # nothing to do and nothing to fix.
-                stale += 1
+                # The content moved under this answer, or another detection
+                # recorded one for it first. Either way what is on record now
+                # is at least as current as this, so there is nothing to do
+                # and nothing to fix.
+                superseded += 1
               end
             else
               # Nothing recorded, so the next run finds this post again. That
@@ -543,13 +569,14 @@ namespace :babel_reunited do
               )
             end
 
-            processed = detected + unresolved + failed + stale
+            processed = detected + unresolved + failed + superseded
             if (processed % 25).zero?
               puts "  #{processed}/#{outstanding} " \
                      "(detected #{detected}, unresolved #{unresolved}, " \
                      "failed #{failed})"
             end
 
+            interval = current_interval.call
             elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
             sleep(interval - elapsed) if elapsed < interval
           end
@@ -562,10 +589,13 @@ namespace :babel_reunited do
 
     puts ""
     puts "Interrupted; stopping here." if interrupted
+    if disabled
+      puts "Plugin was disabled mid-run; stopped without sending more."
+    end
     puts "Detected: #{detected}"
     puts "No supported language (recorded, will not be retried): #{unresolved}"
     puts "Failed, left for a re-run: #{failed}"
-    puts "Edited mid-detection, discarded: #{stale}" if stale > 0
+    puts "Superseded mid-detection, discarded: #{superseded}" if superseded > 0
     puts ""
     puts "Do NOT run cleanup_same_language_copies yet."
     puts "Re-run this task and wait until 'still needing detection' reaches 0."

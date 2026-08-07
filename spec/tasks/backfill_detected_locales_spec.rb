@@ -110,6 +110,83 @@ RSpec.describe "babel_reunited:backfill_detected_locales" do
     expect(messages).to be_empty
   end
 
+  # Pacing on the allowance the run started with keeps asking at the old rate
+  # after an admin lowers it, and every ask the limiter refuses spends part of
+  # a post's retry budget for nothing. Timing is the only way to observe a
+  # pace, so the margin here is deliberately wide: 0.12s under the startup
+  # value against 1.0s under the lowered one.
+  it "re-reads the site allowance instead of pacing on the startup value" do
+    ENV["DRY_RUN"] = "false"
+    Fabricate(:post_translation, post: post_record, language: "es")
+
+    stub_request(
+      :post,
+      "https://api.openai.com/v1/chat/completions"
+    ).to_return do
+      SiteSetting.babel_reunited_rate_limit_per_minute = 60
+      {
+        status: 200,
+        headers: {
+          "Content-Type" => "application/json"
+        },
+        body: {
+          choices: [{ message: { content: "en" }, finish_reason: "stop" }],
+          usage: {
+            total_tokens: 42
+          }
+        }.to_json
+      }
+    end
+
+    started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    task.invoke
+    elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+
+    expect(BabelReunited.detected_locale_for(post_record.reload)).to eq("en")
+    expect(elapsed).to be > 0.5
+  end
+
+  # The switch is what an admin throws when something is wrong. A run that
+  # checked it once at startup would keep shipping content to the provider
+  # for the rest of the hour.
+  it "stops sending as soon as the plugin is switched off mid-run" do
+    ENV["DRY_RUN"] = "false"
+    Fabricate(:post_translation, post: post_record, language: "es")
+    second =
+      Fabricate(
+        :post,
+        topic: topic,
+        user: user,
+        raw: "Another long enough English sentence for detection to work on."
+      )
+    Fabricate(:post_translation, post: second, language: "es")
+
+    calls = 0
+    stub_request(
+      :post,
+      "https://api.openai.com/v1/chat/completions"
+    ).to_return do
+      calls += 1
+      SiteSetting.babel_reunited_enabled = false
+      {
+        status: 200,
+        headers: {
+          "Content-Type" => "application/json"
+        },
+        body: {
+          choices: [{ message: { content: "en" }, finish_reason: "stop" }],
+          usage: {
+            total_tokens: 42
+          }
+        }.to_json
+      }
+    end
+
+    expect { task.invoke }.to output(/Plugin was disabled mid-run/).to_stdout
+
+    expect(calls).to eq(1)
+  end
+
   # An edit during the call triggers its own detection, so by the time this
   # answer comes back the post may already carry a newer, correct one.
   # Writing the older answer over it would not just miss -- it would destroy
@@ -131,7 +208,7 @@ RSpec.describe "babel_reunited:backfill_detected_locales" do
     BabelReunited::LanguageDetectionService.stubs(:new).returns(fake_service)
 
     expect { task.invoke }.to output(
-      /Edited mid-detection, discarded: 1/
+      /Superseded mid-detection, discarded: 1/
     ).to_stdout
 
     post_record.reload

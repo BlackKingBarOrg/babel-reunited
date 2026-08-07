@@ -39,15 +39,20 @@ class Jobs::BabelReunited::DetectPostLanguageJob < ::Jobs::Base
         locale = result.locale || BabelReunited::UNDETERMINED_LOCALE
 
         unless BabelReunited.record_detected_locale(post, locale, sampled_sha)
-          # The post changed while detection ran; the result may describe the
-          # old content. Discard it and try again shortly.
-          Jobs.enqueue_in(
-            5.seconds,
-            Jobs::BabelReunited::DetectPostLanguageJob,
-            post_id: post.id,
-            then_fanout: then_fanout
-          )
-          return
+          # Either the post changed while detection ran, so this result
+          # describes content it no longer has, or another detection recorded
+          # one for this same content first. Only the first case needs another
+          # pass; the second already holds what this job was going to write,
+          # so it falls through to the fan-out.
+          unless BabelReunited.detection_current?(post)
+            Jobs.enqueue_in(
+              5.seconds,
+              Jobs::BabelReunited::DetectPostLanguageJob,
+              post_id: post.id,
+              then_fanout: then_fanout
+            )
+            return
+          end
         end
       else
         ::BabelReunited::TranslationLogger.log_translation_skipped(

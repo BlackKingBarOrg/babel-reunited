@@ -1120,6 +1120,41 @@ RSpec.describe BabelReunited do
         expect(messages).to be_empty
       end
 
+      # A queued job and the backfill can land on the same post. Two answers
+      # for one sha may disagree, and because publishing happens after the
+      # transaction the second write can reach clients before the first --
+      # leaving them on a locale the database does not hold.
+      it "lets the first result for a sha win and the second stand down" do
+        expect(
+          BabelReunited.record_detected_locale(post_record, "en", sampled_sha)
+        ).to be true
+
+        messages =
+          MessageBus.track_publish("/post-translations/#{post_record.id}") do
+            expect(
+              BabelReunited.record_detected_locale(
+                post_record,
+                "zh-cn",
+                sampled_sha
+              )
+            ).to be false
+          end
+
+        expect(BabelReunited.detected_locale_for(post_record.reload)).to eq(
+          "en"
+        )
+        expect(messages).to be_empty
+      end
+
+      it "refuses everything once the plugin is switched off" do
+        SiteSetting.babel_reunited_enabled = false
+
+        expect(
+          BabelReunited.record_detected_locale(post_record, "en", sampled_sha)
+        ).to be false
+        expect(BabelReunited.detected_locale_for(post_record.reload)).to be_nil
+      end
+
       it "refuses a post deleted outright while the call was in flight" do
         id = post_record.id
         post_record.destroy!
