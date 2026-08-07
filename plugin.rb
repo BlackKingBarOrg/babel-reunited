@@ -373,7 +373,39 @@ module ::BabelReunited
 
   # Compare-and-set, so a chain that lost its lease to a restart cannot renew
   # it out from under the chain that replaced it.
-  RENEW_BACKFILL_LEASE = <<~LUA
+  # Holds the lease for another term: renews it when it is still ours, and
+  # takes it back when nobody holds it. That second case is the one that
+  # matters -- an outage longer than the TTL expires the lease while the
+  # chain's next pass is still queued, and refusing it there would abandon
+  # the backfill rather than delay it, which is the whole reason a dispatcher
+  # exists. Only a lease held by somebody else means this chain is finished.
+  HOLD_BACKFILL_LEASE = <<~LUA
+    local current = redis.call('get', KEYS[1])
+    if current == false or current == ARGV[1] then
+      redis.call('set', KEYS[1], ARGV[1], 'EX', ARGV[2])
+      return 1
+    else
+      return 0
+    end
+  LUA
+
+  def self.hold_backfill_lease(token)
+    return false if token.blank?
+
+    Discourse
+      .redis
+      .eval(
+        HOLD_BACKFILL_LEASE,
+        keys: [Discourse.redis.namespace_key(backfill_lease_key)],
+        argv: [token, BACKFILL_LEASE_TTL]
+      )
+      .to_i == 1
+  end
+
+  # Lets a chain stop without opening the gate this instant: the detections it
+  # just handed out have not run yet, so a chain starting now would put two
+  # batches into one pacing window.
+  EXPIRE_BACKFILL_LEASE = <<~LUA
     if redis.call('get', KEYS[1]) == ARGV[1] then
       return redis.call('expire', KEYS[1], ARGV[2])
     else
@@ -381,17 +413,14 @@ module ::BabelReunited
     end
   LUA
 
-  def self.renew_backfill_lease(token)
-    return false if token.blank?
+  def self.expire_backfill_lease(token, seconds)
+    return if token.blank?
 
-    Discourse
-      .redis
-      .eval(
-        RENEW_BACKFILL_LEASE,
-        keys: [Discourse.redis.namespace_key(backfill_lease_key)],
-        argv: [token, BACKFILL_LEASE_TTL]
-      )
-      .to_i == 1
+    Discourse.redis.eval(
+      EXPIRE_BACKFILL_LEASE,
+      keys: [Discourse.redis.namespace_key(backfill_lease_key)],
+      argv: [token, seconds]
+    )
   end
 
   RELEASE_BACKFILL_LEASE = <<~LUA

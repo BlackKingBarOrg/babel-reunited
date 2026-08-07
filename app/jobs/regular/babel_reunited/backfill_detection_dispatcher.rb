@@ -13,9 +13,9 @@
 # relative to when it actually ran. Downtime delays the backfill; it cannot
 # compress it.
 #
-# There is no cursor and no list to resume: each pass asks which posts still
-# need detection, so a dispatcher that dies mid-run is replaced simply by
-# starting another one.
+# A chain carries only where it stopped, never a list of what is left: each
+# pass asks the database, so a dispatcher that dies is replaced by starting
+# another one, and the rake task's re-run sweeps up whatever a chain skipped.
 class Jobs::BabelReunited::BackfillDetectionDispatcher < ::Jobs::Base
   sidekiq_options retry: 3
 
@@ -24,10 +24,12 @@ class Jobs::BabelReunited::BackfillDetectionDispatcher < ::Jobs::Base
   def execute(args)
     token = args[:lease_token]
 
-    # Renewing first is also the check that this chain is still the one that
-    # should be running: a chain whose lease expired has been replaced, and
-    # two chains dispatching would double the rate this exists to hold.
-    return unless BabelReunited.renew_backfill_lease(token)
+    # Taking the lease first is also the check that this chain should still be
+    # running. It reclaims an unheld lease rather than giving up on one: an
+    # outage longer than the TTL expires the lease while this pass is still
+    # queued, and quitting there would lose the backfill instead of delaying
+    # it. Only a lease somebody else holds ends this chain.
+    return unless BabelReunited.hold_backfill_lease(token)
 
     unless SiteSetting.babel_reunited_enabled &&
              BabelReunited::LanguageDetectionService.configuration_error.nil?
@@ -53,14 +55,27 @@ class Jobs::BabelReunited::BackfillDetectionDispatcher < ::Jobs::Base
     remaining = args[:remaining]
     per_minute = [per_minute, remaining.to_i].min if remaining
 
-    dispatched = dispatch(per_minute)
+    # Each pass resumes where the last one stopped. Restarting the scan every
+    # minute would re-read every post already dealt with, which is quadratic
+    # over a backfill this long. Anything skipped stays skipped for this
+    # chain; the rake task's re-run is what sweeps up stragglers.
+    after_id = args[:after_id].to_i
+    dispatched, last_id = dispatch(per_minute, after_id)
 
     remaining = remaining.to_i - dispatched if remaining
 
-    # Nothing left to hand out, or the requested share is spent. Either way
-    # this chain is done and the lease belongs to whoever comes next.
-    if dispatched.zero? || (remaining && remaining <= 0)
+    # Fewer than the share means the scan reached the end: nothing is left for
+    # this chain to find, so it stops and hands the lease back.
+    if dispatched < per_minute
       BabelReunited.release_backfill_lease(token)
+      return
+    end
+
+    if remaining && remaining <= 0
+      # The share is spent, but the detections just handed out have not run.
+      # Releasing now would let a second LIMIT run dispatch another batch into
+      # this same minute, which is exactly the burst being paced against.
+      BabelReunited.expire_backfill_lease(token, INTERVAL)
       return
     end
 
@@ -69,18 +84,23 @@ class Jobs::BabelReunited::BackfillDetectionDispatcher < ::Jobs::Base
       self.class,
       per_minute: args[:per_minute],
       remaining: remaining,
+      after_id: last_id,
       lease_token: token
     )
   end
 
   private
 
-  def dispatch(per_minute)
+  # Returns how many were handed out and the last post id examined, which is
+  # where the next pass picks up.
+  def dispatch(per_minute, after_id)
     dispatched = 0
-    return dispatched if per_minute < 1
+    last_id = after_id
+    return dispatched, last_id if per_minute < 1
 
     BabelReunited
       .posts_needing_detection
+      .where("posts.id > ?", after_id)
       .includes(:topic)
       .find_in_batches(batch_size: [per_minute * 4, 200].min) do |posts|
         Post.preload_custom_fields(
@@ -92,7 +112,9 @@ class Jobs::BabelReunited::BackfillDetectionDispatcher < ::Jobs::Base
         )
 
         posts.each do |post|
-          return dispatched if dispatched >= per_minute
+          return dispatched, last_id if dispatched >= per_minute
+          last_id = post.id
+
           next if BabelReunited.detection_current?(post)
           next unless BabelReunited.translatable_post?(post)
           unless BabelReunited::LanguageDetectionService.new(
@@ -107,6 +129,6 @@ class Jobs::BabelReunited::BackfillDetectionDispatcher < ::Jobs::Base
         end
       end
 
-    dispatched
+    [dispatched, last_id]
   end
 end

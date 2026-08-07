@@ -121,23 +121,91 @@ RSpec.describe Jobs::BabelReunited::BackfillDetectionDispatcher do
     expect(described_class.jobs.first["args"].first["remaining"]).to eq(1)
   end
 
-  # A chain whose lease has gone is a chain that was replaced. Two chains
-  # dispatching means twice the rate, which is the whole thing being paced.
-  it "stops when it no longer holds the lease" do
-    post_needing_detection
-
-    described_class.new.execute(per_minute: 5, lease_token: "not-the-holder")
-
-    expect(detection_jobs).to be_empty
-    expect(described_class.jobs).to be_empty
-  end
-
   it "releases the lease when it finishes, so the next run can start one" do
     token = run(per_minute: 5)
 
     expect(BabelReunited.backfill_lease_active?).to be false
     expect(BabelReunited.acquire_backfill_lease).to be_present
     expect(token).to be_present
+  end
+
+  # Stopping on LIMIT is not the same as being finished: the detections just
+  # handed out have not run, so opening the gate immediately lets a second
+  # LIMIT run put another batch into the same pacing window.
+  it "keeps the gate shut for the rest of the window after a LIMIT stop" do
+    2.times { post_needing_detection }
+
+    run(per_minute: 5, remaining: 1)
+
+    expect(detection_jobs.size).to eq(1)
+    expect(BabelReunited.backfill_lease_active?).to be true
+    expect(BabelReunited.acquire_backfill_lease).to be_nil
+  end
+
+  # An outage longer than the lease TTL leaves the queued next pass holding a
+  # token nobody owns any more. Treating that as "somebody replaced me" would
+  # abandon the backfill -- the opposite of what dispatching is for.
+  it "reclaims an expired lease rather than abandoning the chain" do
+    3.times { post_needing_detection }
+
+    token = run(per_minute: 1)
+    expect(described_class.jobs.size).to eq(1)
+
+    # Sidekiq was down past the TTL: the lease is gone, the pass is not.
+    Discourse.redis.del(BabelReunited.backfill_lease_key)
+    queued = described_class.jobs.first["args"].first
+    described_class.jobs.clear
+    Jobs::BabelReunited::DetectPostLanguageJob.jobs.clear
+
+    described_class.new.execute(
+      per_minute: queued["per_minute"],
+      remaining: queued["remaining"],
+      after_id: queued["after_id"],
+      lease_token: token
+    )
+
+    expect(detection_jobs.size).to eq(1)
+    expect(described_class.jobs.size).to eq(1)
+  end
+
+  it "still stands down when another chain holds the lease" do
+    3.times { post_needing_detection }
+
+    token = run(per_minute: 1)
+    Discourse.redis.set(BabelReunited.backfill_lease_key, "someone-else")
+    Jobs::BabelReunited::DetectPostLanguageJob.jobs.clear
+    described_class.jobs.clear
+
+    described_class.new.execute(per_minute: 1, lease_token: token)
+
+    expect(detection_jobs).to be_empty
+    expect(described_class.jobs).to be_empty
+  end
+
+  # Restarting the scan every pass re-reads everything already dealt with,
+  # which is quadratic across a backfill of this length.
+  it "resumes where the previous pass stopped" do
+    posts = 3.times.map { post_needing_detection }
+
+    run(per_minute: 1)
+
+    expect(described_class.jobs.first["args"].first["after_id"]).to eq(
+      posts.first.id
+    )
+  end
+
+  it "does not re-examine posts behind the cursor" do
+    posts = 3.times.map { post_needing_detection }
+    token = BabelReunited.acquire_backfill_lease
+
+    described_class.new.execute(
+      per_minute: 5,
+      after_id: posts[1].id,
+      lease_token: token
+    )
+
+    dispatched_ids = detection_jobs.map { |j| j["args"].first["post_id"] }
+    expect(dispatched_ids).to contain_exactly(posts[2].id)
   end
 
   # The chain may have started an hour ago; an admin lowering the allowance
