@@ -481,7 +481,7 @@ namespace :babel_reunited do
     # one keeps the post in this run; giving up on it after a few tries keeps
     # a busy forum from stalling the whole backfill on one post.
     detect =
-      lambda do |service|
+      lambda do |post, service|
         attempts = 0
         begin
           service.call
@@ -495,7 +495,30 @@ namespace :babel_reunited do
               )
             )
           end
+
           sleep(current_interval.call)
+
+          # The wait is a full pacing window, up to a minute. A retry is
+          # another call to the provider, so it has to clear the gate the
+          # first one cleared -- the switch may have been thrown, or the post
+          # hidden or removed, while this slept. The row is re-read because
+          # none of that shows up in the copy loaded before the call.
+          sendable =
+            begin
+              post.reload
+              BabelReunited.translatable_post?(post)
+            rescue ActiveRecord::RecordNotFound
+              false
+            end
+          unless sendable
+            next(
+              BabelReunited::LanguageDetectionService::Result.new(
+                error: "No longer allowed to send",
+                retryable: true
+              )
+            )
+          end
+
           retry
         end
       end
@@ -545,7 +568,7 @@ namespace :babel_reunited do
             # that the edit itself triggered. record_detected_locale is what
             # refuses to write this answer over that one.
             sampled_sha = BabelReunited.detection_raw_sha(post)
-            result = detect.call(service)
+            result = detect.call(post, service)
 
             if result.success? || result.undetermined?
               locale = result.locale || BabelReunited::UNDETERMINED_LOCALE

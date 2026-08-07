@@ -339,15 +339,23 @@ module ::BabelReunited
     ApplicationLayoutPreloader.banner_json_cache.clear
   end
 
+  # A preload is a snapshot, and reload does not touch it: it is a plain ivar,
+  # not an association cache. Any code that has to see the field as it is now
+  # -- after a write here, or after taking a lock somebody else may have
+  # written under -- has to drop it first.
+  def self.clear_detection_preload(post)
+    return if post.blank?
+    return unless post.instance_variable_defined?(DETECTION_PRELOAD_IVAR)
+
+    post.remove_instance_variable(DETECTION_PRELOAD_IVAR)
+  end
+
   def self.store_detected_locale(post, locale, raw_sha: nil)
     return if post.blank? || locale.blank?
     post.custom_fields[DETECTED_LOCALE_FIELD] = locale
     post.custom_fields[DETECTED_SHA_FIELD] = raw_sha || detection_raw_sha(post)
     post.save_custom_fields
-    # A preload taken before this write would now be wrong.
-    if post.instance_variable_defined?(DETECTION_PRELOAD_IVAR)
-      post.remove_instance_variable(DETECTION_PRELOAD_IVAR)
-    end
+    clear_detection_preload(post)
   end
 
   # The one way a detection result becomes a record. Both the job and the rake
@@ -379,6 +387,13 @@ module ::BabelReunited
       # for the new content. Every writer takes this lock, so they serialize
       # and the loser re-reads and stands down.
       post.with_lock do
+        # with_lock reloads the row, but the detection preload is an ivar and
+        # survives that. A caller that preloaded before its provider call --
+        # the backfill does, for every post in the batch -- is holding a
+        # snapshot taken before any of this, and reading it here would make
+        # the check below answer about the past.
+        clear_detection_preload(post)
+
         # Another detection of this same content may have finished while this
         # one was in flight -- a queued job and the backfill can overlap on
         # one post. Two answers for one sha are two calls that may disagree,

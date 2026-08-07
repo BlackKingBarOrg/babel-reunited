@@ -1146,6 +1146,26 @@ RSpec.describe BabelReunited do
         expect(messages).to be_empty
       end
 
+      # The lock reloads the row but not the detection preload, which is a
+      # plain ivar. The backfill preloads every post in a batch before it
+      # starts calling the provider, so without dropping it here the check
+      # above answers from a snapshot taken before any of this happened.
+      it "sees a concurrent write even when holding a stale preload" do
+        second = Post.find(post_record.id)
+        BabelReunited.preload_detection_fields([second])
+
+        expect(
+          BabelReunited.record_detected_locale(post_record, "en", sampled_sha)
+        ).to be true
+        expect(
+          BabelReunited.record_detected_locale(second, "zh-cn", sampled_sha)
+        ).to be false
+
+        expect(BabelReunited.detected_locale_for(post_record.reload)).to eq(
+          "en"
+        )
+      end
+
       it "refuses everything once the plugin is switched off" do
         SiteSetting.babel_reunited_enabled = false
 

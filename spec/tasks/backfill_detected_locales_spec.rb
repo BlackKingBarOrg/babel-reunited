@@ -187,6 +187,56 @@ RSpec.describe "babel_reunited:backfill_detected_locales" do
     expect(calls).to eq(1)
   end
 
+  # Waiting out a rate limit is a full pacing window, up to a minute. The
+  # retry that follows is another call to the provider and has to clear the
+  # same gate the first one did.
+  it "does not retry past the switch after waiting out a rate limit" do
+    ENV["DRY_RUN"] = "false"
+    Fabricate(:post_translation, post: post_record, language: "es")
+
+    calls = 0
+    stub_request(
+      :post,
+      "https://api.openai.com/v1/chat/completions"
+    ).to_return do
+      calls += 1
+      {
+        status: 200,
+        headers: {
+          "Content-Type" => "application/json"
+        },
+        body: {
+          choices: [{ message: { content: "en" }, finish_reason: "stop" }],
+          usage: {
+            total_tokens: 42
+          }
+        }.to_json
+      }
+    end
+
+    # The first slot request is refused, and the switch is thrown while the
+    # loop sleeps it off. Every later request would be allowed, so anything
+    # that reaches the provider does so through the retry.
+    limiter = BabelReunited::RateLimiter
+    original = limiter.method(:perform_request_if_allowed)
+    refused = false
+    limiter.define_singleton_method(:perform_request_if_allowed) do
+      next true if refused
+
+      refused = true
+      SiteSetting.babel_reunited_enabled = false
+      false
+    end
+
+    begin
+      task.invoke
+    ensure
+      limiter.define_singleton_method(:perform_request_if_allowed, original)
+    end
+
+    expect(calls).to eq(0)
+  end
+
   # An edit during the call triggers its own detection, so by the time this
   # answer comes back the post may already carry a newer, correct one.
   # Writing the older answer over it would not just miss -- it would destroy
