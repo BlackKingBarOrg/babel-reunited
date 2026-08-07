@@ -60,6 +60,83 @@ RSpec.describe "babel_reunited:backfill_detected_locales" do
     )
   end
 
+  # Rake appends actions rather than replacing them, and some environments
+  # evaluate every plugin rake file twice -- forty tasks in one deploy
+  # checkout carry two actions each, core's assets:precompile among them. A
+  # second action here means every run happens twice: LIMIT=20 spends for 40.
+  it "does not register its tasks twice if the file is loaded again" do
+    before_count = task.actions.size
+
+    # load, not require_relative: require would no-op the second time, which
+    # is exactly the thing this example has to make happen.
+    # rubocop:disable Discourse/Plugins/UseRequireRelative
+    load Rails
+           .root
+           .join("plugins/babel-reunited/lib/tasks/babel_reunited.rake")
+           .to_s
+    # rubocop:enable Discourse/Plugins/UseRequireRelative
+
+    expect(
+      Rake::Task["babel_reunited:backfill_detected_locales"].actions.size
+    ).to eq(before_count)
+  end
+
+  # The run holds one process for an hour while the switch is thrown in
+  # another. Settings are cached per process and the notification carrying the
+  # change is asynchronous, so the cached value can still say enabled while
+  # the authoritative one does not -- and the difference is another post's
+  # content already sent.
+  it "consults the authoritative switch, not this process's cached copy" do
+    ENV["DRY_RUN"] = "false"
+    Fabricate(:post_translation, post: post_record, language: "es")
+    second =
+      Fabricate(
+        :post,
+        topic: topic,
+        user: user,
+        raw: "Another long enough English sentence for detection to work on."
+      )
+    Fabricate(:post_translation, post: second, language: "es")
+
+    calls = 0
+    stub_request(
+      :post,
+      "https://api.openai.com/v1/chat/completions"
+    ).to_return do
+      calls += 1
+      {
+        status: 200,
+        headers: {
+          "Content-Type" => "application/json"
+        },
+        body: {
+          choices: [{ message: { content: "en" }, finish_reason: "stop" }],
+          usage: {
+            total_tokens: 42
+          }
+        }.to_json
+      }
+    end
+
+    # Stands in for the admin having thrown the switch elsewhere: the cached
+    # read still says enabled, and only the authoritative reload sees it.
+    original = SiteSetting.method(:refresh!)
+    thrown = false
+    SiteSetting.define_singleton_method(:refresh!) do
+      SiteSetting.babel_reunited_enabled = false if thrown
+      thrown = true
+      nil
+    end
+
+    begin
+      expect { task.invoke }.to output(/Plugin was disabled mid-run/).to_stdout
+    ensure
+      SiteSetting.define_singleton_method(:refresh!, original)
+    end
+
+    expect(calls).to eq(1)
+  end
+
   it "defaults to a dry run that detects nothing" do
     Fabricate(:post_translation, post: post_record, language: "es")
 

@@ -4,6 +4,16 @@
 # These tasks are automatically loaded by Discourse when the plugin is activated
 # See: lib/plugin/instance.rb line 839
 
+# Some environments evaluate every plugin rake file twice -- in one deploy
+# checkout, forty tasks carry two actions each, including chat's, the ai
+# plugin's and core's own assets:precompile. Rake appends rather than replaces,
+# so a task defined twice runs its body twice.
+#
+# For work that spends money per post that is not cosmetic: LIMIT=20 silently
+# becomes 40. Whatever loads this file twice is not ours to fix, but being
+# immune to it is, so a second evaluation defines nothing.
+return if Rake::Task.task_defined?("babel_reunited:backfill_detected_locales")
+
 namespace :babel_reunited do
   desc "Process posts without any translations and add translation jobs to Sidekiq"
   task process_missing_posts: :environment do |_, args|
@@ -498,6 +508,18 @@ namespace :babel_reunited do
               stop = true
               break
             end
+
+            # Settings are cached per process and this one runs for an hour.
+            # The switch is thrown somewhere else, and the notification that
+            # carries it here is asynchronous -- measured at a couple of
+            # seconds, which is one more post's content already sent, and it
+            # never arrives at all if the notification is missed. refresh!
+            # reads the authoritative value instead: verified against a
+            # database change made with no notification at all, where the
+            # cached read still said enabled and this one did not. It costs a
+            # query per post, at one post every two seconds, and it also makes
+            # a mid-run rate-limit change take effect on the same turn.
+            SiteSetting.refresh!
 
             # translatable_post? refuses everything once the switch is off, so
             # nothing would go out either way. Stopping on it explicitly is so
