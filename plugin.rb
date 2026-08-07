@@ -362,18 +362,35 @@ module ::BabelReunited
   def self.record_detected_locale(post, locale, sampled_sha)
     return false if post.blank?
 
+    recorded = false
+
     begin
-      post.reload
+      # The row lock is what makes deciding and writing one step. Checking and
+      # then writing leaves a gap, and the writer that fits in it is the one
+      # that matters: a detection triggered by the edit, holding the answer
+      # for the new content. Every writer takes this lock, so they serialize
+      # and the loser re-reads and stands down.
+      post.with_lock do
+        # Eligibility is checked before the call as well, but a post can be
+        # hidden or trashed while it is in flight and neither shows up as a
+        # missing row -- reload is unscoped, so only a hard delete raises.
+        if detection_raw_sha(post) == sampled_sha && translatable_post?(post)
+          store_detected_locale(post, locale, raw_sha: sampled_sha)
+          recorded = true
+        end
+      end
     rescue ActiveRecord::RecordNotFound
-      # Deleted while the call was in flight. Nothing to record, and nothing
-      # to retry either.
+      # Deleted outright while the call was in flight. Nothing to record, and
+      # nothing to retry either.
       return false
     end
-    return false unless detection_raw_sha(post) == sampled_sha
 
-    store_detected_locale(post, locale, raw_sha: sampled_sha)
-    publish_detected_locale(post, locale) unless locale == UNDETERMINED_LOCALE
-    true
+    # After the transaction: a message about a write that has not committed
+    # describes something that may never become true.
+    if recorded && locale != UNDETERMINED_LOCALE
+      publish_detected_locale(post, locale)
+    end
+    recorded
   end
 
   def self.publish_detected_locale(post, locale)
