@@ -4,7 +4,7 @@
 > — Genesis 11:1–7
 
 <p align="center">
-  <img src="https://cdn.jsdelivr.net/gh/poshboytl/tuchuang/babel-reunited-readme.png"
+  <img src="docs/babel-reunited-readme.png"
        alt="We are rebuilding the tower — not toward heaven, but toward understanding."
        width="249">
 </p>
@@ -362,3 +362,9 @@ RAILS_ENV=production bin/rake assets:precompile
 ```
 
 > Plugin tables (`babel_reunited_*`) will remain in the database after uninstall. To remove them, back up first, then drop manually.
+
+---
+
+## License
+
+[MIT](LICENSE).

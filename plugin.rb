@@ -2,10 +2,9 @@
 
 # name: babel-reunited
 # about: AI-powered post translation plugin that automatically translates posts to multiple languages using third-party AI APIs
-# meta_topic_id: TODO
 # version: 0.1.0
 # authors: Divine Rapier
-# url: https://github.com/divine-rapier/babel-reunited
+# url: https://github.com/BlackKingBarOrg/babel-reunited
 # required_version: 2026.7.0
 
 enabled_site_setting :babel_reunited_enabled
