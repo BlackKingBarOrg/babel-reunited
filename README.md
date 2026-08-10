@@ -27,7 +27,7 @@ We are rebuilding the tower. Not toward heaven, but toward understanding.
 - Repository: <https://github.com/BlackKingBarOrg/babel-reunited>
 
 Older sites are not left behind, but they must pin a commit rather than track
-`main` — see [Installing on Discourse older than 2026.7](#installing-on-discourse-older-than-20267).
+`master` — see [Installing on Discourse older than 2026.7](#installing-on-discourse-older-than-20267).
 
 ## Features
 
@@ -41,7 +41,7 @@ Older sites are not left behind, but they must pin a commit rather than track
 - On-demand translation fallback when a translation is not yet available
 - Multiple AI provider support: OpenAI, xAI (Grok), DeepSeek, Anthropic (Claude), or any OpenAI-compatible API
 - Markdown formatting preservation during translation
-- Redis-based per-minute rate limiting, daily site and per-user quotas, and content length limits
+- Redis-based per-minute rate limiting, content length limits, and daily fuses on reader-initiated translation
 - Real-time translation status via MessageBus (translating / completed / failed)
 - Preloaded translations to avoid N+1 queries on topic lists and topic views
 - Admin panel for monitoring translation status
@@ -101,10 +101,11 @@ RAILS_ENV=production bin/rake assets:precompile
 
 ### Installing on Discourse older than 2026.7
 
-`main` depends on core's `PostCookedHtml` component and the ui-kit module paths
+`master` depends on core's `PostCookedHtml` component and the ui-kit module paths
 introduced by the 2026.7 lint migration, so it will not run on older cores.
 Those sites pin the last compatible commit, which is what
-[`.discourse-compatibility`](.discourse-compatibility) records:
+[`.discourse-compatibility`](.discourse-compatibility) records — use these in
+place of the plain clone line in the `after_code` hook above:
 
 ```yaml
 - git clone --single-branch https://github.com/BlackKingBarOrg/babel-reunited.git
@@ -172,20 +173,28 @@ Provide the key for your chosen provider. Leave the others blank.
 | `babel_reunited_request_timeout_seconds` | `300` | Timeout for each provider API request |
 | `babel_reunited_modal_description` | | Replaces the default copy in the first-login language modal |
 
-### 6. Spend limits
+### 6. Daily fuses on reader-initiated translation
 
-Every post is translated into every configured language, and every translation
-is a paid API call — so a busy forum multiplies its bill by the number of target
-languages. Two daily fuses cap that, independently of the per-minute rate limit.
+Readers can ask for a translation that does not exist yet — from the language
+tabs on a post, and again automatically if view-triggered translation is on.
+Two daily counters bound that lane, independently of the per-minute rate limit.
+They are circuit breakers rather than budgets: the defaults sit far above
+organic traffic and only bite during an attack or a client bug, and staff are
+exempt.
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `babel_reunited_daily_translation_limit` | `10000` | Site-wide translations per day; `0` disables the fuse |
-| `babel_reunited_user_daily_translation_limit` | `500` | Per-user translations per day; `0` disables the fuse |
+| `babel_reunited_daily_translation_limit` | `10000` | Site-wide reader-initiated translations per day; `0` disables the fuse |
+| `babel_reunited_user_daily_translation_limit` | `500` | Per-user reader-initiated translations per day; `0` disables the fuse |
 
-Both are Redis counters that expire daily. The per-user fuse is charged first,
-so a user already over their own limit cannot spend site quota to find that out.
-A tripped fuse writes a warning to the Rails log.
+Automatic translation of new and edited posts does not charge either fuse — the
+setting that bounds its cost is the number of target languages in
+`babel_reunited_auto_translate_languages`.
+
+Both are Redis counters keyed by date, so the count starts fresh each day. The
+per-user fuse is charged first, so a user already over their own limit cannot
+spend site quota to find that out. A tripped fuse writes a warning to the Rails
+log.
 
 ### 7. View-triggered translation
 
@@ -205,7 +214,7 @@ opens.
 
 1. When a post is created or edited, the plugin enqueues a language-detection job.
 2. Detection records the post's source language — including an explicit "undetermined" result, so the same post is not re-detected forever — and then fans out one translation job per target language. If detection cannot run, it fans out to every configured language rather than stalling.
-3. Each translation job acquires a Redis lock, charges the rate limit and the daily fuses, calls the configured AI provider, and stores the result.
+3. Each translation job acquires a Redis lock, charges the per-minute rate limit, calls the configured AI provider, and stores the result.
 4. Translated content is cooked through Discourse’s `PrettyText` pipeline and sanitized before storage.
 5. Translation status updates are pushed to the frontend via MessageBus in real time.
 6. Users with a preferred language see translated titles in topic lists and can switch between language tabs on posts.
@@ -216,9 +225,10 @@ opens.
 
 All tasks run from the Discourse root. The plugin must be enabled and languages must be configured.
 
-Tasks that write anything default to a preview and print what they *would* do.
-Pass `DRY_RUN=false` to let them act. The two audit tasks are read-only and take
-no such flag.
+Most tasks that write anything default to a preview and print what they *would*
+do; pass `DRY_RUN=false` to let them act. Two exceptions take no such flag: the
+audit tasks are read-only, and `migrate_user_preferences` has no preview mode
+and writes as soon as it is invoked.
 
 ### `babel_reunited:process_missing_posts`
 
@@ -308,6 +318,8 @@ bin/rake babel_reunited:audit_language_codes
 
 Migrates user language preferences from the legacy `user_preferred_languages` table to Discourse custom fields.
 
+There is no preview mode here — this one writes on the first run.
+
 ```bash
 bin/rake babel_reunited:migrate_user_preferences
 ```
@@ -326,8 +338,8 @@ bin/rake babel_reunited:migrate_user_preferences
 **Rate limiting**
 - The plugin enforces a local per-minute rate limit (`babel_reunited_rate_limit_per_minute`). Reduce the number of target languages or increase the limit if translations are being throttled.
 
-**Everything stops partway through a busy day**
-- A daily fuse has probably tripped. Look for `daily translation fuse tripped` in the Rails log: it names which one and shows the count against the limit. Raise `babel_reunited_daily_translation_limit` or `babel_reunited_user_daily_translation_limit`, or set the offending one to `0` to disable it.
+**Readers are told the daily translation limit is reached**
+- A daily fuse has tripped, so requests from the language tabs (and view-triggered ones) are rejected until the next day. Posts created or edited from now on still translate automatically — the fuses do not cover that lane. Look for `daily translation fuse tripped` in the Rails log: it names which fuse and shows the count against the limit. Raise `babel_reunited_daily_translation_limit` or `babel_reunited_user_daily_translation_limit`, or set the offending one to `0` to disable it.
 
 **Translated title not showing**
 - Title translation only applies to the first post of a topic.
