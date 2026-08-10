@@ -367,4 +367,5 @@ RAILS_ENV=production bin/rake assets:precompile
 
 ## License
 
-[MIT](LICENSE).
+Copyright (C) 2026 BKBLAB. Licensed under [GPL-2.0](LICENSE), the same license
+as Discourse core.
