@@ -38,7 +38,7 @@ Older sites are not left behind, but they must pin a commit rather than track
 - Translated topic titles displayed in topic lists and topic detail pages
 - Inline language tabs on each post for switching between translations
 - Per-user language preference with opt-out toggle (prompted on first login)
-- On-demand translation fallback when a translation is not yet available
+- Any supported language on demand: readers pick from a searchable menu on the post, not just the pre-translated set, and the first request is cached and shared with everyone after it
 - Multiple AI provider support: OpenAI, xAI (Grok), DeepSeek, Anthropic (Claude), or any OpenAI-compatible API
 - Markdown formatting preservation during translation
 - Redis-based per-minute rate limiting, content length limits, and daily fuses on reader-initiated translation
@@ -218,6 +218,7 @@ opens.
 4. Translated content is cooked through Discourse’s `PrettyText` pipeline and sanitized before storage.
 5. Translation status updates are pushed to the frontend via MessageBus in real time.
 6. Users with a preferred language see translated titles in topic lists and can switch between language tabs on posts.
+7. A translation into the post's own language never reaches a reader, even when such a record exists: the language tabs and every path that serves a body filter against the detected source language. Legacy same-language records therefore stop being offered the moment detection lands on a post, before any cleanup task deletes them — which is why the backfill above is the step that matters operationally, and `cleanup_same_language_copies` can follow at leisure.
 
 ---
 
@@ -274,13 +275,34 @@ Detects the source language of posts that predate language detection. Run this t
 completion — until it reports zero posts still needing detection — before running
 `cleanup_same_language_copies`, which depends on its results.
 
+Unlike the other tasks, this one calls the provider itself rather than queueing
+jobs, so it holds the terminal for the length of the run: roughly an hour per
+1800 posts at the default pace. Use `tmux` or `screen`.
+
 ```bash
-# Preview
+# Survey: read-only, sends nothing, prints the five buckets and the total
 bin/rake babel_reunited:backfill_detected_locales
 
-# Execute
+# A cautious first pass
+DRY_RUN=false LIMIT=20 bin/rake babel_reunited:backfill_detected_locales
+
+# The full run, paced at half the site rate limit unless PER_MINUTE says otherwise
 DRY_RUN=false bin/rake babel_reunited:backfill_detected_locales
 ```
+
+Notes for a long run:
+
+- **Run one at a time.** A second process cannot exceed the site rate limit, but
+  it will detect the same posts twice and pay twice.
+- **Interrupting is safe.** Ctrl-C stops it cleanly, every result already
+  recorded stays recorded, and re-running resumes from the database.
+- **The switch is the brake.** Turning off `babel_reunited_enabled` stops the run
+  before the next post is sent. Lowering `babel_reunited_rate_limit_per_minute`
+  takes effect on the next post too.
+- **An idle Sidekiq queue is not the finish line** — there is no queue. Re-run
+  the survey until `still needing detection` reads 0. Posts under
+  `Failed, left for a re-run` recorded nothing and are picked up by re-running;
+  `answered as no supported language` is a recorded answer, not a failure.
 
 ### `babel_reunited:cleanup_same_language_copies`
 
