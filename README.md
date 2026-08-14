@@ -168,7 +168,7 @@ Provide the key for your chosen provider. Leave the others blank.
 | `babel_reunited_enabled_categories` | (all) | Restrict translation to specific categories; blank means all |
 | `babel_reunited_translate_title` | `true` | Translate topic titles (first post only) |
 | `babel_reunited_preserve_formatting` | `true` | Preserve Markdown formatting in translations |
-| `babel_reunited_rate_limit_per_minute` | `60` | Max translation requests per minute |
+| `babel_reunited_rate_limit_per_minute` | `60` | Max provider API calls per minute, shared by detection, title translation and each content chunk — one post can spend several |
 | `babel_reunited_max_content_length` | `4000` | Max post length to translate |
 | `babel_reunited_request_timeout_seconds` | `300` | Timeout for each provider API request |
 | `babel_reunited_modal_description` | | Replaces the default copy in the first-login language modal |
@@ -218,9 +218,51 @@ opens.
 4. Translated content is cooked through Discourse’s `PrettyText` pipeline and sanitized before storage.
 5. Translation status updates are pushed to the frontend via MessageBus in real time.
 6. Users with a preferred language see translated titles in topic lists and can switch between language tabs on posts.
-7. A translation into the post's own language never reaches a reader, even when such a record exists: the language tabs and every path that serves a body filter against the detected source language. Legacy same-language records therefore stop being offered the moment detection lands on a post, before any cleanup task deletes them — which is why the backfill above is the step that matters operationally, and `cleanup_same_language_copies` can follow at leisure.
+7. A translation into the post's own language never reaches a reader, even when such a record exists: the language tabs and every path that serves a body filter against the detected source language.
 
 ---
+
+## What Leaves Your Site, and What It Costs
+
+Read this before enabling the plugin on a forum you do not own outright.
+
+**Post content is sent to a third party.** Translating a post means sending its
+body, and its title when `babel_reunited_translate_title` is on, to whichever
+provider you configured. Detection sends a sample of up to 400 characters.
+Code blocks, inline code, BBCode `[code]` / `[quote]` / `[details]` and URLs are
+stripped before that sample is built, so pasted keys and logs inside those
+blocks do not travel — but ordinary prose does, verbatim.
+
+The provider is yours to choose and yours to vet. Check its data-retention and
+training policy, and whether an enterprise or zero-retention tier is available,
+before pointing this at private categories. `babel_reunited_enabled_categories`
+is the tool for keeping a category out of it entirely.
+
+**Cost scales with posts × target languages.** Every new post in an enabled
+category is fanned out to each language in
+`babel_reunited_auto_translate_languages`, so adding a fourth language adds
+roughly a third to the automatic bill. A long post is split into as many as 5
+chunks, each its own call, plus one for the title and one for detection.
+
+Reader-initiated translations are the other lane, bounded by the daily fuses
+described above rather than by the language list. Turning on
+`babel_reunited_view_triggered_translation` trades the up-front fan-out for
+paying only for posts somebody actually reads, which is cheaper on a forum
+where most posts go unread in most languages.
+
+There is no spend cap. The per-minute limit bounds the rate, the daily fuses
+bound abuse; neither is a budget. Watch the provider's own usage dashboard.
+
+## Supported Languages
+
+126 language codes are accepted, of which 110 are offered in the reader's
+language menu — regional variants that translate identically to their base
+language stay valid for existing data but are not offered again. The list is
+defined in
+[`lib/babel_reunited/locales.rb`](lib/babel_reunited/locales.rb) and mirrored
+for the frontend in
+[`assets/javascripts/discourse/lib/babel-locales.js`](assets/javascripts/discourse/lib/babel-locales.js);
+a spec keeps the two in sync.
 
 ## Rake Tasks
 
@@ -310,6 +352,11 @@ Deletes translation records whose target language is the post's own detected
 language — the original already covers that language. Only records that are
 provably redundant are touched.
 
+This is housekeeping rather than a fix: step 7 of [How It Works](#how-it-works)
+means such records stop being offered to readers the moment detection lands on
+the post. Run `backfill_detected_locales` to completion first, then run this
+whenever it suits.
+
 ```bash
 # Preview
 bin/rake babel_reunited:cleanup_same_language_copies
@@ -320,8 +367,14 @@ DRY_RUN=false bin/rake babel_reunited:cleanup_same_language_copies
 
 ### `babel_reunited:scan_translation_anomalies`
 
-Read-only. Flags stored translations that look wrong, so they can be
-re-translated or deleted.
+Read-only. Compares each stored translation's structure against its source and
+flags the ones that drifted.
+
+**The output is a heuristic and needs human judgement — do not delete from it
+directly.** Bilingual originals, normal length differences between scripts and
+harmless formatting changes all register as drift, so the false-positive rate
+is high ([#33](https://github.com/BlackKingBarOrg/babel-reunited/issues/33)).
+Read the flagged records before deciding to re-translate or delete any of them.
 
 ```bash
 bin/rake babel_reunited:scan_translation_anomalies
