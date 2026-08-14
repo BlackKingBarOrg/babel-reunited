@@ -192,6 +192,27 @@ RSpec.describe BabelReunited::LanguageDetectionService do
       expect(user).to include("A sentence long enough to sample.")
     end
 
+    # An attachment reference is site-internal and can eat a fifth of the
+    # 400-character window, on exactly the short posts where detection is
+    # already marginal.
+    it "strips upload references from the sample" do
+      post_record.update_columns(
+        raw:
+          "A sentence long enough to sample the language of this post.\n" \
+            "![|1424x541](upload://zGfLwQgHmidg0EFIjkFFQtCOpD3.png)\n" \
+            "upload://bareReferenceWithoutMarkdown.jpg\n" \
+            "More prose so the sample is not just markup."
+      )
+
+      body = last_request_body
+      user = body["messages"].last["content"]
+      expect(user).not_to include("upload://")
+      expect(user).not_to include("zGfLwQgHmidg0EFIjkFFQtCOpD3")
+      expect(user).not_to include("bareReferenceWithoutMarkdown")
+      expect(user).to include("A sentence long enough to sample")
+      expect(user).to include("More prose so the sample is not just markup.")
+    end
+
     # The translation path tokenizes these before the provider sees them, so
     # detection must not be the looser door into the same content.
     it "strips BBCode blocks the translation path never sends" do

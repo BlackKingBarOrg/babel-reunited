@@ -143,8 +143,11 @@ module BabelReunited
 
     def build_sample
       # Code blocks carry no language signal and can contain secrets that
-      # have no business reaching the provider; URLs can dominate short
-      # posts. Both are removed before sampling.
+      # have no business reaching the provider; URLs and Discourse's own
+      # upload references can dominate short posts. All are removed before
+      # sampling. One attachment can be a fifth of a 400-character window,
+      # and its identifier is site-internal, which is the same reason code
+      # and URLs go.
       #
       # The block patterns come from MarkdownProtector rather than a second
       # list of our own: the translation path never shows a provider what
@@ -155,7 +158,11 @@ module BabelReunited
         sample = sample.gsub(pattern, " ")
       end
 
-      sample.gsub(/`[^`\n]+`/, " ").gsub(%r{https?://\S+}, " ")[
+      sample
+        .gsub(/`[^`\n]+`/, " ")
+        .gsub(%r{!?\[[^\]\n]*\]\(upload://[^)\s]*\)}, " ")
+        .gsub(%r{upload://\S+}, " ")
+        .gsub(%r{https?://\S+}, " ")[
         0,
         SAMPLE_LENGTH
       ].to_s
