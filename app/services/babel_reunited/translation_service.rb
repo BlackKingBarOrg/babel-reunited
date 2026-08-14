@@ -277,10 +277,12 @@ module BabelReunited
         raise BabelReunited::RateLimitError, "Local rate limit exceeded"
       end
 
+      # Logging is a callback so a retried request logs both attempts.
       client =
         BabelReunited::ProviderClient.new(
           config: api_config,
-          timeout: SiteSetting.babel_reunited_request_timeout_seconds
+          timeout: SiteSetting.babel_reunited_request_timeout_seconds,
+          on_response: ->(resp) { log_provider_response(resp, api_config) }
         )
 
       response =
@@ -289,8 +291,6 @@ module BabelReunited
           max_tokens: output_tokens(api_config, max_tokens_override),
           system: system
         )
-
-      log_provider_response(response, api_config)
 
       if response.success?
         client.parse(response.body)
