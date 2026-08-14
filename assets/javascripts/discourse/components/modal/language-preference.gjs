@@ -24,6 +24,12 @@ export default class LanguagePreferenceModal extends Component {
     return getSupportedLanguages(this.siteSettings);
   }
 
+  // Reachable a second time from the header button, so it has to show what
+  // the reader already chose rather than an empty list.
+  get selectedCode() {
+    return this.currentUser?.preferred_language;
+  }
+
   get modalDescription() {
     return trustHTML(
       this.siteSettings.babel_reunited_modal_description ||
@@ -36,9 +42,12 @@ export default class LanguagePreferenceModal extends Component {
     this.saving = true;
 
     try {
+      // enabled travels with the language: a reader who turned translation
+      // off and later picks a language from the header button means to turn
+      // it back on, and the endpoint only writes the flag when it is sent.
       await ajax("/babel-reunited/user-preferred-language", {
         type: "POST",
-        data: { language },
+        data: { language, enabled: true },
       });
 
       this.currentUser.set("preferred_language", language);
@@ -83,6 +92,7 @@ export default class LanguagePreferenceModal extends Component {
         <p>{{this.modalDescription}}</p>
 
         <BabelLanguagePicker
+          @selectedCode={{this.selectedCode}}
           @instantCodes={{this.instantCodes}}
           @groupInstant={{true}}
           @showHints={{true}}

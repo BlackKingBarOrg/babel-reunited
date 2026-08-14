@@ -8,6 +8,8 @@ de:
     title: "Babel Reunited"
   js:
     babel_reunited:
+      header:
+        language_preference: "Übersetzungssprache"
       language_tabs:
         disabled_by_user: "KI-Übersetzung wurde vom Nutzer deaktiviert"
         original: "Original"
