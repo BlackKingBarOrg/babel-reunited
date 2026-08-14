@@ -277,55 +277,23 @@ module BabelReunited
         raise BabelReunited::RateLimitError, "Local rate limit exceeded"
       end
 
-      provider = provider_for(api_config)
-
-      timeout = SiteSetting.babel_reunited_request_timeout_seconds
-      conn =
-        Faraday.new(
-          url: api_config[:base_url],
-          request: {
-            timeout: timeout,
-            open_timeout: timeout,
-            read_timeout: timeout,
-            write_timeout: timeout
-          }
-        ) do |f|
-          f.request :json
-          f.response :json
-          f.adapter Faraday.default_adapter
-        end
-
-      token_param = api_config[:output_token_param] || :max_tokens
-      max_tokens = max_tokens_override || api_config[:max_output_tokens]
-      if max_tokens_override && api_config[:max_output_tokens]
-        max_tokens = [
-          max_tokens_override,
-          api_config[:max_output_tokens].to_i
-        ].min
-      end
-
-      request_body =
-        provider.build_request_body(
-          model: api_config[:model_name],
-          messages: [{ role: "user", content: prompt }],
-          max_tokens: max_tokens,
-          token_param: token_param,
-          supports_temperature: api_config[:supports_temperature],
-          system: system
+      client =
+        BabelReunited::ProviderClient.new(
+          config: api_config,
+          timeout: SiteSetting.babel_reunited_request_timeout_seconds
         )
 
       response =
-        conn.post(api_config[:path]) do |req|
-          provider
-            .headers(api_config[:api_key])
-            .each { |k, v| req.headers[k] = v }
-          req.body = request_body.to_json
-        end
+        client.post(
+          messages: [{ role: "user", content: prompt }],
+          max_tokens: output_tokens(api_config, max_tokens_override),
+          system: system
+        )
 
       log_provider_response(response, api_config)
 
       if response.success?
-        provider.parse_response(response.body)
+        client.parse(response.body)
       else
         handle_api_error(response)
       end
@@ -370,13 +338,14 @@ module BabelReunited
       api_config[:chunk_size].to_i
     end
 
-    def provider_for(api_config)
-      case api_config[:wire]
-      when :anthropic
-        Providers::Anthropic.new
-      else
-        Providers::OpenAiCompatible.new
-      end
+    # A title needs far fewer tokens than a post, but never more than the
+    # configured cap.
+    def output_tokens(api_config, override)
+      configured = api_config[:max_output_tokens]
+      return configured unless override
+      return override unless configured
+
+      [override, configured.to_i].min
     end
 
     # A cost cap, not a correctness one: the hard ceiling is MAX_CHUNKS, and

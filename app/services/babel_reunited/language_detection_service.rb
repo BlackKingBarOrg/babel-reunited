@@ -204,47 +204,21 @@ module BabelReunited
     end
 
     def request_detection(sample, config)
-      provider =
-        case config[:wire]
-        when :anthropic
-          Providers::Anthropic.new
-        else
-          Providers::OpenAiCompatible.new
-        end
-
-      conn =
-        Faraday.new(
-          url: config[:base_url],
-          request: {
-            timeout: REQUEST_TIMEOUT,
-            open_timeout: REQUEST_TIMEOUT,
-            read_timeout: REQUEST_TIMEOUT,
-            write_timeout: REQUEST_TIMEOUT
-          }
-        ) do |f|
-          f.request :json
-          f.response :json
-          f.adapter Faraday.default_adapter
-        end
-
-      request_body =
-        provider.build_request_body(
-          model: config[:model_name],
-          messages: [{ role: "user", content: wrap_sample(sample) }],
-          max_tokens: MAX_OUTPUT_TOKENS,
-          token_param: config[:output_token_param] || :max_tokens,
-          supports_temperature: config.fetch(:supports_temperature, true),
-          system: detection_system_prompt
+      client =
+        BabelReunited::ProviderClient.new(
+          config: config,
+          timeout: REQUEST_TIMEOUT
         )
 
       response =
-        conn.post(config[:path]) do |req|
-          provider.headers(config[:api_key]).each { |k, v| req.headers[k] = v }
-          req.body = request_body.to_json
-        end
+        client.post(
+          messages: [{ role: "user", content: wrap_sample(sample) }],
+          max_tokens: MAX_OUTPUT_TOKENS,
+          system: detection_system_prompt
+        )
 
       if response.success?
-        provider.parse_response(response.body)
+        client.parse(response.body)
       else
         {
           error: "Detection request failed with status #{response.status}",
