@@ -11,7 +11,8 @@ RSpec.describe BabelReunited do
     enable_current_plugin
     SiteSetting.babel_reunited_enabled = true
     SiteSetting.babel_reunited_openai_api_key = "sk-test-key"
-    SiteSetting.babel_reunited_preset_model = "gpt-4o"
+    SiteSetting.babel_reunited_provider = "openai"
+    SiteSetting.babel_reunited_model = "gpt-4o"
     SiteSetting.babel_reunited_auto_translate_languages = "zh-cn,en,es"
     SiteSetting.babel_reunited_translate_title = true
     Jobs.run_later!

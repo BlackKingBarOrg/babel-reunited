@@ -8,30 +8,20 @@ babel_reunited:
     default: ""
     client: true
 
-  babel_reunited_preset_model:
+  babel_reunited_provider:
     type: enum
-    default: "gpt-4o"
+    default: "openai"
     choices:
-      - gpt-5
-      - gpt-5-mini
-      - gpt-5-nano
-      - gpt-4.1
-      - gpt-4.1-mini
-      - gpt-4.1-nano
-      - gpt-4o
-      - gpt-4o-mini
-      - gpt-3.5-turbo
-      - grok-4
-      - grok-4-fast-non-reasoning
-      - grok-3
-      - grok-2
-      - deepseek-r1
-      - deepseek-v3
-      - claude-opus-4-7
-      - claude-sonnet-4-6
-      - claude-haiku-4-5
-      - custom
-    client: true
+      - openai
+      - anthropic
+      - openrouter
+      - google
+      - xai
+      - deepseek
+      - openai_compatible
+
+  babel_reunited_model:
+    default: "gpt-4o"
 
   babel_reunited_auto_translate_languages:
     default: "en,zh-cn,es"
@@ -73,11 +63,15 @@ babel_reunited:
     default: ""
     secret: true
 
-  # Custom model settings (only used when preset_model is "custom")
-  babel_reunited_custom_model_name:
+  babel_reunited_openrouter_api_key:
     default: ""
-    client: true
+    secret: true
 
+  babel_reunited_google_api_key:
+    default: ""
+    secret: true
+
+  # Only used when provider is "openai_compatible"
   babel_reunited_custom_base_url:
     default: ""
     client: false
@@ -86,16 +80,16 @@ babel_reunited:
     default: ""
     secret: true
 
-  babel_reunited_custom_max_tokens:
+  babel_reunited_max_output_tokens:
+    default: 8192
+    min: 100
+    max: 65000
+    client: false
+
+  babel_reunited_chunk_size:
     default: 16000
     min: 100
     max: 200000
-    client: false
-
-  babel_reunited_custom_max_output_tokens:
-    default: 4096
-    min: 100
-    max: 65000
     client: false
 
   babel_reunited_rate_limit_per_minute:
@@ -104,9 +98,9 @@ babel_reunited:
     max: 1000
 
   babel_reunited_max_content_length:
-    default: 4000
+    default: 100000
     min: 100
-    max: 100000
+    max: 1000000
 
   babel_reunited_preserve_formatting:
     default: true

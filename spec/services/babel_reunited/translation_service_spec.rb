@@ -8,10 +8,10 @@ RSpec.describe BabelReunited::TranslationService do
     # than leave callers to guess from the message.
     it "marks content that can never fit as permanent" do
       SiteSetting.babel_reunited_max_content_length = 100
-      SiteSetting.babel_reunited_preset_model = "custom"
+      SiteSetting.babel_reunited_provider = "openai_compatible"
       SiteSetting.babel_reunited_custom_api_key = "k"
       SiteSetting.babel_reunited_custom_base_url = "https://example.com"
-      SiteSetting.babel_reunited_custom_model_name = "m"
+      SiteSetting.babel_reunited_model = "m"
       post_record.update_columns(raw: "x" * 5000)
 
       result =
@@ -71,7 +71,8 @@ RSpec.describe BabelReunited::TranslationService do
     enable_current_plugin
     SiteSetting.babel_reunited_enabled = true
     SiteSetting.babel_reunited_openai_api_key = "sk-test-key"
-    SiteSetting.babel_reunited_preset_model = "gpt-4o"
+    SiteSetting.babel_reunited_provider = "openai"
+    SiteSetting.babel_reunited_model = "gpt-4o"
     SiteSetting.babel_reunited_translate_title = true
     SiteSetting.babel_reunited_rate_limit_per_minute = 60
     SiteSetting.babel_reunited_request_timeout_seconds = 30
@@ -174,7 +175,7 @@ RSpec.describe BabelReunited::TranslationService do
 
       result = build_service.call
       expect(result.failure?).to be true
-      expect(result.error).to include("Invalid preset model")
+      expect(result.error).to include("Invalid provider")
     end
 
     it "returns error when base_url is missing" do
@@ -447,69 +448,47 @@ RSpec.describe BabelReunited::TranslationService do
     end
   end
 
+  # The setting is a cost cap and it binds every provider the same way. It
+  # used to bind only the custom one, while presets derived a limit from the
+  # model's context window -- a rule no model list can express once the model
+  # is free text.
   describe "get_max_content_length" do
-    it "uses SiteSetting for custom provider" do
-      SiteSetting.babel_reunited_max_content_length = 5000
-      BabelReunited::ModelConfig.stubs(:get_config).returns(
-        {
-          provider: "custom",
-          model_name: "my-model",
-          base_url: "https://example.com",
-          api_key: "sk-test-key",
-          max_tokens: nil
-        }
-      )
+    it "bounds a hosted provider" do
+      SiteSetting.babel_reunited_max_content_length = 2000
 
       long_post = Fabricate(:post, topic: topic, user: user, post_number: 5)
-      long_post.stubs(:raw).returns("a" * 5001)
-      stub_llm_success
-
-      result = build_service(post: long_post).call
-      expect(result.failure?).to be true
-      expect(result.error).to include("Content too long")
-    end
-
-    it "uses max_tokens * 3 for preset providers" do
-      BabelReunited::ModelConfig.stubs(:get_config).returns(
-        {
-          provider: "openai",
-          model_name: "gpt-4o",
-          base_url: "https://api.openai.com",
-          api_key: "sk-test-key",
-          max_tokens: 1000,
-          max_output_tokens: 500
-        }
-      )
-
-      long_post = Fabricate(:post, topic: topic, user: user, post_number: 6)
-      long_post.stubs(:raw).returns("a" * 3001)
-      stub_llm_success
-
-      result = build_service(post: long_post).call
-      expect(result.failure?).to be true
-      expect(result.error).to include("Content too long")
-    end
-
-    it "falls back to SiteSetting when max_tokens is nil for preset" do
-      SiteSetting.babel_reunited_max_content_length = 2000
-      BabelReunited::ModelConfig.stubs(:get_config).returns(
-        {
-          provider: "openai",
-          model_name: "gpt-4o",
-          base_url: "https://api.openai.com",
-          api_key: "sk-test-key",
-          max_tokens: nil,
-          max_output_tokens: nil
-        }
-      )
-
-      long_post = Fabricate(:post, topic: topic, user: user, post_number: 7)
       long_post.stubs(:raw).returns("a" * 2001)
       stub_llm_success
 
       result = build_service(post: long_post).call
       expect(result.failure?).to be true
       expect(result.error).to include("Content too long")
+    end
+
+    it "bounds an OpenAI-compatible endpoint by the same setting" do
+      SiteSetting.babel_reunited_provider = "openai_compatible"
+      SiteSetting.babel_reunited_custom_api_key = "sk-test-key"
+      SiteSetting.babel_reunited_custom_base_url = "https://example.com"
+      SiteSetting.babel_reunited_model = "my-model"
+      SiteSetting.babel_reunited_max_content_length = 2000
+
+      long_post = Fabricate(:post, topic: topic, user: user, post_number: 6)
+      long_post.stubs(:raw).returns("a" * 2001)
+
+      result = build_service(post: long_post).call
+      expect(result.failure?).to be true
+      expect(result.error).to include("Content too long")
+    end
+
+    it "lets a post at the limit past the gate" do
+      SiteSetting.babel_reunited_max_content_length = 2000
+
+      short_post = Fabricate(:post, topic: topic, user: user, post_number: 7)
+      short_post.stubs(:raw).returns("a" * 2000)
+      stub_llm_success
+
+      result = build_service(post: short_post).call
+      expect(result.error.to_s).not_to include("Content too long")
     end
   end
 
@@ -920,16 +899,7 @@ RSpec.describe BabelReunited::TranslationService do
       chunky_post =
         Fabricate(:post, topic: topic, user: user, raw: raw, post_number: 15)
 
-      BabelReunited::ModelConfig.stubs(:get_config).returns(
-        {
-          provider: "openai",
-          model_name: "gpt-4o",
-          base_url: "https://api.openai.com",
-          api_key: "sk-test-key",
-          max_tokens: 100_000,
-          max_output_tokens: 120
-        }
-      )
+      SiteSetting.babel_reunited_chunk_size = 120
       stub_llm_echo
 
       result = build_service(post: chunky_post).call
@@ -1093,7 +1063,8 @@ RSpec.describe BabelReunited::TranslationService do
 
     it "sends the system prompt as a top-level parameter for Anthropic" do
       SiteSetting.babel_reunited_anthropic_api_key = "sk-ant-test"
-      SiteSetting.babel_reunited_preset_model = "claude-sonnet-4-6"
+      SiteSetting.babel_reunited_provider = "anthropic"
+      SiteSetting.babel_reunited_model = "claude-sonnet-4-6"
       SiteSetting.babel_reunited_translate_title = false
 
       request_body = nil
@@ -1335,7 +1306,8 @@ RSpec.describe BabelReunited::TranslationService do
   describe "Anthropic provider integration" do
     before do
       SiteSetting.babel_reunited_anthropic_api_key = "sk-ant-test-key"
-      SiteSetting.babel_reunited_preset_model = "claude-sonnet-4-6"
+      SiteSetting.babel_reunited_provider = "anthropic"
+      SiteSetting.babel_reunited_model = "claude-sonnet-4-6"
       SiteSetting.babel_reunited_translate_title = false
     end
 

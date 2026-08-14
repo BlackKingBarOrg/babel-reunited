@@ -5,10 +5,6 @@ module BabelReunited
     class Anthropic < Base
       ANTHROPIC_VERSION = "2023-06-01"
 
-      def endpoint_path
-        "/v1/messages"
-      end
-
       def headers(api_key)
         {
           "x-api-key" => api_key,

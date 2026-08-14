@@ -3,10 +3,6 @@
 module BabelReunited
   module Providers
     class OpenAiCompatible < Base
-      def endpoint_path
-        "/v1/chat/completions"
-      end
-
       def headers(api_key)
         {
           "Authorization" => "Bearer #{api_key}",

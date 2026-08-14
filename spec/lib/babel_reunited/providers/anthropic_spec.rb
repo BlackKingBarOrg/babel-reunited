@@ -5,12 +5,6 @@ RSpec.describe BabelReunited::Providers::Anthropic do
 
   before { enable_current_plugin }
 
-  describe "#endpoint_path" do
-    it "returns the Anthropic messages path" do
-      expect(provider.endpoint_path).to eq("/v1/messages")
-    end
-  end
-
   describe "#headers" do
     it "returns x-api-key and anthropic-version headers" do
       headers = provider.headers("sk-ant-test-key")
@@ -33,7 +27,7 @@ RSpec.describe BabelReunited::Providers::Anthropic do
           messages: [{ role: "user", content: "Hello" }],
           max_tokens: 4096,
           token_param: :max_completion_tokens,
-          supports_temperature: true,
+          supports_temperature: true
         )
 
       expect(body[:model]).to eq("claude-sonnet-4-20250514")
@@ -50,7 +44,7 @@ RSpec.describe BabelReunited::Providers::Anthropic do
           messages: [],
           max_tokens: 2000,
           token_param: :max_completion_tokens,
-          supports_temperature: true,
+          supports_temperature: true
         )
 
       expect(body[:max_tokens]).to eq(2000)
@@ -66,8 +60,8 @@ RSpec.describe BabelReunited::Providers::Anthropic do
         "stop_reason" => "end_turn",
         "usage" => {
           "input_tokens" => 50,
-          "output_tokens" => 80,
-        },
+          "output_tokens" => 80
+        }
       }
 
       result = provider.parse_response(body)
@@ -82,8 +76,8 @@ RSpec.describe BabelReunited::Providers::Anthropic do
         "stop_reason" => "max_tokens",
         "usage" => {
           "input_tokens" => 50,
-          "output_tokens" => 16_000,
-        },
+          "output_tokens" => 16_000
+        }
       }
 
       result = provider.parse_response(body)
@@ -103,7 +97,7 @@ RSpec.describe BabelReunited::Providers::Anthropic do
     it "returns error when no text block is found" do
       body = {
         "content" => [{ "type" => "tool_use", "name" => "something" }],
-        "stop_reason" => "end_turn",
+        "stop_reason" => "end_turn"
       }
 
       result = provider.parse_response(body)
@@ -111,7 +105,10 @@ RSpec.describe BabelReunited::Providers::Anthropic do
     end
 
     it "handles missing usage gracefully" do
-      body = { "content" => [{ "type" => "text", "text" => "Hello" }], "stop_reason" => "end_turn" }
+      body = {
+        "content" => [{ "type" => "text", "text" => "Hello" }],
+        "stop_reason" => "end_turn"
+      }
 
       result = provider.parse_response(body)
       expect(result[:text]).to eq("Hello")

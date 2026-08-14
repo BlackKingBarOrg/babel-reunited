@@ -16,7 +16,8 @@ RSpec.describe BabelReunited::LanguageDetectionService do
   before do
     enable_current_plugin
     SiteSetting.babel_reunited_openai_api_key = "sk-test-key"
-    SiteSetting.babel_reunited_preset_model = "gpt-4o"
+    SiteSetting.babel_reunited_provider = "openai"
+    SiteSetting.babel_reunited_model = "gpt-4o"
     Discourse.redis.flushdb
   end
 

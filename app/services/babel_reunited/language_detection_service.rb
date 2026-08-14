@@ -62,7 +62,7 @@ module BabelReunited
     # itself finished.
     def self.configuration_error
       config = BabelReunited::ModelConfig.get_config
-      return "Invalid preset model" if config.nil?
+      return "Invalid provider" if config.nil?
       return "API key not configured" if config[:api_key].blank?
       return "Base URL not configured" if config[:base_url].blank?
       return "Model name not configured" if config[:model_name].blank?
@@ -205,8 +205,8 @@ module BabelReunited
 
     def request_detection(sample, config)
       provider =
-        case config[:provider]
-        when "anthropic"
+        case config[:wire]
+        when :anthropic
           Providers::Anthropic.new
         else
           Providers::OpenAiCompatible.new
@@ -238,7 +238,7 @@ module BabelReunited
         )
 
       response =
-        conn.post(provider.endpoint_path) do |req|
+        conn.post(config[:path]) do |req|
           provider.headers(config[:api_key]).each { |k, v| req.headers[k] = v }
           req.body = request_body.to_json
         end

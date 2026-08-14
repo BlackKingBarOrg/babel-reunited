@@ -7,7 +7,8 @@ es:
     title: "Babel Reunited"
   site_settings:
     babel_reunited_enabled: "Habilitar el plugin Babel Reunited"
-    babel_reunited_preset_model: "Seleccionar modelo predefinido"
+    babel_reunited_provider: "Proveedor de traducción. Elige 'openai_compatible' para cualquier otro endpoint compatible con OpenAI, incluido uno local."
+    babel_reunited_model: "Identificador del modelo, tal como lo nombra el proveedor (por ejemplo gpt-4o, claude-sonnet-4-6, o anthropic/claude-sonnet-4-6 en OpenRouter)."
     babel_reunited_auto_translate_languages: "Idiomas de traducción automática (códigos de idioma separados por comas)"
     babel_reunited_view_triggered_translation: "Traducir automáticamente una publicación al idioma preferido del lector cuando la vea y aún no exista traducción"
     babel_reunited_daily_translation_limit: "Cortacircuitos del sitio: máximo de solicitudes de traducción aceptadas por día entre todos los usuarios no staff (manuales y por visualización). 0 desactiva el límite."
@@ -17,12 +18,13 @@ es:
     babel_reunited_openai_api_key: "Clave API de OpenAI"
     babel_reunited_xai_api_key: "Clave API de xAI (Grok)"
     babel_reunited_deepseek_api_key: "Clave API de DeepSeek"
-    
-    babel_reunited_custom_model_name: "Nombre del modelo personalizado (solo se usa cuando se selecciona 'custom')"
-    babel_reunited_custom_base_url: "URL base de API personalizada"
-    babel_reunited_custom_api_key: "Clave API personalizada"
-    babel_reunited_custom_max_tokens: "Máximo de tokens de entrada personalizado"
-    babel_reunited_custom_max_output_tokens: "Máximo de tokens de salida personalizado"
+    babel_reunited_openrouter_api_key: "Clave API de OpenRouter"
+    babel_reunited_google_api_key: "Clave API de Google (Gemini)"
+
+    babel_reunited_custom_base_url: "URL base del endpoint compatible con OpenAI (solo se usa cuando el proveedor es 'openai_compatible'). Funciona con o sin el /v1 final."
+    babel_reunited_custom_api_key: "Clave API del endpoint compatible con OpenAI"
+    babel_reunited_max_output_tokens: "Máximo de tokens de salida solicitados por llamada al proveedor. Redúcelo si tu modelo rechaza la petición."
+    babel_reunited_chunk_size: "Caracteres por fragmento al dividir una publicación larga. Una publicación que necesite más de 5 fragmentos no se traduce."
     
     babel_reunited_rate_limit_per_minute: "Límite de velocidad por minuto"
     babel_reunited_max_content_length: "Longitud máxima del contenido para traducción"
