@@ -101,22 +101,35 @@ module BabelReunited
 
     # Whether this body may be shown to a reader.
     #
-    # Only a translation of the post's current content qualifies. Every other
-    # status — stale, failed, or a stale row re-claimed into translating —
-    # carries a body produced from text the author has since changed, and the
-    # change that matters is a redaction: an API key, a phone number, a name
-    # pasted by mistake. In a long post that is a handful of characters, so no
-    # length or ratio test can see it. Only "the content this was translated
-    # from is still the content" can, and status is exactly that record: an
-    # edit moves every completed translation off completed (see
-    # BabelReunited.trigger_retranslation), and a translation that finished
-    # against content which moved under it is saved as stale, never completed.
+    # Only a translation of the post's current content qualifies. A body
+    # produced from text the author has since changed is not merely out of
+    # date: the change that matters is a redaction — an API key, a phone
+    # number, a name pasted by mistake. In a long post that is a handful of
+    # characters, so no length or ratio test can see it. Only "the content
+    # this was translated from is still the content" can.
+    #
+    # That question is answered here rather than read off the status, because
+    # status only records what was true the last time something maintained
+    # it. Edit-time invalidation (BabelReunited.trigger_retranslation) has
+    # kept it true since it shipped, but nothing ever revisited the rows
+    # written before that: on a production copy 1453 of 4548 completed rows
+    # carried a fingerprint that no longer matched their post, while exactly
+    # one row was marked stale. Every one of those was being served to
+    # readers. Comparing the fingerprint cannot drift from the truth the way
+    # a flag can.
+    #
+    # A row with no fingerprint at all is treated the same way, matching what
+    # trigger_retranslation already does with its IS DISTINCT FROM: nothing
+    # is known about what it was translated from.
     #
     # The cost is that an edit hides a translation until it is redone. The
     # pre-translate layer redoes it at once; the lazy layer redoes it on next
     # view. Showing the original in the meantime is the safe direction.
-    def safe_to_display?
-      completed?
+    def safe_to_display?(post)
+      return false unless completed?
+      return false if source_sha.blank?
+
+      source_sha == BabelReunited.current_content_sha_for(post)
     end
 
     # A claim older than this is treated as abandoned: the worker died, the

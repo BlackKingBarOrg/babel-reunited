@@ -247,6 +247,7 @@ opens.
 5. Translation status updates are pushed to the frontend via MessageBus in real time.
 6. Users with a preferred language see translated titles in topic lists and can switch between language tabs on posts.
 7. A translation into the post's own language never reaches a reader, even when such a record exists: the language tabs and every path that serves a body filter against the detected source language.
+8. A translation only reaches a reader while it is still a translation of what the post currently says. Every path that serves a body compares the translation's stored fingerprint against the post's current content, so an edit hides the translation until it is redone — the edit that matters is a redaction, and no length or structure test can see one. Existing rows that predate this check are found by `backfill_stale_translations`.
 
 ---
 
@@ -393,6 +394,38 @@ bin/rake babel_reunited:cleanup_same_language_copies
 # Execute
 DRY_RUN=false bin/rake babel_reunited:cleanup_same_language_copies
 ```
+
+### `babel_reunited:backfill_stale_translations`
+
+Finds completed translations whose stored fingerprint no longer matches their
+post, and marks them stale.
+
+Readers stop seeing those bodies the moment this release is deployed — the
+display guard compares the fingerprint itself rather than trusting the status.
+What this task adds is that the record then says so, which is what makes the
+rows eligible to be redone: nothing re-translates a row that still claims to
+be completed.
+
+Run it once after deploying. It is the historical rows that need it: edits
+made since edit-time invalidation shipped have been handled all along, but
+nothing ever revisited what came before. On one production copy that was 1453
+of 4548 completed rows.
+
+```bash
+# Preview
+bin/rake babel_reunited:backfill_stale_translations
+
+# Mark them stale
+DRY_RUN=false bin/rake babel_reunited:backfill_stale_translations
+
+# Mark them stale and queue the re-translations, a batch at a time
+DRY_RUN=false ENQUEUE=true LIMIT=200 bin/rake babel_reunited:backfill_stale_translations
+```
+
+Without `ENQUEUE=true` the rows are withheld but nothing redoes them, unless
+`babel_reunited_view_triggered_translation` is on, in which case a reader
+opening the post triggers it. Each queued job is a provider call, so `LIMIT`
+is how you keep the bill and the rate limiter in view.
 
 ### `babel_reunited:scan_translation_anomalies`
 

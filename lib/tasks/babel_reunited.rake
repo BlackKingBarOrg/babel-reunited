@@ -725,4 +725,122 @@ namespace :babel_reunited do
     puts "Migrated: #{migrated} user preferences"
     puts "Skipped: #{skipped} (missing users)"
   end
+
+  desc "Mark completed translations whose fingerprint no longer matches their post (dry run by default)"
+  task backfill_stale_translations: :environment do
+    unless SiteSetting.babel_reunited_enabled
+      puts "ERROR: Babel Reunited plugin is not enabled"
+      exit 1
+    end
+
+    dry_run = ENV["DRY_RUN"] != "false"
+    enqueue = ENV["ENQUEUE"] == "true"
+    batch_size = (ENV["BATCH_SIZE"] || 500).to_i
+    limit = ENV["LIMIT"]&.to_i
+
+    # Edit-time invalidation only ever ran for edits made after it shipped,
+    # and nothing revisited the rows written before that. They stayed
+    # "completed" and were served to readers as translations of content the
+    # author had already changed.
+    #
+    # The display guard now compares the fingerprint itself, so those rows
+    # are already withheld the moment this release is deployed. What this
+    # task does is make the record say so, which is what lets them be
+    # re-translated: nothing re-translates a row that still claims to be
+    # completed.
+    scanned = 0
+    outdated = 0
+    marked = 0
+    enqueued = 0
+    missing_post = 0
+    samples = []
+
+    catch(:done) do
+      BabelReunited::PostTranslation
+        .where(status: "completed")
+        .in_batches(of: batch_size) do |batch|
+          # The fingerprint covers the title for first posts, so the topic
+          # has to come along or it is one query per record.
+          records = batch.includes(post: :topic).to_a
+
+          stale_ids = []
+          records.each do |t|
+            throw :done if limit && scanned >= limit
+
+            post = t.post
+            if post.nil?
+              missing_post += 1
+              next
+            end
+
+            scanned += 1
+            current = Jobs::BabelReunited::TranslatePostJob.content_sha(post)
+            next if t.source_sha.present? && t.source_sha == current
+
+            outdated += 1
+            stale_ids << t.id
+            if samples.size < 10
+              samples << "  translation #{t.id} post #{t.post_id} " \
+                "topic #{post.topic_id} #{t.language}"
+            end
+          end
+
+          next if dry_run || stale_ids.empty?
+
+          marked +=
+            BabelReunited::PostTranslation.where(id: stale_ids).update_all(
+              status: "stale",
+              updated_at: Time.current
+            )
+
+          next unless enqueue
+
+          # force_update, because the row still carries a body: without it the
+          # job's self-heal path would look at a fingerprint that does not
+          # match and there would be nothing to heal from.
+          records
+            .select { |t| stale_ids.include?(t.id) }
+            .each do |t|
+              Jobs.enqueue(
+                Jobs::BabelReunited::TranslatePostJob,
+                post_id: t.post_id,
+                target_language: t.language,
+                force_update: true
+              )
+              enqueued += 1
+            end
+        end
+    end
+
+    puts "Scanned:            #{scanned} completed translations"
+    puts "Fingerprint stale:  #{outdated}"
+    puts "Post deleted:       #{missing_post}" if missing_post > 0
+
+    if outdated.zero?
+      puts "Nothing to do"
+      next
+    end
+
+    if dry_run
+      puts ""
+      puts "DRY RUN - nothing was changed"
+      puts "Use DRY_RUN=false to mark these records stale"
+      puts "Add ENQUEUE=true to also queue them for re-translation"
+      puts ""
+      puts "Sample records:"
+      samples.each { |line| puts line }
+      if outdated > samples.size
+        puts "  ... and #{outdated - samples.size} more"
+      end
+    else
+      puts "Marked stale:       #{marked}"
+      if enqueue
+        puts "Queued:             #{enqueued} re-translation jobs"
+      else
+        puts ""
+        puts "These rows are withheld from readers but nothing will redo them:"
+        puts "re-run with ENQUEUE=true (LIMIT bounds the batch) to queue the work."
+      end
+    end
+  end
 end

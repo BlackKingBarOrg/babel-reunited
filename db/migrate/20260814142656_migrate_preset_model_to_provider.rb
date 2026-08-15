@@ -1,29 +1,32 @@
 # frozen_string_literal: true
 
 class MigratePresetModelToProvider < ActiveRecord::Migration[8.0]
-  # babel_reunited_preset_model named a model and implied its provider. The
-  # two are now separate settings, so every preset has to be split back into
-  # the pair it stood for. claude-haiku-4-5 is the one entry whose key was
-  # not the model id it actually sent.
+  # babel_reunited_preset_model named a model and implied three other things:
+  # its provider, its output cap, and -- because the old code passed the
+  # output cap straight to the content splitter -- its chunk size. All four
+  # have to come back out, or a site silently changes how much it asks for
+  # and how finely it splits.
+  #
+  # claude-haiku-4-5 is the one entry whose key was not the model id it sent.
   PRESETS = {
-    "gpt-5" => %w[openai gpt-5],
-    "gpt-5-mini" => %w[openai gpt-5-mini],
-    "gpt-5-nano" => %w[openai gpt-5-nano],
-    "gpt-4.1" => %w[openai gpt-4.1],
-    "gpt-4.1-mini" => %w[openai gpt-4.1-mini],
-    "gpt-4.1-nano" => %w[openai gpt-4.1-nano],
-    "gpt-4o" => %w[openai gpt-4o],
-    "gpt-4o-mini" => %w[openai gpt-4o-mini],
-    "gpt-3.5-turbo" => %w[openai gpt-3.5-turbo],
-    "grok-4" => %w[xai grok-4],
-    "grok-4-fast-non-reasoning" => %w[xai grok-4-fast-non-reasoning],
-    "grok-3" => %w[xai grok-3],
-    "grok-2" => %w[xai grok-2],
-    "deepseek-r1" => %w[deepseek deepseek-r1],
-    "deepseek-v3" => %w[deepseek deepseek-v3],
-    "claude-opus-4-7" => %w[anthropic claude-opus-4-7],
-    "claude-sonnet-4-6" => %w[anthropic claude-sonnet-4-6],
-    "claude-haiku-4-5" => %w[anthropic claude-haiku-4-5-20251001]
+    "gpt-5" => ["openai", "gpt-5", 16_000],
+    "gpt-5-mini" => ["openai", "gpt-5-mini", 16_000],
+    "gpt-5-nano" => ["openai", "gpt-5-nano", 4_096],
+    "gpt-4.1" => ["openai", "gpt-4.1", 32_768],
+    "gpt-4.1-mini" => ["openai", "gpt-4.1-mini", 32_768],
+    "gpt-4.1-nano" => ["openai", "gpt-4.1-nano", 32_768],
+    "gpt-4o" => ["openai", "gpt-4o", 16_000],
+    "gpt-4o-mini" => ["openai", "gpt-4o-mini", 16_000],
+    "gpt-3.5-turbo" => ["openai", "gpt-3.5-turbo", 4_096],
+    "grok-4" => ["xai", "grok-4", 36_000],
+    "grok-4-fast-non-reasoning" => ["xai", "grok-4-fast-non-reasoning", 36_000],
+    "grok-3" => ["xai", "grok-3", 16_000],
+    "grok-2" => ["xai", "grok-2", 16_000],
+    "deepseek-r1" => ["deepseek", "deepseek-r1", 16_000],
+    "deepseek-v3" => ["deepseek", "deepseek-v3", 16_000],
+    "claude-opus-4-7" => ["anthropic", "claude-opus-4-7", 32_000],
+    "claude-sonnet-4-6" => ["anthropic", "claude-sonnet-4-6", 16_000],
+    "claude-haiku-4-5" => ["anthropic", "claude-haiku-4-5-20251001", 8_192]
   }.freeze
 
   ENUM = 7
@@ -33,29 +36,26 @@ class MigratePresetModelToProvider < ActiveRecord::Migration[8.0]
   def up
     preset = read_setting("babel_reunited_preset_model")
 
-    # No row means the site was on the old default (gpt-4o), which the new
-    # defaults already reproduce.
+    # No row means the site was on the old default, gpt-4o, whose 16000 both
+    # new defaults reproduce.
     return if preset.blank?
 
     if preset == "custom"
       provider = "openai_compatible"
       model = read_setting("babel_reunited_custom_model_name")
-
-      # The custom provider's output cap drove both the request and the chunk
-      # size. Carry it into both so a site that tuned it down for a small
-      # model keeps the same behaviour.
       output_tokens = read_setting("babel_reunited_custom_max_output_tokens")
-      if output_tokens.present?
-        upsert_setting(
-          "babel_reunited_max_output_tokens",
-          output_tokens,
-          INTEGER
-        )
-        upsert_setting("babel_reunited_chunk_size", output_tokens, INTEGER)
-      end
     else
-      provider, model = PRESETS[preset]
+      provider, model, output_tokens = PRESETS[preset]
       return if provider.nil?
+    end
+
+    # The old code passed one number to the provider as the output cap and to
+    # the content splitter as a character count, so both new settings come
+    # from it. Splitting them apart is the point of the change; starting them
+    # anywhere else would move two behaviours at once.
+    if output_tokens.present?
+      upsert_setting("babel_reunited_max_output_tokens", output_tokens, INTEGER)
+      upsert_setting("babel_reunited_chunk_size", output_tokens, INTEGER)
     end
 
     upsert_setting("babel_reunited_provider", provider, ENUM)

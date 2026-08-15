@@ -41,6 +41,8 @@ RSpec.describe "Language tabs" do
         language: "zh-cn",
         status: "completed",
         source_language: "en",
+        source_sha:
+          Jobs::BabelReunited::TranslatePostJob.content_sha(post_record),
         translated_content:
           PrettyText.cook("介绍段落。\n\n```ruby\nputs 'hello'\n```\n\n结尾段落。"),
         translated_raw: "介绍段落。\n\n```ruby\nputs 'hello'\n```\n\n结尾段落。"

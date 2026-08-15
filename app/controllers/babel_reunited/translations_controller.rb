@@ -24,7 +24,7 @@ module BabelReunited
       detected = BabelReunited.current_detected_locale_for(@post)
       translations =
         @post.post_translations.recent.select do |t|
-          t.safe_to_display? &&
+          t.safe_to_display?(@post) &&
             !BabelReunited.same_language?(t.language, detected)
         end
       render_serialized(translations, PostTranslationSerializer)

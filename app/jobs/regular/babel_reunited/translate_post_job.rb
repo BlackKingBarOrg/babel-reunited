@@ -616,7 +616,7 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
     withheld =
       translation &&
         (
-          !translation.safe_to_display? ||
+          !translation.safe_to_display?(post) ||
             BabelReunited.same_language?(
               language,
               BabelReunited.current_detected_locale_for(post)
@@ -658,7 +658,7 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
   def publish_translated_title(post, translation)
     return unless post.post_number == 1
     return if translation.translated_title.blank?
-    return unless translation.safe_to_display?
+    return unless translation.safe_to_display?(post)
     # The title is its own egress on its own channel: without this the body of
     # a same-language record is withheld and its title is pushed anyway, and a
     # reload then takes the title back when the serializer applies the rule.

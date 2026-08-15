@@ -155,7 +155,7 @@ module ::BabelReunited
 
     translation = stream_translation_for(post, language)
     return nil if translation.blank?
-    return nil unless translation.safe_to_display?
+    return nil unless translation.safe_to_display?(post)
 
     translation
   end
@@ -309,6 +309,21 @@ module ::BabelReunited
   # every configured language rather than silently skipping the wrong one.
   def self.current_detected_locale_for(post)
     detection_current?(post) ? detected_locale_for(post) : nil
+  end
+
+  # The fingerprint every stored translation is checked against. Memoized on
+  # the post because a topic view asks once per post per language, and the
+  # answer cannot change within a request.
+  def self.current_content_sha_for(post)
+    return nil if post.blank?
+
+    cached = post.instance_variable_get(:@babel_reunited_content_sha)
+    return cached if cached
+
+    post.instance_variable_set(
+      :@babel_reunited_content_sha,
+      Jobs::BabelReunited::TranslatePostJob.content_sha(post)
+    )
   end
 
   # Mirrors the translate job's guards. Detection ships post content to a

@@ -278,8 +278,8 @@ RSpec.describe BabelReunited::PostTranslation do
       )
     end
 
-    it "serves a completed translation" do
-      expect(record("completed").safe_to_display?).to be true
+    it "serves a completed translation of the post's current content" do
+      expect(record("completed").safe_to_display?(post)).to be true
     end
 
     # A redaction is usually a few characters in a long post -- an API key, a
@@ -288,11 +288,28 @@ RSpec.describe BabelReunited::PostTranslation do
     # state the record is in.
     it "withholds every body that is not a translation of the current content" do
       %w[stale translating failed].each do |status|
-        expect(record(status).safe_to_display?).to(
+        expect(record(status).safe_to_display?(post)).to(
           be(false),
           "#{status} row still carries text the post may no longer have"
         )
       end
+    end
+
+    # The status flag only records what was true the last time something
+    # maintained it. Rows written before edit-time invalidation existed were
+    # never revisited, so a completed row is not evidence on its own.
+    it "withholds a completed row whose fingerprint no longer matches" do
+      translation = record("completed")
+      post.update_columns(raw: "the author cut this down")
+
+      expect(translation.safe_to_display?(post.reload)).to be false
+    end
+
+    it "withholds a completed row that carries no fingerprint at all" do
+      translation = record("completed")
+      translation.update_columns(source_sha: nil)
+
+      expect(translation.safe_to_display?(post)).to be false
     end
   end
 
