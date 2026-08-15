@@ -138,7 +138,7 @@ All settings are under Admin > Settings, prefixed with `babel_reunited_`.
 | `openrouter` | `https://openrouter.ai` | `anthropic/claude-sonnet-4-6` |
 | `google` | `https://generativelanguage.googleapis.com` | `gemini-2.5-flash` |
 | `xai` | `https://api.x.ai` | `grok-4.6` |
-| `deepseek` | `https://api.deepseek.com` | `deepseek-v3` |
+| `deepseek` | `https://api.deepseek.com` | `deepseek-v4-flash` |
 | `openai_compatible` | yours, see below | whatever your endpoint serves |
 
 The model is free text rather than a list, because any list of models here
@@ -174,18 +174,24 @@ running on your own hardware.
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `babel_reunited_custom_base_url` | | Base URL, with or without a trailing `/v1` |
-| `babel_reunited_custom_api_key` | | API key for that endpoint |
+| `babel_reunited_custom_api_key` | | API key, if the endpoint wants one. Leave blank for a local model with no authentication |
 
 `https://example.com`, `https://example.com/`, `https://example.com/v1` and
 `https://example.com/v1/chat/completions` all name the same endpoint.
 
+This is the one provider that runs without an API key, because a model on
+your own hardware usually has no authentication to configure. Every hosted
+provider still requires one.
+
 ### 5. Token limits
 
-These apply to every provider.
+These apply to every provider. Both start from whatever the old preset used,
+so an upgrade does not change how much is asked for or how finely posts are
+split; check them if you later change model.
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `babel_reunited_max_output_tokens` | `8192` | Requested per provider call. Lower it if your model rejects the request |
+| `babel_reunited_max_output_tokens` | `16000` | Requested per provider call. Lower it if your model rejects the request |
 | `babel_reunited_chunk_size` | `16000` | Characters per chunk when splitting a long post |
 
 ### 6. Translation behavior
@@ -197,7 +203,7 @@ These apply to every provider.
 | `babel_reunited_translate_title` | `true` | Translate topic titles (first post only) |
 | `babel_reunited_preserve_formatting` | `true` | Preserve Markdown formatting in translations |
 | `babel_reunited_rate_limit_per_minute` | `60` | Max provider API calls per minute, shared by detection, title translation and each content chunk — one post can spend several |
-| `babel_reunited_max_content_length` | `100000` | Cost cap on how long a post may be to translate, in characters. The hard ceiling is 5 chunks of `babel_reunited_chunk_size` |
+| `babel_reunited_max_content_length` | `200000` | Cost cap on how long a post may be to translate, in characters. The hard ceiling is 5 chunks of `babel_reunited_chunk_size` |
 | `babel_reunited_request_timeout_seconds` | `300` | Timeout for each provider API request |
 | `babel_reunited_modal_description` | | Replaces the default copy in the first-login language modal |
 

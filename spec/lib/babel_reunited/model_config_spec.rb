@@ -35,7 +35,7 @@ RSpec.describe BabelReunited::ModelConfig do
 
     it "returns config for DeepSeek" do
       SiteSetting.babel_reunited_provider = "deepseek"
-      SiteSetting.babel_reunited_model = "deepseek-v3"
+      SiteSetting.babel_reunited_model = "deepseek-v4-flash"
 
       config = described_class.get_config
       expect(config[:api_key]).to eq("ds-test-key")

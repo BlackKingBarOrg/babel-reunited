@@ -3,6 +3,10 @@
 module BabelReunited
   module Providers
     class OpenAiCompatible < Base
+      def varies_by_token_param?
+        true
+      end
+
       def headers(api_key)
         {
           "Authorization" => "Bearer #{api_key}",

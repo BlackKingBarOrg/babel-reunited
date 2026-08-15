@@ -63,7 +63,9 @@ module BabelReunited
     def self.configuration_error
       config = BabelReunited::ModelConfig.get_config
       return "Invalid provider" if config.nil?
-      return "API key not configured" if config[:api_key].blank?
+      if config[:api_key].blank? && config[:requires_api_key]
+        return "API key not configured"
+      end
       return "Base URL not configured" if config[:base_url].blank?
       return "Model name not configured" if config[:model_name].blank?
 
@@ -91,10 +93,7 @@ module BabelReunited
       config = api_config
       return Result.new(error: config[:error]) if config[:error]
 
-      unless BabelReunited::RateLimiter.perform_request_if_allowed
-        raise BabelReunited::RateLimitError, "Local rate limit exceeded"
-      end
-
+      # ProviderClient charges the rate limit per request it sends.
       response = request_detection(sample, config)
       if response[:error]
         return(

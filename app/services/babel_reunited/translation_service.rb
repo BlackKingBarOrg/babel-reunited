@@ -273,10 +273,9 @@ module BabelReunited
       max_tokens_override: nil,
       system: nil
     )
-      unless BabelReunited::RateLimiter.perform_request_if_allowed
-        raise BabelReunited::RateLimitError, "Local rate limit exceeded"
-      end
-
+      # The rate limit is charged by ProviderClient, once per request it
+      # actually sends, so a parameter fallback pays for its second call.
+      #
       # Logging is a callback so a retried request logs both attempts.
       client =
         BabelReunited::ProviderClient.new(
@@ -311,7 +310,7 @@ module BabelReunited
         )
       end
 
-      if config[:api_key].blank?
+      if config[:api_key].blank? && config[:requires_api_key]
         return(
           { error: "API key not configured for provider #{config[:provider]}" }
         )

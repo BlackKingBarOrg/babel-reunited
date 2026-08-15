@@ -55,8 +55,10 @@ module BabelReunited
     # straight by CJK is far more often emphasis -- "*说得很准确*" is an
     # italic line, not a list item -- while a digit, a period and a
     # character can be nothing else.
-    LIST_ITEM =
-      /\A\s*(?:[-*+]\s|\d+[.)](?:\s|(?=[\p{Han}\p{Hiragana}\p{Katakana}])))/
+    # Built from CJK rather than its own character list, so a script added
+    # there is covered here too: Hangul was in one and not the other, and a
+    # faithful translation of a Korean list read as invented structure.
+    LIST_ITEM = /\A\s*(?:[-*+]\s|\d+[.)](?:\s|(?=#{CJK})))/
 
     def self.signature(text)
       lines = text.to_s.lines
@@ -78,7 +80,17 @@ module BabelReunited
       a = signature(original)
       b = signature(translated)
 
-      reasons = compare(a, b, cross_script?(original, translated))
+      cross_script = cross_script?(original, translated)
+      # Whether a ratio means anything is a property of the source text, so
+      # it is decided once, here. Deciding it inside compare from whatever
+      # expectation was handed in is what let the bilingual reading below
+      # skip the check entirely: halving a 200-399 character source put the
+      # expectation under the floor, and a one-character translation of a
+      # short bilingual post passed as faithful.
+      measurable = a[:length] >= MIN_LENGTH_FOR_RATIO
+
+      reasons =
+        compare(a, b, cross_script: cross_script, measurable: measurable)
       return reasons if reasons.empty?
 
       # A post written in two languages carries the same document twice, so
@@ -88,22 +100,20 @@ module BabelReunited
       # explains the difference completely.
       return reasons unless bilingual_source?(original)
 
-      if compare(halve(a), b, cross_script?(original, translated)).empty?
-        []
-      else
-        reasons
-      end
+      halved =
+        compare(halve(a), b, cross_script: cross_script, measurable: measurable)
+      halved.empty? ? [] : reasons
     end
 
     def self.drifted?(original, translated)
       drift(original, translated).any?
     end
 
-    def self.compare(a, b, cross_script)
+    def self.compare(expected, actual, cross_script:, measurable:)
       reasons =
         COUNTED.filter_map do |key|
-          x = a[key]
-          y = b[key]
+          x = expected[key]
+          y = actual[key]
           next if x == y
 
           diff = (x - y).abs
@@ -113,8 +123,8 @@ module BabelReunited
           "#{key} #{x}->#{y}"
         end
 
-      if a[:length] >= MIN_LENGTH_FOR_RATIO
-        ratio = b[:length].to_f / a[:length]
+      if measurable && expected[:length] > 0
+        ratio = actual[:length].to_f / expected[:length]
         range =
           cross_script ? CROSS_SCRIPT_RATIO_RANGE : SAME_SCRIPT_RATIO_RANGE
         reasons << "length ratio #{ratio.round(2)}" unless range.cover?(ratio)

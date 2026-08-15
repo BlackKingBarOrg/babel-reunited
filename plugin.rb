@@ -169,6 +169,8 @@ module ::BabelReunited
 
     return nil if translation.blank? || translation.failed?
     return nil if translation.translated_title.blank?
+    # The body tolerates either fingerprint variant; a title does not.
+    return nil unless translation.title_safe_to_display?(post)
 
     translation.translated_title
   end
@@ -311,9 +313,9 @@ module ::BabelReunited
     detection_current?(post) ? detected_locale_for(post) : nil
   end
 
-  # The fingerprint every stored translation is checked against. Memoized on
-  # the post because a topic view asks once per post per language, and the
-  # answer cannot change within a request.
+  # The fingerprint a new translation would be stored under. Memoized on the
+  # post because a topic view asks once per post per language, and the answer
+  # cannot change within a request.
   def self.current_content_sha_for(post)
     return nil if post.blank?
 
@@ -324,6 +326,33 @@ module ::BabelReunited
       :@babel_reunited_content_sha,
       Jobs::BabelReunited::TranslatePostJob.content_sha(post)
     )
+  end
+
+  # Both fingerprints a body could legitimately carry: the title is in the
+  # hash or it is not, depending on what babel_reunited_translate_title said
+  # when the translation was written. The raw is the same either way, so a
+  # match on either one proves the body still describes the current post.
+  #
+  # Without this, turning the setting off hides every first-post translation
+  # on the site, and turning it on hides them again -- no author edited
+  # anything, an admin flipped a switch. Titles are stricter and ask for the
+  # current fingerprint exactly; see translated_title_for.
+  def self.content_sha_variants_for(post)
+    return [] if post.blank?
+
+    cached = post.instance_variable_get(:@babel_reunited_content_sha_variants)
+    return cached if cached
+
+    variants =
+      [true, false].map do |include_title|
+          Jobs::BabelReunited::TranslatePostJob.content_sha(
+            post,
+            include_title: include_title
+          )
+        end
+        .uniq
+
+    post.instance_variable_set(:@babel_reunited_content_sha_variants, variants)
   end
 
   # Mirrors the translate job's guards. Detection ships post content to a

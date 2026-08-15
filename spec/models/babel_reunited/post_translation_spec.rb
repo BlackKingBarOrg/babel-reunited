@@ -311,6 +311,37 @@ RSpec.describe BabelReunited::PostTranslation do
 
       expect(translation.safe_to_display?(post)).to be false
     end
+
+    # A stored fingerprint outlives the setting it was written under. The
+    # body is unaffected by that setting, so flipping it must not hide every
+    # first post's translation across the whole site.
+    describe "when babel_reunited_translate_title is flipped afterwards" do
+      it "keeps serving a body translated while the setting was on" do
+        SiteSetting.babel_reunited_translate_title = true
+        translation = record("completed")
+
+        SiteSetting.babel_reunited_translate_title = false
+        expect(translation.safe_to_display?(post.reload)).to be true
+      end
+
+      it "keeps serving a body translated while the setting was off" do
+        SiteSetting.babel_reunited_translate_title = false
+        translation = record("completed")
+
+        SiteSetting.babel_reunited_translate_title = true
+        expect(translation.safe_to_display?(post.reload)).to be true
+      end
+
+      # The title is a different claim: it describes the title that was
+      # hashed, so it needs the exact current fingerprint.
+      it "stops serving the title" do
+        SiteSetting.babel_reunited_translate_title = true
+        translation = record("completed")
+
+        SiteSetting.babel_reunited_translate_title = false
+        expect(translation.title_safe_to_display?(post.reload)).to be false
+      end
+    end
   end
 
   describe "#translation_lease_expired?" do

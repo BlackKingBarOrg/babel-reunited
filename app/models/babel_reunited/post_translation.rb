@@ -93,8 +93,9 @@ module BabelReunited
       status == "completed"
     end
 
-    # Completed content whose source post changed after translation; still
-    # displayable, but eligible for re-translation on next view.
+    # Content whose source post changed after it was translated. Never shown
+    # to a reader -- see safe_to_display? -- and eligible for re-translation
+    # on next view.
     def stale?
       status == "stale"
     end
@@ -126,6 +127,18 @@ module BabelReunited
     # pre-translate layer redoes it at once; the lazy layer redoes it on next
     # view. Showing the original in the meantime is the safe direction.
     def safe_to_display?(post)
+      return false unless completed?
+      return false if source_sha.blank?
+
+      BabelReunited.content_sha_variants_for(post).include?(source_sha)
+    end
+
+    # Stricter than the body: a title is only shown when the fingerprint
+    # matches the one the current settings would produce. The body survives
+    # a babel_reunited_translate_title flip because its text is unaffected,
+    # but a translated_title stored before a title edit describes the old
+    # title, and nothing else would catch that.
+    def title_safe_to_display?(post)
       return false unless completed?
       return false if source_sha.blank?
 

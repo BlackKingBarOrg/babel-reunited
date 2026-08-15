@@ -98,7 +98,7 @@ babel_reunited:
     max: 1000
 
   babel_reunited_max_content_length:
-    default: 100000
+    default: 200000
     min: 100
     max: 1000000
 

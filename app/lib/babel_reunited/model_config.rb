@@ -50,11 +50,16 @@ module BabelReunited
       },
       # base_url comes from the admin instead of this table; the path is
       # derived from whatever they pasted. See split_custom_url.
+      #
+      # The only provider that may run without a key: a model served from
+      # your own hardware usually has no authentication to configure, and
+      # demanding one would mean inventing a fake key to get past validation.
       "openai_compatible" => {
         base_url: nil,
         path: "/v1/chat/completions",
         wire: :openai,
-        api_key_setting: :babel_reunited_custom_api_key
+        api_key_setting: :babel_reunited_custom_api_key,
+        optional_api_key: true
       }
     }.freeze
 
@@ -79,6 +84,7 @@ module BabelReunited
         base_url: base_url,
         path: path,
         api_key: SiteSetting.public_send(spec[:api_key_setting]),
+        requires_api_key: !spec[:optional_api_key],
         max_output_tokens: SiteSetting.babel_reunited_max_output_tokens,
         chunk_size: SiteSetting.babel_reunited_chunk_size
       }.merge(ModelTraits.for(provider: provider, model: model))

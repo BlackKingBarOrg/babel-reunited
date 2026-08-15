@@ -29,6 +29,10 @@ class MigratePresetModelToProvider < ActiveRecord::Migration[8.0]
     "claude-haiku-4-5" => ["anthropic", "claude-haiku-4-5-20251001", 8_192]
   }.freeze
 
+  # What babel_reunited_custom_max_output_tokens defaulted to before this
+  # release. Sites that never changed it have no row to read.
+  CUSTOM_DEFAULT_OUTPUT_TOKENS = 4_096
+
   ENUM = 7
   STRING = 1
   INTEGER = 3
@@ -43,7 +47,13 @@ class MigratePresetModelToProvider < ActiveRecord::Migration[8.0]
     if preset == "custom"
       provider = "openai_compatible"
       model = read_setting("babel_reunited_custom_model_name")
-      output_tokens = read_setting("babel_reunited_custom_max_output_tokens")
+      # A setting left at its default has no row, so reading the row alone
+      # loses the old default entirely and the site silently inherits the
+      # new one -- 4096 becoming 16000, which is four times the chunk and an
+      # output cap some small models refuse outright.
+      output_tokens =
+        read_setting("babel_reunited_custom_max_output_tokens").presence ||
+          CUSTOM_DEFAULT_OUTPUT_TOKENS
     else
       provider, model, output_tokens = PRESETS[preset]
       return if provider.nil?

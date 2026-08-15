@@ -7,6 +7,14 @@ module BabelReunited
     # the same format is served at different paths on different hosts, so the
     # endpoint comes from ModelConfig::PROVIDERS.
     class Base
+      # Whether token_param changes anything in the body this format builds.
+      # A format that names its output cap unconditionally gains nothing from
+      # being asked again with the other name -- the second request would be
+      # byte-identical.
+      def varies_by_token_param?
+        false
+      end
+
       def headers(api_key)
         raise NotImplementedError
       end

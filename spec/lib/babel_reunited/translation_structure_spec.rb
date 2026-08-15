@@ -95,6 +95,40 @@ RSpec.describe BabelReunited::TranslationStructure do
     expect(drift).not_to be_empty
   end
 
+  # The bilingual reading halves the expected signature. Deciding from that
+  # halved value whether the source is long enough to measure put sources of
+  # 200-399 characters under the floor and skipped the ratio check outright,
+  # so a one-character translation of a short bilingual post passed.
+  describe "a short bilingual source" do
+    def bilingual(length)
+      half = length / 2
+      ("中" * half) + ("e" * (length - half))
+    end
+
+    [200, 201, 250, 399, 400, 500].each do |length|
+      it "flags a near-empty translation of a #{length} character source" do
+        expect(described_class.drift(bilingual(length), "x")).not_to be_empty
+      end
+    end
+
+    it "leaves a source below the ratio floor alone, as before" do
+      expect(described_class.drift(bilingual(199), "x")).to be_empty
+    end
+
+    # The bilingual allowance still has to work at these lengths.
+    it "still accepts a real half-length translation" do
+      source =
+        "#{"这是中文说明文字。" * 12}#{"This is the same thing in English. " * 12}"
+
+      expect(
+        described_class.drift(
+          source,
+          "This is the same thing in English. " * 12
+        )
+      ).to be_empty
+    end
+  end
+
   # The scan flagged 53 records on staging and only 3 were real. Each block
   # below is one of the three causes, with the shapes that produced them.
   describe "false positives the staging sweep exposed" do
@@ -209,6 +243,16 @@ RSpec.describe BabelReunited::TranslationStructure do
 
       expect(described_class.signature(source)[:list_items]).to eq(3)
       expect(described_class.drift(source, translated)).to be_empty
+    end
+
+    # Hangul lives in the CJK constant, so it has to live in the list-marker
+    # lookahead too, or a faithful Korean list reads as invented structure.
+    it "counts a Hangul list marker written without a space" do
+      korean = "1.항목\n2.항목\n3.항목\n4.항목\n#{"본문 설명입니다. " * 40}"
+      english = "1. Item\n2. Item\n3. Item\n4. Item\n#{"Body prose. " * 40}"
+
+      expect(described_class.signature(korean)[:list_items]).to eq(4)
+      expect(described_class.drift(korean, english)).to be_empty
     end
 
     it "does not read a decimal as a list marker" do

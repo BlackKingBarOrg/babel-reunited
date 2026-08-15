@@ -748,6 +748,9 @@ namespace :babel_reunited do
     # task does is make the record say so, which is what lets them be
     # re-translated: nothing re-translates a row that still claims to be
     # completed.
+    # LIMIT bounds outdated rows, not rows looked at. Bounding the scan
+    # instead means a run whose first N rows are all current does nothing and
+    # the next run reads the same rows again, so the tail is never reached.
     scanned = 0
     outdated = 0
     marked = 0
@@ -758,56 +761,66 @@ namespace :babel_reunited do
     catch(:done) do
       BabelReunited::PostTranslation
         .where(status: "completed")
+        .order(:id)
         .in_batches(of: batch_size) do |batch|
           # The fingerprint covers the title for first posts, so the topic
           # has to come along or it is one query per record.
-          records = batch.includes(post: :topic).to_a
-
-          stale_ids = []
-          records.each do |t|
-            throw :done if limit && scanned >= limit
-
-            post = t.post
-            if post.nil?
-              missing_post += 1
-              next
-            end
-
-            scanned += 1
-            current = Jobs::BabelReunited::TranslatePostJob.content_sha(post)
-            next if t.source_sha.present? && t.source_sha == current
-
-            outdated += 1
-            stale_ids << t.id
-            if samples.size < 10
-              samples << "  translation #{t.id} post #{t.post_id} " \
-                "topic #{post.topic_id} #{t.language}"
-            end
-          end
-
-          next if dry_run || stale_ids.empty?
-
-          marked +=
-            BabelReunited::PostTranslation.where(id: stale_ids).update_all(
-              status: "stale",
-              updated_at: Time.current
-            )
-
-          next unless enqueue
-
-          # force_update, because the row still carries a body: without it the
-          # job's self-heal path would look at a fingerprint that does not
-          # match and there would be nothing to heal from.
-          records
-            .select { |t| stale_ids.include?(t.id) }
+          batch
+            .includes(post: :topic)
             .each do |t|
-              Jobs.enqueue(
-                Jobs::BabelReunited::TranslatePostJob,
-                post_id: t.post_id,
-                target_language: t.language,
-                force_update: true
-              )
-              enqueued += 1
+              post = t.post
+              if post.nil?
+                missing_post += 1
+                next
+              end
+
+              scanned += 1
+              if BabelReunited.content_sha_variants_for(post).include?(
+                   t.source_sha
+                 )
+                next
+              end
+
+              outdated += 1
+              if samples.size < 10
+                samples << "  translation #{t.id} post #{t.post_id} " \
+                  "topic #{post.topic_id} #{t.language}"
+              end
+
+              unless dry_run
+                # Marked one row at a time, under the state it was read in: a
+                # translation that finished between the read and the write has
+                # a new source_sha, and blanket-updating by id would discard a
+                # correct, just-completed translation and pay to redo it.
+                updated =
+                  BabelReunited::PostTranslation
+                    .where(id: t.id, status: "completed")
+                    .where("source_sha IS NOT DISTINCT FROM ?", t.source_sha)
+                    .update_all(status: "stale", updated_at: Time.current)
+                next if updated.zero?
+
+                marked += updated
+
+                # Enqueued per row, immediately after its own mark, so an
+                # interrupted run leaves no marked-but-unqueued rows behind:
+                # what is stale has been queued, and what is still completed
+                # is found again on the next run.
+                #
+                # force_update, because the row still carries a body -- the
+                # job's self-heal path compares a fingerprint that no longer
+                # matches and would find nothing to heal from.
+                if enqueue
+                  Jobs.enqueue(
+                    Jobs::BabelReunited::TranslatePostJob,
+                    post_id: t.post_id,
+                    target_language: t.language,
+                    force_update: true
+                  )
+                  enqueued += 1
+                end
+              end
+
+              throw :done if limit && outdated >= limit
             end
         end
     end

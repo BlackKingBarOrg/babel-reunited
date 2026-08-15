@@ -40,6 +40,8 @@ module BabelReunited
 
       fallback = parameter_fallback(response, traits)
       return response if fallback.nil?
+      # A second attempt that would send byte-identical JSON is not a retry.
+      return response if fallback == traits.slice(*fallback.keys)
 
       Rails.logger.warn(
         "BabelReunited: #{@config[:provider]} rejected #{fallback.keys.join(", ")} " \
@@ -55,6 +57,14 @@ module BabelReunited
     private
 
     def send_request(messages, max_tokens, system, traits)
+      # Charged here rather than by the caller, so the fallback attempt costs
+      # what it actually is: a second provider call. Charging once around the
+      # whole exchange let a retrying request spend twice its allowance and
+      # go unseen by the daily counter.
+      unless BabelReunited::RateLimiter.perform_request_if_allowed
+        raise BabelReunited::RateLimitError, "Local rate limit exceeded"
+      end
+
       body =
         wire.build_request_body(
           model: @config[:model_name],
@@ -85,7 +95,7 @@ module BabelReunited
         override[:supports_temperature] = false
       end
 
-      if complaint.match?(TOKEN_PARAM)
+      if complaint.match?(TOKEN_PARAM) && wire.varies_by_token_param?
         # Send the other name rather than reading the provider's advice: a
         # message like "max_tokens is not supported, use max_completion_tokens"
         # names both, and which one it wants depends on which we just sent.

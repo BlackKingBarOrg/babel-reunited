@@ -196,6 +196,47 @@ RSpec.describe BabelReunited::ProviderClient do
       ).to have_been_made.once
     end
 
+    # The Anthropic format names its output cap unconditionally, so asking
+    # again with the other name sends byte-identical JSON.
+    it "does not retry a wire whose body ignores the token parameter" do
+      stub_request(:post, "https://api.anthropic.com/v1/messages").to_return(
+        bad_request("max_tokens: 40000 > 8192, which is the maximum")
+      )
+
+      response =
+        post(
+          client(
+            {
+              provider: "anthropic",
+              wire: :anthropic,
+              base_url: "https://api.anthropic.com",
+              path: "/v1/messages"
+            }
+          )
+        )
+
+      expect(response.status).to eq(400)
+      expect(
+        a_request(:post, "https://api.anthropic.com/v1/messages")
+      ).to have_been_made.once
+    end
+
+    # Charging once around the whole exchange let a retrying request spend
+    # twice its allowance and stay invisible to the daily counter.
+    it "charges the rate limit for each attempt it makes" do
+      stub_request(
+        :post,
+        "https://api.openai.com/v1/chat/completions"
+      ).to_return(bad_request("'max_tokens' is not supported"))
+
+      BabelReunited::RateLimiter
+        .expects(:perform_request_if_allowed)
+        .twice
+        .returns(true)
+
+      post(client)
+    end
+
     it "reports every attempt to the caller's logger" do
       seen = []
       stub_request(
