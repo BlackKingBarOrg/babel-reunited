@@ -22,7 +22,7 @@ We are rebuilding the tower. Not toward heaven, but toward understanding.
 ---
 
 - Plugin name: `babel-reunited`
-- Plugin version: `0.1.0`
+- Plugin version: `0.2.0`
 - Requires Discourse: `2026.7.0` or newer
 - Repository: <https://github.com/BlackKingBarOrg/babel-reunited>
 

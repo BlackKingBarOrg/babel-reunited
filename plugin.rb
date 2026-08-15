@@ -2,7 +2,7 @@
 
 # name: babel-reunited
 # about: AI-powered post translation plugin that automatically translates posts to multiple languages using third-party AI APIs
-# version: 0.1.0
+# version: 0.2.0
 # authors: BKBLAB
 # url: https://github.com/BlackKingBarOrg/babel-reunited
 # required_version: 2026.7.0
