@@ -106,6 +106,41 @@ RSpec.describe MigratePresetModelToProvider do
     expect(setting("babel_reunited_chunk_size")).to eq("4096")
   end
 
+  # Only the custom provider was ever bounded by max_content_length; presets
+  # derived their limit from the model. So only a custom site can silently
+  # gain reach, and 4000 to 200000 is a fiftyfold change in what is sent.
+  describe "max_content_length for a custom site" do
+    before do
+      put("babel_reunited_preset_model", "custom", 7)
+      put("babel_reunited_custom_model_name", "local", 1)
+      DB.exec(
+        "DELETE FROM site_settings WHERE name = 'babel_reunited_max_content_length'"
+      )
+    end
+
+    it "writes the old default when the site never set one" do
+      migrate
+
+      expect(setting("babel_reunited_max_content_length")).to eq("4000")
+    end
+
+    it "leaves a value the admin chose alone" do
+      put("babel_reunited_max_content_length", "12000", 3)
+
+      migrate
+
+      expect(setting("babel_reunited_max_content_length")).to eq("12000")
+    end
+
+    it "does not touch it for a preset site, which it never bounded" do
+      put("babel_reunited_preset_model", "gpt-4o", 7)
+
+      migrate
+
+      expect(setting("babel_reunited_max_content_length")).to be_nil
+    end
+  end
+
   # A site that never touched the preset was on gpt-4o, which the new
   # defaults already reproduce, and a fresh install must not gain rows.
   it "writes nothing when the old setting was never set" do

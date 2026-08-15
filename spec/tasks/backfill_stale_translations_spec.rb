@@ -65,6 +65,70 @@ RSpec.describe "babel_reunited:backfill_stale_translations" do
     expect(translation.reload.status).to eq("stale")
   end
 
+  # The task has to be able to finish what it started. Marking without
+  # ENQUEUE, or dying between a mark and its enqueue, used to leave rows in a
+  # state no later run would ever look at again.
+  describe "recovering rows that are already stale" do
+    it "queues rows a previous run marked but never enqueued" do
+      ENV["DRY_RUN"] = "false"
+      translation = outdated_translation
+      task.invoke
+      expect(translation.reload.status).to eq("stale")
+      expect(Jobs::BabelReunited::TranslatePostJob.jobs).to be_empty
+
+      task.reenable
+      ENV["ENQUEUE"] = "true"
+      task.invoke
+
+      expect(
+        job_enqueued?(
+          job: Jobs::BabelReunited::TranslatePostJob,
+          args: {
+            post_id: post_record.id,
+            target_language: "es"
+          }
+        )
+      ).to be true
+    end
+
+    it "recovers a row whose enqueue blew up mid-run" do
+      ENV["DRY_RUN"] = "false"
+      ENV["ENQUEUE"] = "true"
+      translation = outdated_translation
+
+      Jobs.stubs(:enqueue).raises(Redis::CannotConnectError)
+      expect { task.invoke }.to raise_error(Redis::CannotConnectError)
+      expect(translation.reload.status).to eq("stale")
+
+      Jobs.unstub(:enqueue)
+      task.reenable
+      task.invoke
+
+      expect(
+        job_enqueued?(
+          job: Jobs::BabelReunited::TranslatePostJob,
+          args: {
+            post_id: post_record.id,
+            target_language: "es"
+          }
+        )
+      ).to be true
+    end
+
+    # A duplicate is only free if the job can decide for itself that there is
+    # nothing to do, which force_update would override.
+    it "queues without force_update" do
+      ENV["DRY_RUN"] = "false"
+      ENV["ENQUEUE"] = "true"
+      outdated_translation
+
+      task.invoke
+
+      args = Jobs::BabelReunited::TranslatePostJob.jobs.first["args"].first
+      expect(args["force_update"]).to be_nil
+    end
+  end
+
   it "queues re-translation only when asked" do
     ENV["DRY_RUN"] = "false"
     outdated_translation
@@ -74,7 +138,7 @@ RSpec.describe "babel_reunited:backfill_stale_translations" do
     }
   end
 
-  it "queues a forced re-translation with ENQUEUE=true" do
+  it "queues a re-translation with ENQUEUE=true" do
     ENV["DRY_RUN"] = "false"
     ENV["ENQUEUE"] = "true"
     outdated_translation
@@ -86,8 +150,7 @@ RSpec.describe "babel_reunited:backfill_stale_translations" do
         job: Jobs::BabelReunited::TranslatePostJob,
         args: {
           post_id: post_record.id,
-          target_language: "es",
-          force_update: true
+          target_language: "es"
         }
       )
     ).to be true

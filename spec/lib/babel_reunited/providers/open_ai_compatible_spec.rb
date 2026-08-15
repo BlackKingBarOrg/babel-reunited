@@ -5,6 +5,18 @@ RSpec.describe BabelReunited::Providers::OpenAiCompatible do
 
   before { enable_current_plugin }
 
+  # A bare "Bearer " reads as an invalid credential to a local model server
+  # or a proxy in front of one, so the keyless endpoints this provider exists
+  # to support would answer 401.
+  describe "#headers with no key" do
+    it "omits Authorization entirely" do
+      expect(provider.headers("")).to eq(
+        { "Content-Type" => "application/json" }
+      )
+      expect(provider.headers(nil)).not_to have_key("Authorization")
+    end
+  end
+
   describe "#headers" do
     it "returns Bearer auth and Content-Type" do
       headers = provider.headers("sk-test-key")

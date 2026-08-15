@@ -29,9 +29,10 @@ class MigratePresetModelToProvider < ActiveRecord::Migration[8.0]
     "claude-haiku-4-5" => ["anthropic", "claude-haiku-4-5-20251001", 8_192]
   }.freeze
 
-  # What babel_reunited_custom_max_output_tokens defaulted to before this
-  # release. Sites that never changed it have no row to read.
+  # What these defaulted to before this release. A setting left at its
+  # default has no row, so the old value has to be written down here.
   CUSTOM_DEFAULT_OUTPUT_TOKENS = 4_096
+  OLD_DEFAULT_MAX_CONTENT_LENGTH = 4_000
 
   ENUM = 7
   STRING = 1
@@ -54,6 +55,19 @@ class MigratePresetModelToProvider < ActiveRecord::Migration[8.0]
       output_tokens =
         read_setting("babel_reunited_custom_max_output_tokens").presence ||
           CUSTOM_DEFAULT_OUTPUT_TOKENS
+
+      # Only the custom provider was ever bounded by this setting; presets
+      # derived their limit from the model, and unifying that is the point of
+      # the change. So only a custom site can silently gain reach here, and
+      # 4000 to 200000 is a fiftyfold change in what gets sent to a provider.
+      # An explicit row is the admin's own number and is left alone.
+      if read_setting("babel_reunited_max_content_length").blank?
+        upsert_setting(
+          "babel_reunited_max_content_length",
+          OLD_DEFAULT_MAX_CONTENT_LENGTH,
+          INTEGER
+        )
+      end
     else
       provider, model, output_tokens = PRESETS[preset]
       return if provider.nil?

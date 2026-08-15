@@ -203,7 +203,7 @@ split; check them if you later change model.
 | `babel_reunited_translate_title` | `true` | Translate topic titles (first post only) |
 | `babel_reunited_preserve_formatting` | `true` | Preserve Markdown formatting in translations |
 | `babel_reunited_rate_limit_per_minute` | `60` | Max provider API calls per minute, shared by detection, title translation and each content chunk — one post can spend several |
-| `babel_reunited_max_content_length` | `200000` | Cost cap on how long a post may be to translate, in characters. The hard ceiling is 5 chunks of `babel_reunited_chunk_size` |
+| `babel_reunited_max_content_length` | `200000` | Cost cap on how long a post may be to translate, in characters. The hard ceiling is 5 chunks of `babel_reunited_chunk_size`. Sites upgrading from the custom provider keep their old `4000` |
 | `babel_reunited_request_timeout_seconds` | `300` | Timeout for each provider API request |
 | `babel_reunited_modal_description` | | Replaces the default copy in the first-login language modal |
 
@@ -432,6 +432,30 @@ Without `ENQUEUE=true` the rows are withheld but nothing redoes them, unless
 `babel_reunited_view_triggered_translation` is on, in which case a reader
 opening the post triggers it. Each queued job is a provider call, so `LIMIT`
 is how you keep the bill and the rate limiter in view.
+
+A run with `ENQUEUE=true` also picks up rows an earlier run marked, so
+marking first and queueing later — or a run that died partway — recovers on
+the next invocation. Queued jobs carry no force flag, so a duplicate finds
+the translation already current and returns without calling a provider.
+
+### `babel_reunited:backfill_translated_titles`
+
+Only needed after turning `babel_reunited_translate_title` on for a site
+that already has translations.
+
+Those translations keep working — their bodies are unaffected by the setting
+— but they were made when titles were not translated, so they carry none,
+and their status says completed, which means nothing asks for one. This
+queues them. Bodies stay visible while they wait; withdrawing a good body to
+add a title would be the worse trade.
+
+```bash
+# Preview
+bin/rake babel_reunited:backfill_translated_titles
+
+# Queue them, a batch at a time
+DRY_RUN=false LIMIT=200 bin/rake babel_reunited:backfill_translated_titles
+```
 
 ### `babel_reunited:scan_translation_anomalies`
 

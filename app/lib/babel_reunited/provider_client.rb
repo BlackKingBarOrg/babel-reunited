@@ -23,6 +23,8 @@ module BabelReunited
     TOKEN_PARAM = /max_(?:completion_)?tokens/i
     TEMPERATURE_PARAM = /temperature/i
 
+    TRAITS_CACHE_TTL = 30.days.to_i
+
     def initialize(config:, timeout:, on_response: nil)
       @config = config
       @timeout = timeout
@@ -30,10 +32,7 @@ module BabelReunited
     end
 
     def post(messages:, max_tokens:, system: nil)
-      traits = {
-        output_token_param: @config[:output_token_param] || :max_tokens,
-        supports_temperature: @config.fetch(:supports_temperature, true)
-      }
+      traits = learned_traits.merge(guessed_traits) { |_k, learned, _| learned }
 
       response = send_request(messages, max_tokens, system, traits)
       return response unless response.status == 400
@@ -47,7 +46,15 @@ module BabelReunited
         "BabelReunited: #{@config[:provider]} rejected #{fallback.keys.join(", ")} " \
           "for #{@config[:model_name]}, retrying once with #{fallback.inspect}"
       )
-      send_request(messages, max_tokens, system, traits.merge(fallback))
+      corrected = traits.merge(fallback)
+      retried = send_request(messages, max_tokens, system, corrected)
+
+      # Remembered so the correction outlives this request. Without it every
+      # call repeats the rejected guess, and at a rate limit of one call a
+      # minute the corrected attempt is refused before it is sent, retried
+      # from the wrong guess again, and never gets through at all.
+      remember_traits(corrected) if retried.success?
+      retried
     end
 
     def parse(body)
@@ -55,6 +62,47 @@ module BabelReunited
     end
 
     private
+
+    def guessed_traits
+      {
+        output_token_param: @config[:output_token_param] || :max_tokens,
+        supports_temperature: @config.fetch(:supports_temperature, true)
+      }
+    end
+
+    # Keyed by provider and model, so changing either asks the question
+    # again. Expires rather than living forever: a provider that fixes its
+    # API should not be worked around indefinitely.
+    def traits_cache_key
+      "babel_reunited:model_traits:#{@config[:provider]}:#{@config[:model_name]}"
+    end
+
+    def learned_traits
+      raw = Discourse.redis.get(traits_cache_key)
+      return {} if raw.blank?
+
+      parsed = JSON.parse(raw)
+      {}.tap do |traits|
+        if parsed.key?("output_token_param")
+          traits[:output_token_param] = parsed["output_token_param"].to_sym
+        end
+        if parsed.key?("supports_temperature")
+          traits[:supports_temperature] = parsed["supports_temperature"]
+        end
+      end
+    rescue JSON::ParserError
+      {}
+    end
+
+    def remember_traits(traits)
+      Discourse.redis.setex(
+        traits_cache_key,
+        TRAITS_CACHE_TTL,
+        traits.transform_values { |v| v.is_a?(Symbol) ? v.to_s : v }.to_json
+      )
+    rescue StandardError
+      # Best effort: losing the memo costs one wasted call, not correctness.
+    end
 
     def send_request(messages, max_tokens, system, traits)
       # Charged here rather than by the caller, so the fallback attempt costs

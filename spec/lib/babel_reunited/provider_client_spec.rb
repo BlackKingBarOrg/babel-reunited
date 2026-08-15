@@ -3,7 +3,10 @@
 require "webmock/rspec"
 
 RSpec.describe BabelReunited::ProviderClient do
-  before { enable_current_plugin }
+  before do
+    enable_current_plugin
+    Discourse.redis.flushdb
+  end
 
   let(:config) do
     {
@@ -235,6 +238,57 @@ RSpec.describe BabelReunited::ProviderClient do
         .returns(true)
 
       post(client)
+    end
+
+    # Without remembering the correction, every later request repeats the
+    # rejected guess. At a rate limit of one call a minute that is fatal: the
+    # wrong guess spends the allowance, the corrected attempt is refused
+    # before it is sent, and the retry starts from the wrong guess again.
+    it "remembers a correction so the next request starts from it" do
+      calls = 0
+      stub_request(
+        :post,
+        "https://api.openai.com/v1/chat/completions"
+      ).to_return do |request|
+        calls += 1
+        if JSON.parse(request.body).key?("max_tokens")
+          bad_request("'max_tokens' is not supported")
+        else
+          {
+            status: 200,
+            body: ok_body,
+            headers: {
+              "Content-Type" => "application/json"
+            }
+          }
+        end
+      end
+
+      post(client)
+      expect(calls).to eq(2)
+
+      post(client)
+
+      expect(calls).to eq(3)
+      expect(
+        a_request(
+          :post,
+          "https://api.openai.com/v1/chat/completions"
+        ).with { |r| JSON.parse(r.body).key?("max_tokens") }
+      ).to have_been_made.once
+    end
+
+    it "does not remember a correction that also failed" do
+      stub_request(
+        :post,
+        "https://api.openai.com/v1/chat/completions"
+      ).to_return(bad_request("'max_tokens' is not supported"))
+
+      post(client)
+
+      expect(
+        Discourse.redis.get("babel_reunited:model_traits:openai:gpt-9")
+      ).to be_nil
     end
 
     it "reports every attempt to the caller's logger" do

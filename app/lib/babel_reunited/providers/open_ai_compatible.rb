@@ -7,11 +7,15 @@ module BabelReunited
         true
       end
 
+      # No key means no Authorization header at all. Sending a bare
+      # "Bearer " is worse than sending nothing: a local model server or a
+      # reverse proxy in front of one reads it as a credential and rejects
+      # it, so the keyless endpoints this provider exists to support would
+      # answer 401.
       def headers(api_key)
-        {
-          "Authorization" => "Bearer #{api_key}",
-          "Content-Type" => "application/json"
-        }
+        headers = { "Content-Type" => "application/json" }
+        headers["Authorization"] = "Bearer #{api_key}" if api_key.present?
+        headers
       end
 
       def build_request_body(
