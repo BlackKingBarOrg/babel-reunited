@@ -62,8 +62,10 @@ module BabelReunited
     # itself finished.
     def self.configuration_error
       config = BabelReunited::ModelConfig.get_config
-      return "Invalid preset model" if config.nil?
-      return "API key not configured" if config[:api_key].blank?
+      return "Invalid provider" if config.nil?
+      if config[:api_key].blank? && config[:requires_api_key]
+        return "API key not configured"
+      end
       return "Base URL not configured" if config[:base_url].blank?
       return "Model name not configured" if config[:model_name].blank?
 
@@ -91,10 +93,7 @@ module BabelReunited
       config = api_config
       return Result.new(error: config[:error]) if config[:error]
 
-      unless BabelReunited::RateLimiter.perform_request_if_allowed
-        raise BabelReunited::RateLimitError, "Local rate limit exceeded"
-      end
-
+      # ProviderClient charges the rate limit per request it sends.
       response = request_detection(sample, config)
       if response[:error]
         return(
@@ -143,8 +142,11 @@ module BabelReunited
 
     def build_sample
       # Code blocks carry no language signal and can contain secrets that
-      # have no business reaching the provider; URLs can dominate short
-      # posts. Both are removed before sampling.
+      # have no business reaching the provider; URLs and Discourse's own
+      # upload references can dominate short posts. All are removed before
+      # sampling. One attachment can be a fifth of a 400-character window,
+      # and its identifier is site-internal, which is the same reason code
+      # and URLs go.
       #
       # The block patterns come from MarkdownProtector rather than a second
       # list of our own: the translation path never shows a provider what
@@ -155,7 +157,11 @@ module BabelReunited
         sample = sample.gsub(pattern, " ")
       end
 
-      sample.gsub(/`[^`\n]+`/, " ").gsub(%r{https?://\S+}, " ")[
+      sample
+        .gsub(/`[^`\n]+`/, " ")
+        .gsub(%r{!?\[[^\]\n]*\]\(upload://[^)\s]*\)}, " ")
+        .gsub(%r{upload://\S+}, " ")
+        .gsub(%r{https?://\S+}, " ")[
         0,
         SAMPLE_LENGTH
       ].to_s
@@ -204,47 +210,21 @@ module BabelReunited
     end
 
     def request_detection(sample, config)
-      provider =
-        case config[:provider]
-        when "anthropic"
-          Providers::Anthropic.new
-        else
-          Providers::OpenAiCompatible.new
-        end
-
-      conn =
-        Faraday.new(
-          url: config[:base_url],
-          request: {
-            timeout: REQUEST_TIMEOUT,
-            open_timeout: REQUEST_TIMEOUT,
-            read_timeout: REQUEST_TIMEOUT,
-            write_timeout: REQUEST_TIMEOUT
-          }
-        ) do |f|
-          f.request :json
-          f.response :json
-          f.adapter Faraday.default_adapter
-        end
-
-      request_body =
-        provider.build_request_body(
-          model: config[:model_name],
-          messages: [{ role: "user", content: wrap_sample(sample) }],
-          max_tokens: MAX_OUTPUT_TOKENS,
-          token_param: config[:output_token_param] || :max_tokens,
-          supports_temperature: config.fetch(:supports_temperature, true),
-          system: detection_system_prompt
+      client =
+        BabelReunited::ProviderClient.new(
+          config: config,
+          timeout: REQUEST_TIMEOUT
         )
 
       response =
-        conn.post(provider.endpoint_path) do |req|
-          provider.headers(config[:api_key]).each { |k, v| req.headers[k] = v }
-          req.body = request_body.to_json
-        end
+        client.post(
+          messages: [{ role: "user", content: wrap_sample(sample) }],
+          max_tokens: MAX_OUTPUT_TOKENS,
+          system: detection_system_prompt
+        )
 
       if response.success?
-        provider.parse_response(response.body)
+        client.parse(response.body)
       else
         {
           error: "Detection request failed with status #{response.status}",

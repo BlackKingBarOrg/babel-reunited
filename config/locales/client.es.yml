@@ -8,6 +8,8 @@ es:
     title: "Babel Reunited"
   js:
     babel_reunited:
+      header:
+        language_preference: "Idioma de traducción"
       language_tabs:
         disabled_by_user: "El usuario ha desactivado la traducción IA"
         original: "Original"

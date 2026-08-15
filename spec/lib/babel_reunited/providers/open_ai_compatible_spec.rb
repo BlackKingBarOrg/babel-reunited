@@ -5,9 +5,15 @@ RSpec.describe BabelReunited::Providers::OpenAiCompatible do
 
   before { enable_current_plugin }
 
-  describe "#endpoint_path" do
-    it "returns the OpenAI chat completions path" do
-      expect(provider.endpoint_path).to eq("/v1/chat/completions")
+  # A bare "Bearer " reads as an invalid credential to a local model server
+  # or a proxy in front of one, so the keyless endpoints this provider exists
+  # to support would answer 401.
+  describe "#headers with no key" do
+    it "omits Authorization entirely" do
+      expect(provider.headers("")).to eq(
+        { "Content-Type" => "application/json" }
+      )
+      expect(provider.headers(nil)).not_to have_key("Authorization")
     end
   end
 
@@ -27,7 +33,7 @@ RSpec.describe BabelReunited::Providers::OpenAiCompatible do
           messages: [{ role: "user", content: "Hello" }],
           max_tokens: 4096,
           token_param: :max_completion_tokens,
-          supports_temperature: true,
+          supports_temperature: true
         )
 
       expect(body[:model]).to eq("gpt-4o")
@@ -43,7 +49,7 @@ RSpec.describe BabelReunited::Providers::OpenAiCompatible do
           messages: [],
           max_tokens: 1000,
           token_param: :max_tokens,
-          supports_temperature: true,
+          supports_temperature: true
         )
 
       expect(body[:max_tokens]).to eq(1000)
@@ -57,7 +63,7 @@ RSpec.describe BabelReunited::Providers::OpenAiCompatible do
           messages: [],
           max_tokens: 1000,
           token_param: :max_tokens,
-          supports_temperature: false,
+          supports_temperature: false
         )
 
       expect(body).not_to have_key(:temperature)
@@ -68,12 +74,17 @@ RSpec.describe BabelReunited::Providers::OpenAiCompatible do
     it "extracts text from OpenAI response format" do
       body = {
         "choices" => [
-          { "message" => { "content" => "Translated text" }, "finish_reason" => "stop" },
+          {
+            "message" => {
+              "content" => "Translated text"
+            },
+            "finish_reason" => "stop"
+          }
         ],
         "model" => "gpt-4o",
         "usage" => {
-          "total_tokens" => 150,
-        },
+          "total_tokens" => 150
+        }
       }
 
       result = provider.parse_response(body)
@@ -84,7 +95,14 @@ RSpec.describe BabelReunited::Providers::OpenAiCompatible do
 
     it "returns error when finish_reason is length" do
       body = {
-        "choices" => [{ "message" => { "content" => "Partial..." }, "finish_reason" => "length" }],
+        "choices" => [
+          {
+            "message" => {
+              "content" => "Partial..."
+            },
+            "finish_reason" => "length"
+          }
+        ]
       }
 
       result = provider.parse_response(body)
@@ -97,7 +115,11 @@ RSpec.describe BabelReunited::Providers::OpenAiCompatible do
     end
 
     it "returns error when content is blank" do
-      body = { "choices" => [{ "message" => { "content" => "" }, "finish_reason" => "stop" }] }
+      body = {
+        "choices" => [
+          { "message" => { "content" => "" }, "finish_reason" => "stop" }
+        ]
+      }
 
       result = provider.parse_response(body)
       expect(result[:error]).to include("No translation")

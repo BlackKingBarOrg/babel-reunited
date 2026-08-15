@@ -7,7 +7,8 @@ zh_CN:
     title: "Babel Reunited"
   site_settings:
     babel_reunited_enabled: "启用 Babel Reunited 插件"
-    babel_reunited_preset_model: "选择预设模型"
+    babel_reunited_provider: "翻译服务商。其他 OpenAI 兼容端点（包括本地部署）请选 'openai_compatible'。"
+    babel_reunited_model: "模型标识，按服务商的写法原样填写（例如 gpt-4o、claude-sonnet-4-6，或 OpenRouter 上的 anthropic/claude-sonnet-4-6）。"
     babel_reunited_auto_translate_languages: "自动翻译语言（逗号分隔的语言代码）"
     babel_reunited_view_triggered_translation: "读者浏览帖子时，若其偏好语言尚无翻译则自动触发翻译"
     babel_reunited_daily_translation_limit: "站点级熔断：全站非管理人员每日可接受的翻译请求上限（手动与浏览触发合并计数）。0 表示不限制。"
@@ -17,12 +18,13 @@ zh_CN:
     babel_reunited_openai_api_key: "OpenAI API密钥"
     babel_reunited_xai_api_key: "xAI (Grok) API密钥"
     babel_reunited_deepseek_api_key: "DeepSeek API密钥"
-    
-    babel_reunited_custom_model_name: "自定义模型名称（仅当选择'custom'时使用）"
-    babel_reunited_custom_base_url: "自定义API基础URL"
-    babel_reunited_custom_api_key: "自定义API密钥"
-    babel_reunited_custom_max_tokens: "自定义最大输入tokens"
-    babel_reunited_custom_max_output_tokens: "自定义最大输出tokens"
+    babel_reunited_openrouter_api_key: "OpenRouter API密钥"
+    babel_reunited_google_api_key: "Google (Gemini) API密钥"
+
+    babel_reunited_custom_base_url: "OpenAI 兼容端点的基础 URL（仅当服务商为 'openai_compatible' 时使用）。带不带结尾的 /v1 都可以。"
+    babel_reunited_custom_api_key: "OpenAI 兼容端点的 API 密钥"
+    babel_reunited_max_output_tokens: "每次调用向服务商请求的最大输出 tokens。模型拒绝请求时请调低。"
+    babel_reunited_chunk_size: "拆分长帖子时每个分块的字符数。需要超过 5 个分块的帖子不会被翻译。"
     
     babel_reunited_rate_limit_per_minute: "每分钟速率限制"
     babel_reunited_max_content_length: "翻译的最大内容长度"

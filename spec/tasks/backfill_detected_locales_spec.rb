@@ -21,7 +21,8 @@ RSpec.describe "babel_reunited:backfill_detected_locales" do
     # A configured provider is the normal state; the task refuses to start
     # without one, which two examples below check deliberately.
     SiteSetting.babel_reunited_openai_api_key = "sk-test-key"
-    SiteSetting.babel_reunited_preset_model = "gpt-4o"
+    SiteSetting.babel_reunited_provider = "openai"
+    SiteSetting.babel_reunited_model = "gpt-4o"
     # The task paces itself with real sleeps. A high allowance keeps the pause
     # between posts down to a tenth of a second without stubbing out the very
     # pacing these examples run through.

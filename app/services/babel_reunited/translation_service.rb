@@ -167,7 +167,7 @@ module BabelReunited
         ai_response: {
           confidence: 0.95,
           provider_info: {
-            model: api_config[:model],
+            model: api_config[:model_name],
             tokens_used: total_tokens_used,
             provider: api_config[:provider]
           }
@@ -273,56 +273,26 @@ module BabelReunited
       max_tokens_override: nil,
       system: nil
     )
-      unless BabelReunited::RateLimiter.perform_request_if_allowed
-        raise BabelReunited::RateLimitError, "Local rate limit exceeded"
-      end
-
-      provider = provider_for(api_config)
-
-      timeout = SiteSetting.babel_reunited_request_timeout_seconds
-      conn =
-        Faraday.new(
-          url: api_config[:base_url],
-          request: {
-            timeout: timeout,
-            open_timeout: timeout,
-            read_timeout: timeout,
-            write_timeout: timeout
-          }
-        ) do |f|
-          f.request :json
-          f.response :json
-          f.adapter Faraday.default_adapter
-        end
-
-      token_param = api_config[:output_token_param] || :max_tokens
-      max_tokens = max_tokens_override || api_config[:max_tokens]
-      if max_tokens_override && api_config[:max_tokens]
-        max_tokens = [max_tokens_override, api_config[:max_tokens].to_i].min
-      end
-
-      request_body =
-        provider.build_request_body(
-          model: api_config[:model],
-          messages: [{ role: "user", content: prompt }],
-          max_tokens: max_tokens,
-          token_param: token_param,
-          supports_temperature: api_config[:supports_temperature],
-          system: system
+      # The rate limit is charged by ProviderClient, once per request it
+      # actually sends, so a parameter fallback pays for its second call.
+      #
+      # Logging is a callback so a retried request logs both attempts.
+      client =
+        BabelReunited::ProviderClient.new(
+          config: api_config,
+          timeout: SiteSetting.babel_reunited_request_timeout_seconds,
+          on_response: ->(resp) { log_provider_response(resp, api_config) }
         )
 
       response =
-        conn.post(provider.endpoint_path) do |req|
-          provider
-            .headers(api_config[:api_key])
-            .each { |k, v| req.headers[k] = v }
-          req.body = request_body.to_json
-        end
-
-      log_provider_response(response, api_config)
+        client.post(
+          messages: [{ role: "user", content: prompt }],
+          max_tokens: output_tokens(api_config, max_tokens_override),
+          system: system
+        )
 
       if response.success?
-        provider.parse_response(response.body)
+        client.parse(response.body)
       else
         handle_api_error(response)
       end
@@ -336,29 +306,23 @@ module BabelReunited
       config = BabelReunited::ModelConfig.get_config
       if config.nil?
         return(
-          {
-            error:
-              "Invalid preset model: #{SiteSetting.babel_reunited_preset_model}"
-          }
+          { error: "Invalid provider: #{SiteSetting.babel_reunited_provider}" }
         )
       end
 
-      api_key = config[:api_key]
-      if api_key.blank?
+      if config[:api_key].blank? && config[:requires_api_key]
         return(
           { error: "API key not configured for provider #{config[:provider]}" }
         )
       end
 
-      base_url = config[:base_url]
-      if base_url.blank?
+      if config[:base_url].blank?
         return(
           { error: "Base URL not configured for provider #{config[:provider]}" }
         )
       end
 
-      model_name = config[:model_name]
-      if model_name.blank?
+      if config[:model_name].blank?
         return(
           {
             error: "Model name not configured for provider #{config[:provider]}"
@@ -366,43 +330,28 @@ module BabelReunited
         )
       end
 
-      {
-        api_key: api_key,
-        base_url: base_url,
-        model: model_name,
-        max_tokens:
-          config[:max_output_tokens] || config[:max_tokens] ||
-            SiteSetting.babel_reunited_custom_max_output_tokens,
-        provider: config[:provider],
-        max_tokens_for_length: config[:max_tokens],
-        output_token_param: config[:output_token_param] || :max_tokens,
-        supports_temperature: config.fetch(:supports_temperature, true)
-      }
+      config
     end
 
     def get_chunk_size(api_config)
-      max_output = api_config[:max_tokens]
-      max_output.present? ? max_output.to_i : 32_768
+      api_config[:chunk_size].to_i
     end
 
-    def provider_for(api_config)
-      case api_config[:provider]
-      when "anthropic"
-        Providers::Anthropic.new
-      else
-        Providers::OpenAiCompatible.new
-      end
+    # A title needs far fewer tokens than a post, but never more than the
+    # configured cap.
+    def output_tokens(api_config, override)
+      configured = api_config[:max_output_tokens]
+      return configured unless override
+      return override unless configured
+
+      [override, configured.to_i].min
     end
 
-    def get_max_content_length(api_config)
-      if api_config[:provider] == "custom"
-        return SiteSetting.babel_reunited_max_content_length
-      end
-
-      max_tokens = api_config[:max_tokens_for_length]
-      return SiteSetting.babel_reunited_max_content_length unless max_tokens
-
-      max_tokens * 3
+    # A cost cap, not a correctness one: the hard ceiling is MAX_CHUNKS, and
+    # that check reports the real reason. Applies to every provider -- with a
+    # free-text model there is no context window to derive it from.
+    def get_max_content_length(_api_config)
+      SiteSetting.babel_reunited_max_content_length
     end
 
     def handle_api_error(response)

@@ -725,4 +725,235 @@ namespace :babel_reunited do
     puts "Migrated: #{migrated} user preferences"
     puts "Skipped: #{skipped} (missing users)"
   end
+
+  desc "Queue translations that are missing a title, after turning babel_reunited_translate_title on (dry run by default)"
+  task backfill_translated_titles: :environment do
+    unless SiteSetting.babel_reunited_enabled
+      puts "ERROR: Babel Reunited plugin is not enabled"
+      exit 1
+    end
+
+    unless SiteSetting.babel_reunited_translate_title
+      puts "babel_reunited_translate_title is off; there are no titles to add"
+      next
+    end
+
+    dry_run = ENV["DRY_RUN"] != "false"
+    batch_size = (ENV["BATCH_SIZE"] || 500).to_i
+    limit = ENV["LIMIT"]&.to_i
+
+    # Turning the setting on does not disturb existing translations: their
+    # bodies match the no-title fingerprint, which still counts as current,
+    # so they stay completed and the reader keeps seeing them. That is the
+    # point -- but it also means nothing asks for the title they never had.
+    # The status says completed, so the view trigger passes over them.
+    #
+    # These rows are queued without being marked stale: the body is good and
+    # withdrawing it to add a title would be a worse trade for the reader.
+    scanned = 0
+    missing = 0
+    enqueued = 0
+    samples = []
+
+    catch(:done) do
+      BabelReunited::PostTranslation
+        .where(status: "completed", translated_title: nil)
+        .order(:id)
+        .in_batches(of: batch_size) do |batch|
+          batch
+            .includes(post: :topic)
+            .each do |t|
+              post = t.post
+              next if post.nil? || post.post_number != 1
+              next if post.topic&.title.blank?
+
+              scanned += 1
+              # Already carries the title in its fingerprint, so it was made
+              # under the current setting and simply has no translated title
+              # to show -- nothing to do.
+              if t.source_sha == BabelReunited.current_content_sha_for(post)
+                next
+              end
+
+              missing += 1
+              if samples.size < 10
+                samples << "  translation #{t.id} post #{t.post_id} " \
+                  "topic #{post.topic_id} #{t.language}"
+              end
+
+              unless dry_run
+                Jobs.enqueue(
+                  Jobs::BabelReunited::TranslatePostJob,
+                  post_id: t.post_id,
+                  target_language: t.language,
+                  force_update: true
+                )
+                enqueued += 1
+              end
+
+              throw :done if limit && missing >= limit
+            end
+        end
+    end
+
+    puts "Scanned:            #{scanned} first-post translations"
+    puts "Missing a title:    #{missing}"
+
+    if missing.zero?
+      puts "Nothing to do"
+      next
+    end
+
+    if dry_run
+      puts ""
+      puts "DRY RUN - nothing was queued"
+      puts "Use DRY_RUN=false to queue these for re-translation"
+      puts "Each one is a provider call; LIMIT bounds the batch"
+      puts ""
+      puts "Sample records:"
+      samples.each { |line| puts line }
+      puts "  ... and #{missing - samples.size} more" if missing > samples.size
+    else
+      puts "Queued:             #{enqueued} re-translation jobs"
+    end
+  end
+
+  desc "Mark completed translations whose fingerprint no longer matches their post (dry run by default)"
+  task backfill_stale_translations: :environment do
+    unless SiteSetting.babel_reunited_enabled
+      puts "ERROR: Babel Reunited plugin is not enabled"
+      exit 1
+    end
+
+    dry_run = ENV["DRY_RUN"] != "false"
+    enqueue = ENV["ENQUEUE"] == "true"
+    batch_size = (ENV["BATCH_SIZE"] || 500).to_i
+    limit = ENV["LIMIT"]&.to_i
+
+    # Edit-time invalidation only ever ran for edits made after it shipped,
+    # and nothing revisited the rows written before that. They stayed
+    # "completed" and were served to readers as translations of content the
+    # author had already changed.
+    #
+    # The display guard now compares the fingerprint itself, so those rows
+    # are already withheld the moment this release is deployed. What this
+    # task does is make the record say so, which is what lets them be
+    # re-translated: nothing re-translates a row that still claims to be
+    # completed.
+    # LIMIT bounds outdated rows, not rows looked at. Bounding the scan
+    # instead means a run whose first N rows are all current does nothing and
+    # the next run reads the same rows again, so the tail is never reached.
+    scanned = 0
+    outdated = 0
+    marked = 0
+    already_stale = 0
+    enqueued = 0
+    missing_post = 0
+    samples = []
+
+    # Queueing also looks at rows that are already stale, or the task could
+    # not finish what it started: marking without ENQUEUE, or dying between a
+    # mark and its enqueue, leaves rows no later run would ever see again.
+    statuses = enqueue ? %w[completed stale] : %w[completed]
+
+    catch(:done) do
+      BabelReunited::PostTranslation
+        .where(status: statuses)
+        .order(:id)
+        .in_batches(of: batch_size) do |batch|
+          # The fingerprint covers the title for first posts, so the topic
+          # has to come along or it is one query per record.
+          batch
+            .includes(post: :topic)
+            .each do |t|
+              post = t.post
+              if post.nil?
+                missing_post += 1
+                next
+              end
+
+              scanned += 1
+              if BabelReunited.content_sha_variants_for(post).include?(
+                   t.source_sha
+                 )
+                next
+              end
+
+              outdated += 1
+              if samples.size < 10
+                samples << "  translation #{t.id} post #{t.post_id} " \
+                  "topic #{post.topic_id} #{t.language}"
+              end
+
+              unless dry_run
+                if t.status == "completed"
+                  # Marked one row at a time, under the state it was read in:
+                  # a translation that finished between the read and the write
+                  # has a new source_sha, and blanket-updating by id would
+                  # discard correct, just-completed work and pay to redo it.
+                  updated =
+                    BabelReunited::PostTranslation
+                      .where(id: t.id, status: "completed")
+                      .where("source_sha IS NOT DISTINCT FROM ?", t.source_sha)
+                      .update_all(status: "stale", updated_at: Time.current)
+                  next if updated.zero?
+
+                  marked += updated
+                else
+                  already_stale += 1
+                end
+
+                # No force_update: the fingerprint already disagrees, so the
+                # job translates anyway. Leaving it off is what makes a
+                # duplicate free -- a second job for a row the first one
+                # finished finds it completed and current, and returns without
+                # calling a provider. That is what lets this task be re-run.
+                if enqueue
+                  Jobs.enqueue(
+                    Jobs::BabelReunited::TranslatePostJob,
+                    post_id: t.post_id,
+                    target_language: t.language
+                  )
+                  enqueued += 1
+                end
+              end
+
+              throw :done if limit && outdated >= limit
+            end
+        end
+    end
+
+    puts "Scanned:            #{scanned} translations (#{statuses.join(", ")})"
+    puts "Fingerprint stale:  #{outdated}"
+    puts "Already stale:      #{already_stale}" if already_stale > 0
+    puts "Post deleted:       #{missing_post}" if missing_post > 0
+
+    if outdated.zero?
+      puts "Nothing to do"
+      next
+    end
+
+    if dry_run
+      puts ""
+      puts "DRY RUN - nothing was changed"
+      puts "Use DRY_RUN=false to mark these records stale"
+      puts "Add ENQUEUE=true to also queue them for re-translation"
+      puts ""
+      puts "Sample records:"
+      samples.each { |line| puts line }
+      if outdated > samples.size
+        puts "  ... and #{outdated - samples.size} more"
+      end
+    else
+      puts "Marked stale:       #{marked}"
+      if enqueue
+        puts "Queued:             #{enqueued} re-translation jobs"
+      else
+        puts ""
+        puts "These rows are withheld from readers but nothing will redo them:"
+        puts "re-run with ENQUEUE=true (LIMIT bounds the batch) to queue the"
+        puts "work. That run picks up rows this one already marked."
+      end
+    end
+  end
 end

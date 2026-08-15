@@ -22,7 +22,7 @@ We are rebuilding the tower. Not toward heaven, but toward understanding.
 ---
 
 - Plugin name: `babel-reunited`
-- Plugin version: `0.1.0`
+- Plugin version: `0.2.0`
 - Requires Discourse: `2026.7.0` or newer
 - Repository: <https://github.com/BlackKingBarOrg/babel-reunited>
 
@@ -37,9 +37,9 @@ Older sites are not left behind, but they must pin a commit rather than track
 - Optional category-level whitelist to limit which categories are translated
 - Translated topic titles displayed in topic lists and topic detail pages
 - Inline language tabs on each post for switching between translations
-- Per-user language preference with opt-out toggle (prompted on first login)
+- Per-user language preference with opt-out toggle (prompted on first login, reachable afterwards from the globe button beside the header avatar)
 - Any supported language on demand: readers pick from a searchable menu on the post, not just the pre-translated set, and the first request is cached and shared with everyone after it
-- Multiple AI provider support: OpenAI, xAI (Grok), DeepSeek, Anthropic (Claude), or any OpenAI-compatible API
+- Multiple AI providers: OpenAI, Anthropic (Claude), OpenRouter, Google (Gemini), xAI (Grok), DeepSeek, or any OpenAI-compatible endpoint, with the model named as free text
 - Markdown formatting preservation during translation
 - Redis-based per-minute rate limiting, content length limits, and daily fuses on reader-initiated translation
 - Real-time translation status via MessageBus (translating / completed / failed)
@@ -124,43 +124,77 @@ All settings are under Admin > Settings, prefixed with `babel_reunited_`.
 |---------|---------|-------------|
 | `babel_reunited_enabled` | `false` | Master switch for the plugin |
 
-### 2. Choose a model
+### 2. Choose a provider and a model
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `babel_reunited_preset_model` | `gpt-4o` | Select a preset model or `custom` |
+| `babel_reunited_provider` | `openai` | Which provider to send translation requests to |
+| `babel_reunited_model` | `gpt-4o` | Model identifier, exactly as the provider names it |
 
-Available presets:
+| Provider | Endpoint | Model names look like |
+|----------|----------|-----------------------|
+| `openai` | `https://api.openai.com` | `gpt-4o`, `gpt-5-mini` |
+| `anthropic` | `https://api.anthropic.com` | `claude-sonnet-4-6` |
+| `openrouter` | `https://openrouter.ai` | `anthropic/claude-sonnet-4-6` |
+| `google` | `https://generativelanguage.googleapis.com` | `gemini-2.5-flash` |
+| `xai` | `https://api.x.ai` | `grok-4.6` |
+| `deepseek` | `https://api.deepseek.com` | `deepseek-v4-flash` |
+| `openai_compatible` | yours, see below | whatever your endpoint serves |
 
-| Provider | Models |
-|----------|--------|
-| OpenAI | `gpt-5`, `gpt-5-mini`, `gpt-5-nano`, `gpt-4.1`, `gpt-4.1-mini`, `gpt-4.1-nano`, `gpt-4o`, `gpt-4o-mini`, `gpt-3.5-turbo` |
-| xAI | `grok-4`, `grok-4-fast-non-reasoning`, `grok-3`, `grok-2` |
-| DeepSeek | `deepseek-r1`, `deepseek-v3` |
-| Anthropic | `claude-opus-4-7`, `claude-sonnet-4-6`, `claude-haiku-4-5` |
+The model is free text rather than a list, because any list of models here
+goes stale — and a gateway like OpenRouter fronts hundreds of them. Check
+your provider's own model catalogue for the current names.
+
+Two request parameters are guessed from the model's name: whether it takes
+`max_tokens` or `max_completion_tokens`, and whether it accepts a
+`temperature`. If a model rejects the guess, the request is sent once more
+with the other form and the swap is written to the logs, so an unfamiliar
+model name is not a dead end.
 
 ### 3. API keys
 
-Provide the key for your chosen provider. Leave the others blank.
+Provide the key for your chosen provider. Leave the others blank; they are
+kept so switching providers does not mean re-entering them.
 
 | Setting | Provider |
 |---------|----------|
 | `babel_reunited_openai_api_key` | OpenAI |
+| `babel_reunited_anthropic_api_key` | Anthropic |
+| `babel_reunited_openrouter_api_key` | OpenRouter |
+| `babel_reunited_google_api_key` | Google |
 | `babel_reunited_xai_api_key` | xAI |
 | `babel_reunited_deepseek_api_key` | DeepSeek |
-| `babel_reunited_anthropic_api_key` | Anthropic |
+| `babel_reunited_custom_api_key` | `openai_compatible` |
 
-### 4. Custom model (when preset is `custom`)
+### 4. Your own endpoint (when the provider is `openai_compatible`)
+
+Anything that speaks the OpenAI chat-completions format, including a model
+running on your own hardware.
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `babel_reunited_custom_model_name` | | Model identifier |
-| `babel_reunited_custom_base_url` | | OpenAI-compatible API base URL |
-| `babel_reunited_custom_api_key` | | API key for the custom endpoint |
-| `babel_reunited_custom_max_tokens` | `16000` | Max input tokens |
-| `babel_reunited_custom_max_output_tokens` | `4096` | Max output tokens |
+| `babel_reunited_custom_base_url` | | Base URL, with or without a trailing `/v1` |
+| `babel_reunited_custom_api_key` | | API key, if the endpoint wants one. Leave blank for a local model with no authentication |
 
-### 5. Translation behavior
+`https://example.com`, `https://example.com/`, `https://example.com/v1` and
+`https://example.com/v1/chat/completions` all name the same endpoint.
+
+This is the one provider that runs without an API key, because a model on
+your own hardware usually has no authentication to configure. Every hosted
+provider still requires one.
+
+### 5. Token limits
+
+These apply to every provider. Both start from whatever the old preset used,
+so an upgrade does not change how much is asked for or how finely posts are
+split; check them if you later change model.
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `babel_reunited_max_output_tokens` | `16000` | Requested per provider call. Lower it if your model rejects the request |
+| `babel_reunited_chunk_size` | `16000` | Characters per chunk when splitting a long post |
+
+### 6. Translation behavior
 
 | Setting | Default | Description |
 |---------|---------|-------------|
@@ -169,11 +203,11 @@ Provide the key for your chosen provider. Leave the others blank.
 | `babel_reunited_translate_title` | `true` | Translate topic titles (first post only) |
 | `babel_reunited_preserve_formatting` | `true` | Preserve Markdown formatting in translations |
 | `babel_reunited_rate_limit_per_minute` | `60` | Max provider API calls per minute, shared by detection, title translation and each content chunk — one post can spend several |
-| `babel_reunited_max_content_length` | `4000` | Max post length to translate |
+| `babel_reunited_max_content_length` | `200000` | Cost cap on how long a post may be to translate, in characters. The hard ceiling is 5 chunks of `babel_reunited_chunk_size`. Sites upgrading from the custom provider keep their old `4000` |
 | `babel_reunited_request_timeout_seconds` | `300` | Timeout for each provider API request |
 | `babel_reunited_modal_description` | | Replaces the default copy in the first-login language modal |
 
-### 6. Daily fuses on reader-initiated translation
+### 7. Daily fuses on reader-initiated translation
 
 Readers can ask for a translation that does not exist yet — from the language
 tabs on a post, and again automatically if view-triggered translation is on.
@@ -196,7 +230,7 @@ per-user fuse is charged first, so a user already over their own limit cannot
 spend site quota to find that out. A tripped fuse writes a warning to the Rails
 log.
 
-### 7. View-triggered translation
+### 8. View-triggered translation
 
 Off by default, in which case every post is translated up front. Turned on, a
 translation is requested when a reader actually dwells on the post — which
@@ -219,6 +253,7 @@ opens.
 5. Translation status updates are pushed to the frontend via MessageBus in real time.
 6. Users with a preferred language see translated titles in topic lists and can switch between language tabs on posts.
 7. A translation into the post's own language never reaches a reader, even when such a record exists: the language tabs and every path that serves a body filter against the detected source language.
+8. A translation only reaches a reader while it is still a translation of what the post currently says. Every path that serves a body compares the translation's stored fingerprint against the post's current content, so an edit hides the translation until it is redone — the edit that matters is a redaction, and no length or structure test can see one. Existing rows that predate this check are found by `backfill_stale_translations`.
 
 ---
 
@@ -229,9 +264,10 @@ Read this before enabling the plugin on a forum you do not own outright.
 **Post content is sent to a third party.** Translating a post means sending its
 body, and its title when `babel_reunited_translate_title` is on, to whichever
 provider you configured. Detection sends a sample of up to 400 characters.
-Code blocks, inline code, BBCode `[code]` / `[quote]` / `[details]` and URLs are
-stripped before that sample is built, so pasted keys and logs inside those
-blocks do not travel — but ordinary prose does, verbatim.
+Code blocks, inline code, BBCode `[code]` / `[quote]` / `[details]`, URLs and
+`upload://` attachment references are stripped before that sample is built, so
+pasted keys and logs inside those blocks do not travel — but ordinary prose
+does, verbatim.
 
 The provider is yours to choose and yours to vet. Check its data-retention and
 training policy, and whether an enterprise or zero-retention tier is available,
@@ -365,16 +401,75 @@ bin/rake babel_reunited:cleanup_same_language_copies
 DRY_RUN=false bin/rake babel_reunited:cleanup_same_language_copies
 ```
 
+### `babel_reunited:backfill_stale_translations`
+
+Finds completed translations whose stored fingerprint no longer matches their
+post, and marks them stale.
+
+Readers stop seeing those bodies the moment this release is deployed — the
+display guard compares the fingerprint itself rather than trusting the status.
+What this task adds is that the record then says so, which is what makes the
+rows eligible to be redone: nothing re-translates a row that still claims to
+be completed.
+
+Run it once after deploying. It is the historical rows that need it: edits
+made since edit-time invalidation shipped have been handled all along, but
+nothing ever revisited what came before. On one production copy that was 1453
+of 4548 completed rows.
+
+```bash
+# Preview
+bin/rake babel_reunited:backfill_stale_translations
+
+# Mark them stale
+DRY_RUN=false bin/rake babel_reunited:backfill_stale_translations
+
+# Mark them stale and queue the re-translations, a batch at a time
+DRY_RUN=false ENQUEUE=true LIMIT=200 bin/rake babel_reunited:backfill_stale_translations
+```
+
+Without `ENQUEUE=true` the rows are withheld but nothing redoes them, unless
+`babel_reunited_view_triggered_translation` is on, in which case a reader
+opening the post triggers it. Each queued job is a provider call, so `LIMIT`
+is how you keep the bill and the rate limiter in view.
+
+A run with `ENQUEUE=true` also picks up rows an earlier run marked, so
+marking first and queueing later — or a run that died partway — recovers on
+the next invocation. Queued jobs carry no force flag, so a duplicate finds
+the translation already current and returns without calling a provider.
+
+### `babel_reunited:backfill_translated_titles`
+
+Only needed after turning `babel_reunited_translate_title` on for a site
+that already has translations.
+
+Those translations keep working — their bodies are unaffected by the setting
+— but they were made when titles were not translated, so they carry none,
+and their status says completed, which means nothing asks for one. This
+queues them. Bodies stay visible while they wait; withdrawing a good body to
+add a title would be the worse trade.
+
+```bash
+# Preview
+bin/rake babel_reunited:backfill_translated_titles
+
+# Queue them, a batch at a time
+DRY_RUN=false LIMIT=200 bin/rake babel_reunited:backfill_translated_titles
+```
+
 ### `babel_reunited:scan_translation_anomalies`
 
 Read-only. Compares each stored translation's structure against its source and
 flags the ones that drifted.
 
 **The output is a heuristic and needs human judgement — do not delete from it
-directly.** Bilingual originals, normal length differences between scripts and
-harmless formatting changes all register as drift, so the false-positive rate
-is high ([#33](https://github.com/BlackKingBarOrg/babel-reunited/issues/33)).
-Read the flagged records before deciding to re-translate or delete any of them.
+directly.** It used to be mostly noise: bilingual originals, normal length
+differences between scripts and harmless formatting changes all registered as
+drift. Those three causes are handled now
+([#33](https://github.com/BlackKingBarOrg/babel-reunited/issues/33)), which on
+a production copy took the flagged count from 72 of 4546 records down to 16.
+It is still a heuristic. Read the flagged records before deciding to
+re-translate or delete any of them.
 
 ```bash
 bin/rake babel_reunited:scan_translation_anomalies

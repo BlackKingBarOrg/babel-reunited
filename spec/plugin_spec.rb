@@ -11,7 +11,8 @@ RSpec.describe BabelReunited do
     enable_current_plugin
     SiteSetting.babel_reunited_enabled = true
     SiteSetting.babel_reunited_openai_api_key = "sk-test-key"
-    SiteSetting.babel_reunited_preset_model = "gpt-4o"
+    SiteSetting.babel_reunited_provider = "openai"
+    SiteSetting.babel_reunited_model = "gpt-4o"
     SiteSetting.babel_reunited_auto_translate_languages = "zh-cn,en,es"
     SiteSetting.babel_reunited_translate_title = true
     Jobs.run_later!
@@ -108,6 +109,9 @@ RSpec.describe BabelReunited do
       translation =
         Fabricate(:post_translation, post: post_record, language: "de")
 
+      post_record.update_columns(
+        raw: "Rewritten body, different from the original."
+      )
       revisor = OpenStruct.new(topic_diff: {})
       DiscourseEvent.trigger(:post_edited, post_record, false, revisor)
 
@@ -135,6 +139,9 @@ RSpec.describe BabelReunited do
       translation =
         Fabricate(:post_translation, post: post_record, language: "de")
 
+      post_record.update_columns(
+        raw: "Rewritten body, different from the original."
+      )
       revisor = OpenStruct.new(topic_diff: {})
       DiscourseEvent.trigger(:post_edited, post_record, false, revisor)
 
@@ -300,6 +307,9 @@ RSpec.describe BabelReunited do
         Fabricate(:post_translation, post: post_record, language: "de")
       post_record.update!(hidden: true)
 
+      post_record.update_columns(
+        raw: "Rewritten body, different from the original."
+      )
       revisor = OpenStruct.new(topic_diff: {})
       DiscourseEvent.trigger(:post_edited, post_record, false, revisor)
 
@@ -313,6 +323,9 @@ RSpec.describe BabelReunited do
         Fabricate(:post_translation, post: post_record, language: "de")
       post_record.trash!
 
+      post_record.update_columns(
+        raw: "Rewritten body, different from the original."
+      )
       revisor = OpenStruct.new(topic_diff: {})
       DiscourseEvent.trigger(:post_edited, post_record, false, revisor)
 
@@ -328,6 +341,9 @@ RSpec.describe BabelReunited do
       es = Fabricate(:post_translation, post: post_record, language: "es")
       zh = Fabricate(:post_translation, post: post_record, language: "zh-cn")
 
+      post_record.update_columns(
+        raw: "Rewritten body, different from the original."
+      )
       revisor = OpenStruct.new(topic_diff: {})
       DiscourseEvent.trigger(:post_edited, post_record, false, revisor)
 
@@ -340,6 +356,9 @@ RSpec.describe BabelReunited do
       translation =
         Fabricate(:post_translation, post: post_record, language: "de")
 
+      post_record.update_columns(
+        raw: "Rewritten body, different from the original."
+      )
       revisor = OpenStruct.new(topic_diff: {})
       DiscourseEvent.trigger(:post_edited, post_record, false, revisor)
 
@@ -350,10 +369,16 @@ RSpec.describe BabelReunited do
     end
 
     it "excludes the detected source language from eager re-translation" do
-      BabelReunited.store_detected_locale(post_record, "en")
       legacy_copy =
         Fabricate(:post_translation, post: post_record, language: "en")
 
+      # Rewrite before recording the detection, so the edit invalidates the
+      # translation while leaving the detection bound to current content --
+      # otherwise there is no detected language left to exclude.
+      post_record.update_columns(
+        raw: "Rewritten body, different from the original."
+      )
+      BabelReunited.store_detected_locale(post_record, "en")
       revisor = OpenStruct.new(topic_diff: {})
       DiscourseEvent.trigger(:post_edited, post_record, false, revisor)
 

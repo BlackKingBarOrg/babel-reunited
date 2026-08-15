@@ -8,6 +8,8 @@ en:
     title: "Babel Reunited"
   js:
     babel_reunited:
+      header:
+        language_preference: "Translation language"
       language_tabs:
         disabled_by_user: "AI Translation is disabled by user"
         original: "Original"

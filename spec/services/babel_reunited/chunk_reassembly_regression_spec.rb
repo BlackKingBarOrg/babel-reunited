@@ -37,7 +37,8 @@ RSpec.describe BabelReunited::TranslationService do
     enable_current_plugin
     SiteSetting.babel_reunited_enabled = true
     SiteSetting.babel_reunited_openai_api_key = "sk-test-key"
-    SiteSetting.babel_reunited_preset_model = "gpt-4o"
+    SiteSetting.babel_reunited_provider = "openai"
+    SiteSetting.babel_reunited_model = "gpt-4o"
     SiteSetting.babel_reunited_translate_title = false
     SiteSetting.babel_reunited_rate_limit_per_minute = 600
     SiteSetting.babel_reunited_request_timeout_seconds = 30
@@ -46,16 +47,8 @@ RSpec.describe BabelReunited::TranslationService do
   end
 
   def stub_config(chunk_size)
-    BabelReunited::ModelConfig.stubs(:get_config).returns(
-      {
-        provider: "openai",
-        model_name: "gpt-4o",
-        base_url: "https://api.openai.com",
-        api_key: "sk-test-key",
-        max_tokens: 1_000_000,
-        max_output_tokens: chunk_size
-      }
-    )
+    SiteSetting.babel_reunited_chunk_size = chunk_size
+    SiteSetting.babel_reunited_max_content_length = 1_000_000
   end
 
   # Returns the payload the prompt wrapped, so the "translation" is an exact

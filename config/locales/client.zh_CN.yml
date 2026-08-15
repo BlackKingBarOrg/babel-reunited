@@ -8,6 +8,8 @@ zh_CN:
     title: "Babel Reunited"
   js:
     babel_reunited:
+      header:
+        language_preference: "翻译语言"
       language_tabs:
         disabled_by_user: "用户已禁用AI翻译"
         original: "原文"

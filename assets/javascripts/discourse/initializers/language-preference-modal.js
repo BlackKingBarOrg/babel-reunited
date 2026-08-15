@@ -1,4 +1,5 @@
 import { withPluginApi } from "discourse/lib/plugin-api";
+import BabelHeaderIcon from "discourse/plugins/babel-reunited/discourse/components/babel-header-icon";
 import LanguagePreferenceModal from "discourse/plugins/babel-reunited/discourse/components/modal/language-preference";
 
 export default {
@@ -8,6 +9,12 @@ export default {
       if (!currentUser) {
         return;
       }
+
+      // The component decides whether to render, so that toggling the
+      // plugin off does not need a reboot to take the icon away.
+      api.headerIcons.add("babel-language", BabelHeaderIcon, {
+        before: "user-menu",
+      });
 
       const modal = api.container.lookup("service:modal");
       const messageBus = api.container.lookup("service:message-bus");

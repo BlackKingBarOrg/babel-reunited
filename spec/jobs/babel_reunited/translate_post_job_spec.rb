@@ -8,7 +8,8 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
   before do
     enable_current_plugin
     SiteSetting.babel_reunited_openai_api_key = "sk-test-key"
-    SiteSetting.babel_reunited_preset_model = "gpt-4o"
+    SiteSetting.babel_reunited_provider = "openai"
+    SiteSetting.babel_reunited_model = "gpt-4o"
     Discourse.redis.flushdb
     Jobs.run_later!
   end
@@ -520,7 +521,7 @@ RSpec.describe Jobs::BabelReunited::TranslatePostJob do
       translation =
         BabelReunited::PostTranslation.find_translation(post_record.id, "es")
       expect(translation.status).to eq("stale")
-      expect(translation.safe_to_display?).to be false
+      expect(translation.safe_to_display?(post_record.reload)).to be false
     end
 
     # The regression this guards: a permanent verdict recorded against content

@@ -78,10 +78,18 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
   # Content fingerprint for change detection. Includes the topic title for
   # first posts (mirroring TranslationService#prepare_title) so title edits
   # invalidate translations that carry a translated_title.
-  def self.content_sha(post)
+  #
+  # include_title is a parameter rather than only a setting read, because a
+  # stored fingerprint outlives the setting it was written under: flipping
+  # babel_reunited_translate_title would otherwise move every first post's
+  # fingerprint and invalidate bodies nobody edited. Readers of a stored
+  # value ask for both forms -- see BabelReunited.content_sha_variants_for.
+  def self.content_sha(
+    post,
+    include_title: SiteSetting.babel_reunited_translate_title
+  )
     parts = [post.raw]
-    if post.post_number == 1 && SiteSetting.babel_reunited_translate_title &&
-         post.topic&.title.present?
+    if post.post_number == 1 && include_title && post.topic&.title.present?
       parts << post.topic.title
     end
     Digest::SHA256.hexdigest(parts.join("\0"))
@@ -616,7 +624,7 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
     withheld =
       translation &&
         (
-          !translation.safe_to_display? ||
+          !translation.safe_to_display?(post) ||
             BabelReunited.same_language?(
               language,
               BabelReunited.current_detected_locale_for(post)
@@ -658,7 +666,7 @@ class Jobs::BabelReunited::TranslatePostJob < ::Jobs::Base
   def publish_translated_title(post, translation)
     return unless post.post_number == 1
     return if translation.translated_title.blank?
-    return unless translation.safe_to_display?
+    return unless translation.safe_to_display?(post)
     # The title is its own egress on its own channel: without this the body of
     # a same-language record is withheld and its title is pushed anyway, and a
     # reload then takes the title back when the serializer applies the rule.

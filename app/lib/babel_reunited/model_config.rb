@@ -1,227 +1,126 @@
 # frozen_string_literal: true
 
 module BabelReunited
+  # Where a translation request goes and how it is shaped on the wire.
+  #
+  # Providers are few and stable; models are neither. A gateway fronts
+  # hundreds of them and any list written here is wrong within weeks, so the
+  # provider is an enum and the model is free text, with the per-model quirks
+  # derived from its name by ModelTraits.
   class ModelConfig
-    PRESET_MODELS = {
-      # OpenAI Models
-      "gpt-5" => {
-        provider: "openai",
-        model_name: "gpt-5",
+    # :path is per provider, not per wire format: the OpenAI-compatible
+    # endpoint sits at a different place on each host (Google mounts a shim
+    # under /v1beta, OpenRouter serves its API under /api).
+    PROVIDERS = {
+      "openai" => {
         base_url: "https://api.openai.com",
-        max_tokens: 128_000,
-        max_output_tokens: 16_000,
-        output_token_param: :max_completion_tokens,
-        supports_temperature: false,
-        api_key_setting: :babel_reunited_openai_api_key,
-        description: "OpenAI next-generation flagship model",
-        tier: "High",
+        path: "/v1/chat/completions",
+        wire: :openai,
+        api_key_setting: :babel_reunited_openai_api_key
       },
-      "gpt-5-mini" => {
-        provider: "openai",
-        model_name: "gpt-5-mini",
-        base_url: "https://api.openai.com",
-        max_tokens: 128_000,
-        max_output_tokens: 16_000,
-        output_token_param: :max_completion_tokens,
-        supports_temperature: false,
-        api_key_setting: :babel_reunited_openai_api_key,
-        description: "OpenAI GPT-5 cost-effective variant",
-        tier: "Medium",
+      "anthropic" => {
+        base_url: "https://api.anthropic.com",
+        path: "/v1/messages",
+        wire: :anthropic,
+        api_key_setting: :babel_reunited_anthropic_api_key
       },
-      "gpt-5-nano" => {
-        provider: "openai",
-        model_name: "gpt-5-nano",
-        base_url: "https://api.openai.com",
-        max_tokens: 16_385,
-        max_output_tokens: 4_096,
-        output_token_param: :max_completion_tokens,
-        supports_temperature: false,
-        api_key_setting: :babel_reunited_openai_api_key,
-        description: "OpenAI GPT-5 lightweight variant for speed and cost",
-        tier: "Low",
+      "openrouter" => {
+        base_url: "https://openrouter.ai",
+        path: "/api/v1/chat/completions",
+        wire: :openai,
+        api_key_setting: :babel_reunited_openrouter_api_key
       },
-      "gpt-4.1" => {
-        provider: "openai",
-        model_name: "gpt-4.1",
-        base_url: "https://api.openai.com",
-        max_tokens: 1_047_576,
-        max_output_tokens: 32_768,
-        output_token_param: :max_completion_tokens,
-        api_key_setting: :babel_reunited_openai_api_key,
-        description: "OpenAI GPT-4.1 flagship, 1M context with 32K output",
-        tier: "High",
+      "google" => {
+        base_url: "https://generativelanguage.googleapis.com",
+        path: "/v1beta/openai/chat/completions",
+        wire: :openai,
+        api_key_setting: :babel_reunited_google_api_key
       },
-      "gpt-4.1-mini" => {
-        provider: "openai",
-        model_name: "gpt-4.1-mini",
-        base_url: "https://api.openai.com",
-        max_tokens: 1_047_576,
-        max_output_tokens: 32_768,
-        output_token_param: :max_completion_tokens,
-        api_key_setting: :babel_reunited_openai_api_key,
-        description: "OpenAI GPT-4.1 cost-effective variant, 1M context with 32K output",
-        tier: "Medium",
-      },
-      "gpt-4.1-nano" => {
-        provider: "openai",
-        model_name: "gpt-4.1-nano",
-        base_url: "https://api.openai.com",
-        max_tokens: 1_047_576,
-        max_output_tokens: 32_768,
-        output_token_param: :max_completion_tokens,
-        api_key_setting: :babel_reunited_openai_api_key,
-        description: "OpenAI GPT-4.1 lightweight variant, 1M context with 32K output",
-        tier: "Low",
-      },
-      "gpt-4o" => {
-        provider: "openai",
-        model_name: "gpt-4o",
-        base_url: "https://api.openai.com",
-        max_tokens: 128_000,
-        max_output_tokens: 16_000,
-        output_token_param: :max_completion_tokens,
-        api_key_setting: :babel_reunited_openai_api_key,
-        description: "OpenAI latest flagship model, strongest performance",
-        tier: "High",
-      },
-      "gpt-4o-mini" => {
-        provider: "openai",
-        model_name: "gpt-4o-mini",
-        base_url: "https://api.openai.com",
-        max_tokens: 128_000,
-        max_output_tokens: 16_000,
-        output_token_param: :max_completion_tokens,
-        api_key_setting: :babel_reunited_openai_api_key,
-        description: "OpenAI cost-effective model, excellent performance",
-        tier: "Medium",
-      },
-      "gpt-3.5-turbo" => {
-        provider: "openai",
-        model_name: "gpt-3.5-turbo",
-        base_url: "https://api.openai.com",
-        max_tokens: 16_385,
-        max_output_tokens: 4_096,
-        output_token_param: :max_tokens,
-        api_key_setting: :babel_reunited_openai_api_key,
-        description: "OpenAI economical model, fast speed",
-        tier: "Low",
-      },
-      # xAI Models (including latest Grok-4)
-      "grok-4" => {
-        provider: "xai",
-        model_name: "grok-4",
+      "xai" => {
         base_url: "https://api.x.ai",
-        max_tokens: 132_000,
-        max_output_tokens: 36_000,
-        api_key_setting: :babel_reunited_xai_api_key,
-        description: "xAI latest flagship model, HLE test leader, super strong math reasoning",
-        tier: "High",
+        path: "/v1/chat/completions",
+        wire: :openai,
+        api_key_setting: :babel_reunited_xai_api_key
       },
-      "grok-4-fast-non-reasoning" => {
-        provider: "xai",
-        model_name: "grok-4-fast-non-reasoning",
-        base_url: "https://api.x.ai",
-        max_tokens: 2_000_000,
-        max_output_tokens: 36_000,
-        api_key_setting: :babel_reunited_xai_api_key,
-        description: "xAI Grok-4 fast non-reasoning model, optimized for low latency",
-        tier: "Medium",
-      },
-      "grok-3" => {
-        provider: "xai",
-        model_name: "grok-3",
-        base_url: "https://api.x.ai",
-        max_tokens: 131_072,
-        max_output_tokens: 16_000,
-        api_key_setting: :babel_reunited_xai_api_key,
-        description: "xAI medium model, balanced performance and cost",
-        tier: "Medium",
-      },
-      "grok-2" => {
-        provider: "xai",
-        model_name: "grok-2",
-        base_url: "https://api.x.ai",
-        max_tokens: 128_000,
-        max_output_tokens: 16_000,
-        api_key_setting: :babel_reunited_xai_api_key,
-        description: "xAI economical model, fast response",
-        tier: "Low",
-      },
-      # DeepSeek Models
-      "deepseek-r1" => {
-        provider: "deepseek",
-        model_name: "deepseek-r1",
+      "deepseek" => {
         base_url: "https://api.deepseek.com",
-        max_tokens: 64_000,
-        max_output_tokens: 16_000,
-        api_key_setting: :babel_reunited_deepseek_api_key,
-        description: "DeepSeek latest flagship model, strong Chinese capabilities",
-        tier: "High",
+        path: "/v1/chat/completions",
+        wire: :openai,
+        api_key_setting: :babel_reunited_deepseek_api_key
       },
-      "deepseek-v3" => {
-        provider: "deepseek",
-        model_name: "deepseek-v3",
-        base_url: "https://api.deepseek.com",
-        max_tokens: 64_000,
-        max_output_tokens: 16_000,
-        api_key_setting: :babel_reunited_deepseek_api_key,
-        description: "DeepSeek general conversation model, cost-effective",
-        tier: "Medium",
-      },
-      # Anthropic Models
-      "claude-opus-4-7" => {
-        provider: "anthropic",
-        model_name: "claude-opus-4-7",
-        base_url: "https://api.anthropic.com",
-        max_tokens: 1_000_000,
-        max_output_tokens: 32_000,
-        supports_temperature: false,
-        api_key_setting: :babel_reunited_anthropic_api_key,
-        description: "Anthropic Claude Opus 4.7, 1M context, strongest quality",
-        tier: "High",
-      },
-      "claude-sonnet-4-6" => {
-        provider: "anthropic",
-        model_name: "claude-sonnet-4-6",
-        base_url: "https://api.anthropic.com",
-        max_tokens: 200_000,
-        max_output_tokens: 16_000,
-        api_key_setting: :babel_reunited_anthropic_api_key,
-        description: "Anthropic Claude Sonnet 4.6, balanced performance and cost",
-        tier: "Medium",
-      },
-      "claude-haiku-4-5" => {
-        provider: "anthropic",
-        model_name: "claude-haiku-4-5-20251001",
-        base_url: "https://api.anthropic.com",
-        max_tokens: 200_000,
-        max_output_tokens: 8_192,
-        api_key_setting: :babel_reunited_anthropic_api_key,
-        description: "Anthropic Claude Haiku 4.5, fast and cost-effective",
-        tier: "Low",
-      },
+      # base_url comes from the admin instead of this table; the path is
+      # derived from whatever they pasted. See split_custom_url.
+      #
+      # The only provider that may run without a key: a model served from
+      # your own hardware usually has no authentication to configure, and
+      # demanding one would mean inventing a fake key to get past validation.
+      "openai_compatible" => {
+        base_url: nil,
+        path: "/v1/chat/completions",
+        wire: :openai,
+        api_key_setting: :babel_reunited_custom_api_key,
+        optional_api_key: true
+      }
     }.freeze
 
     def self.get_config
-      preset_model = SiteSetting.babel_reunited_preset_model
+      provider = SiteSetting.babel_reunited_provider
+      spec = PROVIDERS[provider]
+      return nil unless spec
 
-      if preset_model == "custom"
-        return(
-          {
-            provider: "custom",
-            model_name: SiteSetting.babel_reunited_custom_model_name,
-            base_url: SiteSetting.babel_reunited_custom_base_url,
-            max_tokens: SiteSetting.babel_reunited_custom_max_tokens,
-            max_output_tokens: SiteSetting.babel_reunited_custom_max_output_tokens,
-            api_key: SiteSetting.babel_reunited_custom_api_key,
-          }
-        )
-      end
+      base_url, path =
+        if spec[:base_url]
+          [spec[:base_url], spec[:path]]
+        else
+          split_custom_url(SiteSetting.babel_reunited_custom_base_url)
+        end
 
-      config = PRESET_MODELS[preset_model]
-      return nil unless config
+      model = SiteSetting.babel_reunited_model
 
-      config.merge(api_key: SiteSetting.public_send(config[:api_key_setting]))
+      {
+        provider: provider,
+        wire: spec[:wire],
+        model_name: model,
+        base_url: base_url,
+        path: path,
+        api_key: SiteSetting.public_send(spec[:api_key_setting]),
+        requires_api_key: !spec[:optional_api_key],
+        max_output_tokens: SiteSetting.babel_reunited_max_output_tokens,
+        chunk_size: SiteSetting.babel_reunited_chunk_size
+      }.merge(ModelTraits.for(provider: provider, model: model))
     end
+
+    # Admins paste an OpenAI-compatible endpoint in whichever form their
+    # provider's own docs print it: bare origin, origin with a trailing
+    # slash, or origin plus the /v1 the docs usually include. All three name
+    # the same endpoint, and appending a fixed path to the third produces
+    # /v1/v1/chat/completions.
+    def self.split_custom_url(url)
+      url = url.to_s.strip.sub(%r{/+\z}, "")
+      return url, "/v1/chat/completions" if url.blank?
+
+      uri =
+        begin
+          URI.parse(url)
+        rescue URI::InvalidURIError
+          nil
+        end
+      return url, "/v1/chat/completions" if uri.nil? || uri.host.blank?
+
+      origin = "#{uri.scheme}://#{uri.host}#{uri.port ? ":#{uri.port}" : ""}"
+      origin = "#{uri.scheme}://#{uri.host}" if default_port?(uri)
+
+      prefix = uri.path.to_s.sub(%r{/+\z}, "")
+      return origin, "/v1/chat/completions" if prefix.blank?
+      return origin, prefix if prefix.end_with?("/chat/completions")
+
+      [origin, "#{prefix}/chat/completions"]
+    end
+
+    def self.default_port?(uri)
+      (uri.scheme == "https" && uri.port == 443) ||
+        (uri.scheme == "http" && uri.port == 80)
+    end
+    private_class_method :default_port?
   end
 end
